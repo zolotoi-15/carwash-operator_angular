@@ -1,0 +1,12 @@
+<div class="dashboard">
+  <div class="dashboard-top-row">
+    <app-kkm-status></app-kkm-status>
+    <app-tank-levels></app-tank-levels>
+    <app-shift-total></app-shift-total>
+  </div>
+
+  <h2>📋 Состояние постов мойки</h2>
+  <div class="posts-grid">
+    <app-post-card *ngFor="let id of postIds" [postId]="id" [isAdmin]="isAdmin" [cameraUrl]="getCameraUrl(id)"></app-post-card>
+  </div>
+</div>

@@ -1,0 +1,20 @@
+<div class="post-selector">
+  <label>
+    Пост:
+    <select [(ngModel)]="selectedPost" (change)="rebuildForm()" [ngModelOptions]="{standalone: true}">
+      <option *ngFor="let p of postIds" [value]="p">Пост {{ p }}</option>
+    </select>
+  </label>
+</div>
+<form *ngIf="form" [formGroup]="form" (ngSubmit)="save()">
+  <div class="two-columns">
+    <div *ngFor="let service of serviceKeys" class="price-field">
+      <label>
+        {{ service }}:
+        <input [formControlName]="getControlName(service)" type="number" step="5">
+      </label>
+    </div>
+  </div>
+  <button type="submit" class="save-btn">💾 Сохранить</button>
+</form>
+<div *ngIf="!form" class="loading">Загрузка...</div>

@@ -1,0 +1,50 @@
+.dashboard {
+  padding: 1rem;
+  height: calc(100vh - 70px);
+  overflow-y: auto;
+}
+
+.dashboard-top-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+  align-items: stretch; /* выравнивание по высоте */
+}
+
+  .dashboard-top-row > div {
+    display: flex;
+    flex-direction: column;
+  }
+
+/* Остальные стили (посты) без изменений */
+.posts-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1rem;
+  margin-bottom: 2rem;
+}
+
+@media (max-width: 1200px) {
+  .posts-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .posts-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .posts-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1000px) {
+  .dashboard-top-row {
+    grid-template-columns: 1fr;
+  }
+}
