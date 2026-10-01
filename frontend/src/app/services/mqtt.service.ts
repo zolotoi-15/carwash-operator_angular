@@ -12,6 +12,13 @@ export interface ServiceConfig {
   free_time_sec?: number;
 }
 
+// === NEW: событие сканирования карты клиента ===
+export interface CardScanEvent {
+  card: string;              // номер карты (например, "8C8ADC80")
+  source?: 'reader' | 'manual';
+  timestamp?: number;
+}
+
 @Injectable({ providedIn: 'root' })
 export class MqttService {
   private client: any;
@@ -26,6 +33,9 @@ export class MqttService {
   private shiftTotalSubject = new Subject<any>();
   private lwtStatusSubject = new Subject<{ postId: string; online: boolean }>();
   private onlineStatusMap: { [postId: string]: boolean } = {};
+
+  // === NEW: поток событий сканирования карт клиентов ===
+  private cardScanSubject = new Subject<CardScanEvent>();
 
   private readonly serviceNameMap: { [key: string]: string } = {
     'water': 'Вода',
@@ -100,6 +110,10 @@ export class MqttService {
       this.client.subscribe('posts/+/local_LWT');
       this.client.subscribe('posts/config');
 
+      // === NEW: подписка на события карт-ридера ===
+      this.client.subscribe('card-reader/scan');
+      this.client.subscribe('cards/+/scan'); // на случай если ридер шлёт топик на карту
+
       localStorage.setItem('mqttSettings', JSON.stringify({
         brokerUrl,
         username: this.username,
@@ -119,11 +133,33 @@ export class MqttService {
     this.client.on('message', (topic: string, message: any) => {
       const msgStr = message.toString();
 
+      // === NEW: обработка события сканирования карты клиента ===
+      if (topic === 'card-reader/scan' || topic.startsWith('cards/') && topic.endsWith('/scan')) {
+        let cardNumber = '';
+        try {
+          const payload = JSON.parse(msgStr);
+          cardNumber = String(payload.card || payload.number || payload.uid || payload.code || '').trim();
+        } catch {
+          // plain-text payload (например, ESP32 или простой ридер шлёт просто UID)
+          cardNumber = msgStr.trim();
+        }
+        if (cardNumber) {
+          console.log(`💳 Карт-ридер: считана карта ${cardNumber}`);
+          this.cardScanSubject.next({
+            card: cardNumber.toUpperCase(),
+            source: 'reader',
+            timestamp: Date.now(),
+          });
+        } else {
+          console.warn('⚠️ Пустое событие сканирования карты');
+        }
+        return;
+      }
+
       // Обработка LWT и local_LWT (текстовые сообщения)
       if (topic.endsWith('/lwt') || topic.endsWith('/local_LWT')) {
         const parts = topic.split('/');
         const postId = parts[1];
-        // Для LWT: 'online' или 'offline', для local_LWT: 'true' или 'false'
         const online = msgStr === 'online' || msgStr === 'true';
         this.onlineStatusMap[postId] = online;
         this.lwtStatusSubject.next({ postId, online });
@@ -136,10 +172,6 @@ export class MqttService {
       try {
         payload = JSON.parse(msgStr);
       } catch (e) {
-        // ⚠️ ESP32 и старые симуляторы иногда присылают plain-text в /status
-        // (например, "pause" или "stop"). Это не критично — просто игнорируем.
-        // Если нужен дебаг — раскомментируйте строку ниже.
-        // console.debug(`[MQTT] ${topic}: не-JSON payload: ${msgStr}`);
         return;
       }
 
@@ -166,11 +198,32 @@ export class MqttService {
             item.seconds = item.seconds != null ? Math.round(Number(item.seconds) * 100) / 100 : 0;
           });
           payload.totalCash = Math.round(Number(payload.totalCash) * 100) / 100;
+
+          // === NEW: нормализация типа оплаты и номера карты клиента ===
+          // Ожидаем в payload: paymentType ("cash" | "card" | "client_card")
+          // и clientCardNumber — если оплата картой клиента.
+          if (!payload.paymentType) {
+            payload.paymentType = 'cash';
+          }
+          if (payload.paymentType === 'client_card') {
+            payload.clientCardNumber = payload.clientCardNumber
+              ? String(payload.clientCardNumber).toUpperCase()
+              : null;
+            if (!payload.clientCardNumber) {
+              console.warn('⚠️ Чек с оплатой картой клиента без номера карты');
+            }
+          } else {
+            delete payload.clientCardNumber;
+          }
+
           this.receiptService.addReceipt(payload);
           const itemsStr = payload.items.map((item: any) =>
             `${item.name}, ${item.seconds.toFixed(1)} сек, сумма ${item.cost.toFixed(2)} ₽`
           ).join('; ');
-          console.log(`📥 Чек получен из MQTT: пост ${payload.postId}, ${itemsStr}`);
+          const payInfo = payload.paymentType === 'client_card'
+            ? `, оплата: карта клиента ${payload.clientCardNumber}`
+            : `, оплата: ${payload.paymentType}`;
+          console.log(`📥 Чек получен из MQTT: пост ${payload.postId}, ${itemsStr}${payInfo}`);
         } else {
           console.warn('⚠️ Пропущен пустой чек из MQTT');
         }
@@ -254,5 +307,45 @@ export class MqttService {
 
   isConnected(): boolean {
     return this.client?.connected || false;
+  }
+
+  // === NEW: методы для работы с карт-ридером ===
+
+  /**
+   * Поток событий сканирования карт клиентов.
+   * Подписка в компоненте:
+   *   this.mqtt.getCardScanUpdates().subscribe(e => {
+   *     this.searchQuery = e.card;
+   *     this.onSearch();
+   *   });
+   */
+  getCardScanUpdates() {
+    return this.cardScanSubject.asObservable();
+  }
+
+  /**
+   * Отправить команду карт-ридеру начать сканирование (если он это поддерживает).
+   * У большинства ридеров HID-режима это не нужно — они сами публикуют в card-reader/scan.
+   */
+  requestCardScan(): void {
+    if (!this.client || !this.client.connected) {
+      console.warn('MQTT не подключён, команда сканирования карты отложена');
+      return;
+    }
+    this.client.publish('card-reader/command', JSON.stringify({ action: 'scan' }));
+  }
+
+  /**
+   * Ручная публикация события сканирования карты.
+   * Полезно для ручного ввода номера карты с фронта или для эмуляции ридера.
+   */
+  emitCardScan(card: string): void {
+    const normalized = String(card || '').trim().toUpperCase();
+    if (!normalized) return;
+    this.cardScanSubject.next({
+      card: normalized,
+      source: 'manual',
+      timestamp: Date.now(),
+    });
   }
 }
