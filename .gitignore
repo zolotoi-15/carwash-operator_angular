@@ -13,11 +13,22 @@
 .vscode/*
 !.vscode/extensions.json
 
+# Angular
+.angular/
+.angular/cache/
+
 # Node
 node_modules/
 dist/
-out-tsc/
-bazel-out/
 
-# Angular
-.angular/cache/
+# IDE
+.vs/
+*.vsidx
+*.suo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Env
+.env
