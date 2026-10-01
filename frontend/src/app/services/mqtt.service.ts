@@ -5,6 +5,7 @@ import { Subject, firstValueFrom } from 'rxjs';
 import { ReceiptData } from '../models/receipt.model';
 import { ReceiptService } from './receipt.service';
 import { AdminService } from './admin.service';
+import { ClientCardService } from './client-card.service';
 
 export interface ServiceConfig {
   name: string;
@@ -12,11 +13,15 @@ export interface ServiceConfig {
   free_time_sec?: number;
 }
 
-// === NEW: событие сканирования карты клиента ===
+/** Событие сканирования карты клиента */
 export interface CardScanEvent {
-  card: string;              // номер карты (например, "8C8ADC80")
+  card: string;                                // номер карты (например, "8C8ADC80")
   source?: 'reader' | 'manual';
   timestamp?: number;
+  postId?: string;                             // к какому посту привязано сканирование
+  topUpAmount?: number;                        // сколько перенесено с поста на карту
+  topUpStatus?: 'ok' | 'skipped' | 'error';    // результат переноса
+  topUpResult?: any;                           // ответ бэкенда (обновлённая карта и т.п.)
 }
 
 @Injectable({ providedIn: 'root' })
@@ -34,7 +39,14 @@ export class MqttService {
   private lwtStatusSubject = new Subject<{ postId: string; online: boolean }>();
   private onlineStatusMap: { [postId: string]: boolean } = {};
 
-  // === NEW: поток событий сканирования карт клиентов ===
+  /** Кэш балансов постов: { "1": 145.50, "2": 0, ... } */
+  private postBalances: { [postId: string]: number } = {};
+  /** Пост, к которому привязан текущий оператор (для сопоставления сканов) */
+  private activePostId: string | null = null;
+  /** Защита от дублирования переноса баланса подряд */
+  private lastTransferAt = 0;
+
+  /** Поток событий сканирования карт */
   private cardScanSubject = new Subject<CardScanEvent>();
 
   private readonly serviceNameMap: { [key: string]: string } = {
@@ -50,7 +62,8 @@ export class MqttService {
 
   constructor(
     private receiptService: ReceiptService,
-    private admin: AdminService
+    private admin: AdminService,
+    private clientCardService: ClientCardService,
   ) {
     this.initMqttSettings();
   }
@@ -102,6 +115,7 @@ export class MqttService {
 
     this.client.on('connect', () => {
       console.log('MQTT connected to', brokerUrl);
+
       this.client.subscribe('posts/+/status');
       this.client.subscribe('system/config');
       this.client.subscribe('shift/total');
@@ -110,9 +124,9 @@ export class MqttService {
       this.client.subscribe('posts/+/local_LWT');
       this.client.subscribe('posts/config');
 
-      // === NEW: подписка на события карт-ридера ===
+      // Карт-ридер
       this.client.subscribe('card-reader/scan');
-      this.client.subscribe('cards/+/scan'); // на случай если ридер шлёт топик на карту
+      this.client.subscribe('cards/+/scan');
 
       localStorage.setItem('mqttSettings', JSON.stringify({
         brokerUrl,
@@ -133,30 +147,16 @@ export class MqttService {
     this.client.on('message', (topic: string, message: any) => {
       const msgStr = message.toString();
 
-      // === NEW: обработка события сканирования карты клиента ===
-      if (topic === 'card-reader/scan' || topic.startsWith('cards/') && topic.endsWith('/scan')) {
-        let cardNumber = '';
-        try {
-          const payload = JSON.parse(msgStr);
-          cardNumber = String(payload.card || payload.number || payload.uid || payload.code || '').trim();
-        } catch {
-          // plain-text payload (например, ESP32 или простой ридер шлёт просто UID)
-          cardNumber = msgStr.trim();
-        }
-        if (cardNumber) {
-          console.log(`💳 Карт-ридер: считана карта ${cardNumber}`);
-          this.cardScanSubject.next({
-            card: cardNumber.toUpperCase(),
-            source: 'reader',
-            timestamp: Date.now(),
-          });
-        } else {
-          console.warn('⚠️ Пустое событие сканирования карты');
-        }
+      // === Сканирование карты клиента ===
+      if (
+        topic === 'card-reader/scan' ||
+        (topic.startsWith('cards/') && topic.endsWith('/scan'))
+      ) {
+        this.handleCardScan(topic, msgStr);
         return;
       }
 
-      // Обработка LWT и local_LWT (текстовые сообщения)
+      // === LWT / local_LWT ===
       if (topic.endsWith('/lwt') || topic.endsWith('/local_LWT')) {
         const parts = topic.split('/');
         const postId = parts[1];
@@ -167,11 +167,12 @@ export class MqttService {
         return;
       }
 
-      // Попытка парсинга JSON
-      let payload;
+      // === JSON-payload'ы ===
+      let payload: any;
       try {
         payload = JSON.parse(msgStr);
       } catch (e) {
+        // ESP32 иногда шлёт plain-text в /status — игнорируем
         return;
       }
 
@@ -179,7 +180,20 @@ export class MqttService {
         const parts = topic.split('/');
         const postId = parts[1];
         const subtopic = parts[2];
+
         if (subtopic === 'status') {
+          // Кэшируем баланс поста
+          const rawBalance =
+            payload.balance ??
+            payload.cash ??
+            payload.totalCash ??
+            payload.terminalBalance;
+          if (rawBalance != null) {
+            const numeric = Math.round(Number(rawBalance) * 100) / 100;
+            if (!isNaN(numeric)) {
+              this.postBalances[postId] = numeric;
+            }
+          }
           this.postStatusSubject.next({ postId, data: payload });
         }
       } else if (topic === 'system/config') {
@@ -187,7 +201,6 @@ export class MqttService {
       } else if (topic === 'shift/total') {
         this.shiftTotalSubject.next(payload);
       } else if (topic === 'kkm/print') {
-        // Обработка чека
         if (payload.items && payload.items.length > 0 && payload.totalCash > 0.01) {
           payload.items.forEach((item: any) => {
             if (item.name && this.serviceNameMap[item.name]) {
@@ -199,9 +212,7 @@ export class MqttService {
           });
           payload.totalCash = Math.round(Number(payload.totalCash) * 100) / 100;
 
-          // === NEW: нормализация типа оплаты и номера карты клиента ===
-          // Ожидаем в payload: paymentType ("cash" | "card" | "client_card")
-          // и clientCardNumber — если оплата картой клиента.
+          // Тип оплаты и номер карты клиента
           if (!payload.paymentType) {
             payload.paymentType = 'cash';
           }
@@ -217,6 +228,7 @@ export class MqttService {
           }
 
           this.receiptService.addReceipt(payload);
+
           const itemsStr = payload.items.map((item: any) =>
             `${item.name}, ${item.seconds.toFixed(1)} сек, сумма ${item.cost.toFixed(2)} ₽`
           ).join('; ');
@@ -239,6 +251,84 @@ export class MqttService {
     this.client.on('close', () => {
       console.warn('MQTT connection closed, reconnecting...');
     });
+  }
+
+  // ==== Карт-ридер и перенос баланса ====
+
+  /**
+   * Обработка сканирования карты клиента.
+   * Если у поста (терминала) есть положительный баланс — переносим его на карту,
+   * затем публикуем команду сброса баланса на терминал.
+   */
+  private async handleCardScan(topic: string, msgStr: string): Promise<void> {
+    let cardNumber = '';
+    let postId: string | undefined;
+
+    try {
+      const payload = JSON.parse(msgStr);
+      cardNumber = String(
+        payload.card || payload.number || payload.uid || payload.code || ''
+      ).trim();
+      if (payload.postId != null) postId = String(payload.postId);
+    } catch {
+      cardNumber = msgStr.trim();
+    }
+
+    if (!cardNumber) {
+      console.warn('⚠️ Пустое событие сканирования карты');
+      return;
+    }
+    cardNumber = cardNumber.toUpperCase();
+
+    // Если пост не указан — берём активный или первый известный
+    if (!postId) {
+      postId = this.activePostId ?? Object.keys(this.postBalances)[0];
+    }
+
+    const balance = postId != null ? (this.postBalances[postId] ?? 0) : 0;
+
+    // Защита от дублирования
+    const now = Date.now();
+    const canTransfer = balance > 0 && now - this.lastTransferAt > 2000;
+
+    const event: CardScanEvent = {
+      card: cardNumber,
+      source: 'reader',
+      timestamp: now,
+      postId,
+    };
+
+    if (canTransfer) {
+      this.lastTransferAt = now;
+      try {
+        console.log(
+          `💳 Карта ${cardNumber} считана на посту ${postId}, ` +
+          `баланс терминала ${balance.toFixed(2)} ₽ — переносим на карту`
+        );
+
+        const result = await firstValueFrom(
+          this.clientCardService.topUpFromPost(cardNumber, postId!, balance)
+        );
+
+        this.postBalances[postId!] = 0;
+        this.sendCommand(postId!, 'reset_balance');
+
+        event.topUpAmount = balance;
+        event.topUpStatus = 'ok';
+        event.topUpResult = result;
+        console.log(`✅ Баланс ${balance.toFixed(2)} ₽ перенесён с поста ${postId} на карту ${cardNumber}`);
+      } catch (err) {
+        console.error(`❌ Ошибка переноса баланса с поста ${postId} на карту ${cardNumber}`, err);
+        event.topUpAmount = balance;
+        event.topUpStatus = 'error';
+      }
+    } else if (balance > 0) {
+      // Баланс есть, но защита от повторного переноса
+      event.topUpAmount = balance;
+      event.topUpStatus = 'skipped';
+    }
+
+    this.cardScanSubject.next(event);
   }
 
   reconnect(brokerUrl: string, username?: string, password?: string) {
@@ -285,21 +375,13 @@ export class MqttService {
     });
   }
 
-  getPostStatusUpdates() {
-    return this.postStatusSubject.asObservable();
-  }
+  // ==== Публичные observable'ы ====
 
-  getSystemConfigUpdates() {
-    return this.systemConfigSubject.asObservable();
-  }
-
-  getShiftTotalUpdates() {
-    return this.shiftTotalSubject.asObservable();
-  }
-
-  getLwtStatus() {
-    return this.lwtStatusSubject.asObservable();
-  }
+  getPostStatusUpdates() { return this.postStatusSubject.asObservable(); }
+  getSystemConfigUpdates() { return this.systemConfigSubject.asObservable(); }
+  getShiftTotalUpdates() { return this.shiftTotalSubject.asObservable(); }
+  getLwtStatus() { return this.lwtStatusSubject.asObservable(); }
+  getCardScanUpdates() { return this.cardScanSubject.asObservable(); }
 
   isOnline(postId: string): boolean {
     return this.onlineStatusMap[postId] || false;
@@ -309,24 +391,9 @@ export class MqttService {
     return this.client?.connected || false;
   }
 
-  // === NEW: методы для работы с карт-ридером ===
+  // ==== Карт-ридер: управление ====
 
-  /**
-   * Поток событий сканирования карт клиентов.
-   * Подписка в компоненте:
-   *   this.mqtt.getCardScanUpdates().subscribe(e => {
-   *     this.searchQuery = e.card;
-   *     this.onSearch();
-   *   });
-   */
-  getCardScanUpdates() {
-    return this.cardScanSubject.asObservable();
-  }
-
-  /**
-   * Отправить команду карт-ридеру начать сканирование (если он это поддерживает).
-   * У большинства ридеров HID-режима это не нужно — они сами публикуют в card-reader/scan.
-   */
+  /** Отправить команду карт-ридеру начать сканирование (если он это поддерживает) */
   requestCardScan(): void {
     if (!this.client || !this.client.connected) {
       console.warn('MQTT не подключён, команда сканирования карты отложена');
@@ -335,10 +402,7 @@ export class MqttService {
     this.client.publish('card-reader/command', JSON.stringify({ action: 'scan' }));
   }
 
-  /**
-   * Ручная публикация события сканирования карты.
-   * Полезно для ручного ввода номера карты с фронта или для эмуляции ридера.
-   */
+  /** Ручная эмуляция сканирования карты (например, для тестов или ручного ввода) */
   emitCardScan(card: string): void {
     const normalized = String(card || '').trim().toUpperCase();
     if (!normalized) return;
@@ -347,5 +411,26 @@ export class MqttService {
       source: 'manual',
       timestamp: Date.now(),
     });
+  }
+
+  // ==== Активный пост и балансы ====
+
+  /** Установить активный пост (к которому привязан оператор) */
+  setActivePost(postId: string | null): void {
+    this.activePostId = postId ? String(postId) : null;
+  }
+
+  getActivePost(): string | null {
+    return this.activePostId;
+  }
+
+  /** Текущий баланс поста из кэша (0 если неизвестен) */
+  getPostBalance(postId: string): number {
+    return this.postBalances[String(postId)] ?? 0;
+  }
+
+  /** Снимок всех известных балансов постов */
+  getPostBalancesSnapshot(): { [postId: string]: number } {
+    return { ...this.postBalances };
   }
 }
