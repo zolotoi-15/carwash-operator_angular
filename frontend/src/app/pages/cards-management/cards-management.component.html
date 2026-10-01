@@ -1,52 +1,58 @@
-<div class="cards-management">
+<!-- cards-management.component.html -->
+<div class="cards-header">
   <h2>💳 Карты клиентов</h2>
-
-  <div *ngIf="errorMessage" class="error">{{ errorMessage }}</div>
-
-  <div class="add-card">
-    <input type="text"
-           [(ngModel)]="newCardNumber"
-           placeholder="Номер карты (например, 8C8ADC80)"
-           maxlength="32" />
-    <select [(ngModel)]="newCardType">
-      <option value="client">Клиент</option>
-      <option value="operator">Оператор</option>
-      <option value="service">Администратор</option>
-    </select>
-    <button (click)="addCard()">Добавить</button>
+  <div class="search-bar">
+    <input
+      type="text"
+      placeholder="Поиск по номеру карты, ФИО или телефону..."
+      [(ngModel)]="searchQuery"
+      (input)="onSearch()"
+    />
+    <button (click)="scanCard()">Сканировать карту</button>
   </div>
-
-  <div *ngIf="loading">Загрузка...</div>
-
-  <table *ngIf="!loading">
-    <thead>
-      <tr>
-        <th>Номер карты</th>
-        <th>Тип</th>
-        <th>Баланс</th>
-        <th>Пополнение</th>
-        <th></th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr *ngFor="let card of cards">
-        <td>{{ card.card }}</td>
-        <td>{{ typeLabel(card.type) }}</td>
-        <td>{{ card.balance }}</td>
-        <td class="topup-cell">
-          <input type="number"
-                 min="1"
-                 [(ngModel)]="topUpAmounts[card.card]"
-                 placeholder="Сумма" />
-          <button (click)="topUp(card.card)">Пополнить</button>
-        </td>
-        <td>
-          <button class="danger" (click)="deleteCard(card.card)">Удалить</button>
-        </td>
-      </tr>
-      <tr *ngIf="cards.length === 0">
-        <td colspan="5" class="empty">Карт нет</td>
-      </tr>
-    </tbody>
-  </table>
 </div>
+
+<!-- Форма добавления новой карты -->
+<div class="add-card-form">
+  <input [(ngModel)]="newCard.card" placeholder="Номер карты" />
+  <input [(ngModel)]="newCard.fullName" placeholder="ФИО (необязательно)" />
+  <input [(ngModel)]="newCard.phone" placeholder="Телефон (необязательно)" />
+  <select [(ngModel)]="newCard.type">
+    <option value="client">Клиент</option>
+    <option value="operator">Оператор</option>
+    <option value="service">Сервис</option>
+  </select>
+  <button (click)="addCard()">Добавить</button>
+</div>
+
+<!-- Таблица карт -->
+<table>
+  <thead>
+    <tr>
+      <th>Номер карты</th>
+      <th>ФИО</th>
+      <th>Телефон</th>
+      <th>Тип</th>
+      <th>Баланс</th>
+      <th>Пополнение</th>
+      <th>Действия</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr *ngFor="let card of filteredCards">
+      <td>{{ card.card }}</td>
+      <td>{{ card.fullName || '—' }}</td>
+      <td>{{ card.phone || '—' }}</td>
+      <td>{{ card.type }}</td>
+      <td>{{ card.balance | number:'1.2-2' }}</td>
+      <td>
+        <input type="number" [(ngModel)]="card.topUpAmount" placeholder="Сумма" />
+        <button (click)="topUp(card)">Пополнить</button>
+      </td>
+      <td>
+        <button (click)="openReport(card)">Отчёт</button>
+        <button (click)="deleteCard(card)">Удалить</button>
+      </td>
+    </tr>
+  </tbody>
+</table>
