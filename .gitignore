@@ -1,34 +1,48 @@
-# Visual Studio
+# ==== Node ====
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# ==== Angular ====
+.angular/
+dist/
+out-tsc/
+bazel-out/
+
+# ==== .NET (KkmProxy) ====
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+
+# ==== Visual Studio ====
 .vs/
 *.vsidx
-*.suo
-*.user
-*.userosscache
-*.sln.docstates
+*.vsd
+*.vsp
 
-# Rider
+# ==== Rider / VS Code ====
 .idea/
-
-# VS Code
 .vscode/*
 !.vscode/extensions.json
+!.vscode/tasks.json
+!.vscode/launch.json
 
-# Angular
-.angular/
-.angular/cache/
+# ==== Секреты ====
+.env
+.env.*
+!.env.example
+mqtt-config.json
 
-# Node
-node_modules/
-dist/
+# ==== Симуляторы: сгенерированные чеки ====
+kkm-simulator/receipts/
+simulator/receipts/
 
-# IDE
-.vs/
-*.vsidx
-*.suo
-
-# OS
+# ==== Логи, temp, OS ====
+*.log
+tmp/
+temp/
 Thumbs.db
 .DS_Store
-
-# Env
-.env
