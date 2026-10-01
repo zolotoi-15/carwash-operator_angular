@@ -1,6 +1,6 @@
 // src/app/services/local-post.service.ts
 import { Injectable } from '@angular/core';
-import { BehaviorSubject } from 'rxjs';
+import { BehaviorSubject, Subscription } from 'rxjs';
 import { ReceiptService, ReceiptItem as LocalReceiptItem } from './receipt.service';
 import { ReceiptData, ReceiptItem as MqttReceiptItem } from '../models/receipt.model';
 import { MqttService, ServiceConfig } from './mqtt.service';
@@ -17,7 +17,12 @@ export interface PostState {
   timer: any;
   servicesUsage: { [program: string]: { seconds: number; cost: number } };
   receiptSent: boolean;
-  pricePerSecond: number; // добавлено для таймера
+  pricePerSecond: number;
+}
+
+export interface PostOfflineMode {
+  postId: string;
+  offline: boolean;
 }
 
 const DEFAULT_STATE: PostState = {
@@ -44,6 +49,11 @@ export class LocalPostService {
   private freeTimes: { [program: string]: number } = {};
   private readonly TICK_INTERVAL_MS = 1000;
 
+  // Режим offline/online
+  private offlinePosts = new Map<string, boolean>();
+  private offlineSubject = new BehaviorSubject<PostOfflineMode[]>([]);
+  private lwtSub: Subscription | null = null;
+
   private readonly PROGRAM_RELAY_BIT: { [program: string]: number } = {
     water: 1 << 0,
     foam: 1 << 1,
@@ -60,34 +70,77 @@ export class LocalPostService {
     private mqttService: MqttService,
     private admin: AdminService
   ) {
+    // Услуги из /api/settings
     this.admin.getSettings().subscribe(settings => {
       const post1Settings = settings.posts?.[1];
       if (post1Settings?.services) {
         this.availableServices = post1Settings.services;
         this.servicesSubject.next(this.availableServices);
         this.updatePricesFromServices(this.availableServices);
+        console.log('📦 LocalPostService: services loaded from /api/settings',
+          this.availableServices.map((s: ServiceConfig) => `${s.name}=${s.price}`));
       }
     });
+
+    // Услуги из MQTT system/config
     this.mqttService.getSystemConfigUpdates().subscribe(config => {
-      if (config && config.services) {
+      if (config && config.services && Array.isArray(config.services)) {
         this.availableServices = config.services;
         this.servicesSubject.next(this.availableServices);
         this.updatePricesFromServices(this.availableServices);
+        console.log('📦 LocalPostService: services loaded from MQTT',
+          this.availableServices.map((s: ServiceConfig) => `${s.name}=${s.price}`));
+      }
+    });
+
+    // Подписка на LWT ESP32
+    this.lwtSub = this.mqttService.getLwtStatus().subscribe(status => {
+      const postId = status.postId;
+      const wasOffline = this.offlinePosts.get(postId) === true;
+      const nowOffline = !status.online;
+
+      this.offlinePosts.set(postId, nowOffline);
+      this.emitOfflineUpdate(postId, nowOffline);
+
+      if (wasOffline && !nowOffline) {
+        console.log(`🔌 Пост ${postId}: ESP32 ONLINE — LocalPostService отключается`);
+        this.forceStopLocal(postId, 'esp32-online');
+      } else if (!wasOffline && nowOffline) {
+        console.log(`🔌 Пост ${postId}: ESP32 OFFLINE — LocalPostService активен`);
       }
     });
   }
 
-  // ---- Публикация состояния в MQTT ----
+  // ============================================================
+  // Публичные методы проверки режима
+  // ============================================================
+  isPostOffline(postId: string): boolean {
+    return this.offlinePosts.get(postId) === true;
+  }
+
+  getOfflineModeObservable() {
+    return this.offlineSubject.asObservable();
+  }
+
+  private emitOfflineUpdate(postId: string, offline: boolean): void {
+    const current = this.offlineSubject.value.filter((p: PostOfflineMode) => p.postId !== postId);
+    current.push({ postId, offline });
+    this.offlineSubject.next(current);
+  }
+
+  // Публикация состояния в MQTT — ТОЛЬКО когда ESP32 offline
   private publishState(postId: string) {
     if (!this.mqttService.isConnected()) return;
+    if (!this.isPostOffline(postId)) return;
+
     const state = this.getPostState(postId);
     const status = {
       busy: state.busy,
       paused: state.paused,
       currentProgram: state.currentProgram,
-      balance: Math.round(state.balance * 100) / 100,
+      balance: this.roundCents(state.balance),
       elapsedSec: Math.round(state.elapsedSec * 100) / 100,
-      totalPaid: Math.round(state.totalPaid * 100) / 100,
+      totalPaid: this.roundCents(state.totalPaid),
       receiptCount: state.receiptCount,
       source: 'local'
     };
@@ -122,8 +175,10 @@ export class LocalPostService {
   private updatePricesFromServices(services: ServiceConfig[]) {
     const prices: { [key: string]: number } = {};
     const freeTimes: { [key: string]: number } = {};
-    services.forEach(s => {
-      prices[s.name] = s.price;
+    services.forEach((s: ServiceConfig) => {
+      if (typeof s.price === 'number' && !isNaN(s.price)) {
+        prices[s.name] = s.price;
+      }
       freeTimes[s.name] = s.free_time_sec || 0;
     });
     this.prices = prices;
@@ -131,16 +186,19 @@ export class LocalPostService {
   }
 
   updatePrices(prices: { [program: string]: number }) {
-    if (prices) {
-      this.prices = { ...this.prices, ...prices };
-    }
+    if (!prices) return;
+    this.prices = { ...this.prices, ...prices };
   }
 
-  // ---- Управление балансом ----
+  // ---- Баланс ----
   addBalance(postId: string, amount: number) {
+    if (!this.isPostOffline(postId)) {
+      console.warn(`❌ Пост ${postId}: ESP32 online — пополнение запрещено`);
+      return;
+    }
     const state = this.getPostState(postId);
-    state.balance += amount;
-    state.totalPaid += amount;
+    state.balance = this.roundCents(state.balance + amount);
+    state.totalPaid = this.roundCents(state.totalPaid + amount);
     this.emitUpdate(postId);
     this.publishRelayStatus(postId);
     this.publishState(postId);
@@ -148,27 +206,36 @@ export class LocalPostService {
 
   // ---- Запуск программы ----
   startProgram(postId: string, programName: string) {
+    if (!this.isPostOffline(postId)) {
+      console.warn(`❌ Пост ${postId}: ESP32 online — локальный запуск запрещён`);
+      return;
+    }
+
     const state = this.getPostState(postId);
-    if (state.busy && state.currentProgram === programName) {
-      console.log(`ℹ️ Программа ${programName} уже запущена на посту ${postId}`);
-      return;
-    }
 
-    const service = this.availableServices.find(s => s.name === programName);
+    if (state.busy && state.currentProgram === programName) return;
+
+    const service = this.availableServices.find((s: ServiceConfig) => s.name === programName);
     if (!service) {
-      console.warn(`Услуга "${programName}" не найдена`);
+      console.warn(`❌ Услуга "${programName}" не найдена`);
       return;
     }
 
-    const pricePerSec = service.price / 60;
+    const rawPrice = Number(service.price);
+    if (isNaN(rawPrice) || rawPrice <= 0) {
+      console.error(`❌ Услуга "${programName}" имеет некорректную цену: ${service.price}`);
+      return;
+    }
+
+    const priceCentsPerSec = Math.round((rawPrice * 100) / 60);
+    const priceRubPerSec = priceCentsPerSec / 100;
+
     if (state.balance < 0.01) {
-      console.warn(`Недостаточно средств на посту ${postId}`);
+      console.warn(`❌ Недостаточно средств: ${state.balance.toFixed(2)} ₽`);
       return;
     }
 
-    if (state.busy) {
-      this.stopProgram(postId, true);
-    }
+    if (state.busy) this.stopProgram(postId, false);
 
     state.busy = true;
     state.paused = false;
@@ -176,7 +243,9 @@ export class LocalPostService {
     state.elapsedSec = 0;
     state.servicesUsage = {};
     state.receiptSent = false;
-    state.pricePerSecond = pricePerSec; // сохраняем цену за секунду
+    state.pricePerSecond = priceRubPerSec;
+
+    console.log(`▶️ [LOCAL] Пост ${postId}: "${programName}", ${priceCentsPerSec} коп/сек`);
 
     this.startTimer(postId);
     this.emitUpdate(postId);
@@ -184,8 +253,8 @@ export class LocalPostService {
     this.publishState(postId);
   }
 
-  // ---- Пауза ----
   togglePause(postId: string) {
+    if (!this.isPostOffline(postId)) return;
     const state = this.getPostState(postId);
     if (!state.busy) return;
 
@@ -195,27 +264,25 @@ export class LocalPostService {
     }
 
     this.stopProgram(postId, false);
-    const pauseService = this.availableServices.find(s => s.name === 'Пауза');
-    if (pauseService) {
-      this.startProgram(postId, 'Пауза');
-    } else {
-      console.log('ℹ️ Программа "Пауза" не найдена, реле выключены');
-    }
+    const pauseService = this.availableServices.find((s: ServiceConfig) => s.name === 'Пауза');
+    if (pauseService) this.startProgram(postId, 'Пауза');
+
     this.emitUpdate(postId);
     this.publishRelayStatus(postId);
     this.publishState(postId);
   }
 
-  // ---- Остановка программы ----
   stopProgram(postId: string, printReceipt = true) {
     const state = this.getPostState(postId);
     if (!state.busy) return;
 
-    const hasUsage = Object.keys(state.servicesUsage).some(key => state.servicesUsage[key].seconds > 0.001);
+    const hasUsage = Object.keys(state.servicesUsage)
+      .some(key => state.servicesUsage[key].seconds > 0.001);
+
     if (printReceipt && hasUsage) {
       this.printReceipt(postId);
     } else if (printReceipt && !hasUsage) {
-      console.log(`ℹ️ Пост ${postId}: нет услуг для чека, чек не создан`);
+      console.log(`ℹ️ [LOCAL] Пост ${postId}: нет услуг для чека`);
     }
 
     clearInterval(state.timer);
@@ -225,13 +292,42 @@ export class LocalPostService {
     state.currentProgram = '-';
     state.elapsedSec = 0;
     state.pricePerSecond = 0;
+    (state as any)._badPriceWarned = false;
+
     this.emitUpdate(postId);
     this.publishRelayStatus(postId);
     this.publishState(postId);
   }
 
-  // ---- Сброс поста ----
+  private forceStopLocal(postId: string, reason: string) {
+    const state = this.getPostState(postId);
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    const wasBusy = state.busy;
+
+    state.busy = false;
+    state.paused = false;
+    state.currentProgram = '-';
+    state.elapsedSec = 0;
+    state.pricePerSecond = 0;
+    state.servicesUsage = {};
+    state.balance = 0;
+    state.totalPaid = 0;
+    state.receiptCount = 0;
+    state.receiptSent = false;
+    (state as any)._badPriceWarned = false;
+
+    if (wasBusy) {
+      console.log(`🛑 [LOCAL] Пост ${postId}: сеанс прерван (${reason})`);
+    }
+
+    this.emitUpdate(postId);
+  }
+
   resetPost(postId: string) {
+    if (!this.isPostOffline(postId)) return;
     const state = this.getPostState(postId);
     clearInterval(state.timer);
     this.posts.set(postId, { ...DEFAULT_STATE, timer: null });
@@ -240,13 +336,9 @@ export class LocalPostService {
     this.publishState(postId);
   }
 
-  // ---- Печать чека ----
   printReceipt(postId: string): boolean {
     const state = this.getPostState(postId);
-    if (state.receiptSent) {
-      console.log(`ℹ️ Пост ${postId}: чек уже напечатан, пропускаем дублирование`);
-      return false;
-    }
+    if (state.receiptSent) return false;
 
     const localItems: LocalReceiptItem[] = [];
     const mqttItems: MqttReceiptItem[] = [];
@@ -254,29 +346,24 @@ export class LocalPostService {
 
     for (const [program, usage] of Object.entries(state.servicesUsage)) {
       if (usage.seconds > 0.001) {
-        const cost = Math.round(usage.cost * 100) / 100;
-        const pricePerSec = Math.round((cost / usage.seconds) * 100) / 100;
+        const cost = this.roundCents(usage.cost);
         const seconds = Math.round(usage.seconds * 100) / 100;
-
+        const pricePerSec = seconds > 0 ? this.roundCents(cost / seconds) : 0;
         localItems.push({ name: program, seconds, cost, pricePerSecond: pricePerSec });
         mqttItems.push({ name: program, price: pricePerSec, quantity: seconds, department: 1, tax: 4 });
         totalCash += cost;
       }
     }
 
-    if (localItems.length === 0 || totalCash < 0.01) {
-      console.warn(`⚠️ Пост ${postId}: нет данных для чека (пропускаем)`);
-      return false;
-    }
-
-    totalCash = Math.round(totalCash * 100) / 100;
+    if (localItems.length === 0 || totalCash < 0.01) return false;
+    totalCash = this.roundCents(totalCash);
 
     if (this.mqttService.isConnected()) {
       const receiptData: ReceiptData = {
         postId: postId,
         items: mqttItems,
         totalCash: totalCash,
-        cashierName: 'Оператор',
+        cashierName: 'Оператор (локально)',
         receiptNumber: Date.now() % 1000000,
         operation: 'Автоматический чек',
         timestamp: new Date(),
@@ -290,7 +377,7 @@ export class LocalPostService {
         totalCash: totalCash,
         items: localItems,
         timestamp: new Date().toISOString(),
-        operation: 'Автоматический чек'
+        operation: 'Автоматический чек (локальный)'
       });
     }
 
@@ -302,26 +389,24 @@ export class LocalPostService {
     return true;
   }
 
-  // ---- Синхронизация с MQTT ----
   syncFromMqtt(postId: string, mqttData: any) {
     if (mqttData.source === 'local') return;
-
     const state = this.getPostState(postId);
+
+    if (this.isPostOffline(postId) && state.timer !== null && state.busy) return;
+
     if (mqttData.busy !== undefined) state.busy = mqttData.busy;
     if (mqttData.paused !== undefined) state.paused = mqttData.paused;
     if (mqttData.currentProgram !== undefined) state.currentProgram = mqttData.currentProgram;
     if (mqttData.elapsedSec !== undefined) state.elapsedSec = mqttData.elapsedSec;
-    if (mqttData.balance !== undefined) state.balance = mqttData.balance;
-    if (mqttData.totalPaid !== undefined) state.totalPaid = mqttData.totalPaid;
+    if (mqttData.balance !== undefined) state.balance = this.roundCents(mqttData.balance);
+    if (mqttData.totalPaid !== undefined) state.totalPaid = this.roundCents(mqttData.totalPaid);
     if (mqttData.receiptCount !== undefined) state.receiptCount = mqttData.receiptCount;
-
-    // Если пришла цена за секунду, обновляем
     if (mqttData.pricePerSecond !== undefined) state.pricePerSecond = mqttData.pricePerSecond;
 
-    if (mqttData.busy === false) {
+    if (mqttData.busy === false && !this.isPostOffline(postId)) {
       clearInterval(state.timer);
       state.timer = null;
-      state.busy = false;
       state.paused = false;
       state.currentProgram = '-';
       state.elapsedSec = 0;
@@ -333,12 +418,17 @@ export class LocalPostService {
     this.publishRelayStatus(postId);
   }
 
-  // ---- Внутренний таймер (использует сохранённую цену) ----
   private startTimer(postId: string) {
     const state = this.getPostState(postId);
     clearInterval(state.timer);
+
     state.timer = setInterval(() => {
       if (!state.busy || state.paused) return;
+
+      if (!this.isPostOffline(postId)) {
+        this.forceStopLocal(postId, 'esp32-back-online');
+        return;
+      }
 
       const prog = state.currentProgram;
       const pricePerSec = state.pricePerSecond;
@@ -346,7 +436,10 @@ export class LocalPostService {
       const deltaSec = this.TICK_INTERVAL_MS / 1000;
 
       if (isNaN(pricePerSec) || pricePerSec <= 0) {
-        console.error(`❌ Пост ${postId}: неверная цена для программы ${prog}, останавливаем`);
+        if (!(state as any)._badPriceWarned) {
+          console.error(`❌ [LOCAL] Пост ${postId}: неверная цена для "${prog}"`);
+          (state as any)._badPriceWarned = true;
+        }
         this.stopProgram(postId, false);
         return;
       }
@@ -360,21 +453,24 @@ export class LocalPostService {
         return;
       }
 
-      if (state.balance >= pricePerSec) {
-        state.balance -= pricePerSec;
+      const priceCentsPerSec = Math.round(pricePerSec * 100);
+      const balanceCents = Math.round(state.balance * 100);
+
+      if (balanceCents >= priceCentsPerSec) {
+        state.balance = (balanceCents - priceCentsPerSec) / 100;
         if (!state.servicesUsage[prog]) state.servicesUsage[prog] = { seconds: 0, cost: 0 };
         state.servicesUsage[prog].seconds += deltaSec;
-        state.servicesUsage[prog].cost += pricePerSec;
+        state.servicesUsage[prog].cost = this.roundCents(state.servicesUsage[prog].cost + pricePerSec);
         this.emitUpdate(postId);
       } else {
-        const remaining = state.balance;
-        if (remaining > 0.001) {
-          const fractionSec = remaining / pricePerSec;
+        const remainingCents = balanceCents;
+        if (remainingCents > 0) {
+          const fractionSec = remainingCents / priceCentsPerSec;
           state.balance = 0;
           state.elapsedSec += fractionSec;
           if (!state.servicesUsage[prog]) state.servicesUsage[prog] = { seconds: 0, cost: 0 };
           state.servicesUsage[prog].seconds += fractionSec;
-          state.servicesUsage[prog].cost += remaining;
+          state.servicesUsage[prog].cost = this.roundCents(state.servicesUsage[prog].cost + (remainingCents / 100));
           this.emitUpdate(postId);
         }
         this.stopProgram(postId, true);
@@ -382,8 +478,8 @@ export class LocalPostService {
     }, this.TICK_INTERVAL_MS);
   }
 
-  // ---- Публикация статуса реле ----
   private publishRelayStatus(postId: string) {
+    if (!this.isPostOffline(postId)) return;
     const state = this.getPostState(postId);
     const mask = state.busy && state.currentProgram !== '-'
       ? (this.PROGRAM_RELAY_BIT[state.currentProgram] || 0)
@@ -401,5 +497,10 @@ export class LocalPostService {
   private emitUpdate(postId: string) {
     const state = this.getPostState(postId);
     this.postsSubject.next([{ postId, state: { ...state } }]);
+  }
+
+  private roundCents(value: number): number {
+    if (typeof value !== 'number' || isNaN(value)) return 0;
+    return Math.round(value * 100) / 100;
   }
 }
