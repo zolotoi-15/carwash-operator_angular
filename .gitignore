@@ -1,0 +1,23 @@
+# Visual Studio
+.vs/
+*.vsidx
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+
+# Node
+node_modules/
+dist/
+out-tsc/
+bazel-out/
+
+# Angular
+.angular/cache/

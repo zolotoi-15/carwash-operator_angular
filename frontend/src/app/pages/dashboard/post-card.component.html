@@ -1,0 +1,73 @@
+<div class="post-card" [class.busy]="post.busy">
+  <div class="post-header">
+    <h3>🚿 Пост {{ postId }}</h3>
+    <button *ngIf="cameraUrl" (click)="toggleCamera()" class="camera-toggle-btn">
+      {{ showCamera ? '📷 Скрыть камеру' : '📷 Показать камеру' }}
+    </button>
+  </div>
+
+  <!-- Индикатор режима работы -->
+  <div class="esp-mode-badge" [class.online]="isEspOnline" [class.offline]="!isEspOnline">
+    <ng-container *ngIf="isEspOnline">
+      🟢 ESP32 подключён — управление через пульт
+    </ng-container>
+    <ng-container *ngIf="!isEspOnline">
+      ⚠️ Пульт не работает — локальный режим
+    </ng-container>
+  </div>
+
+  <!-- Номер карты клиента -->
+  <div class="client-card-info" *ngIf="clientCard">
+    💳 Карта: <strong>{{ clientCard }}</strong>
+    <span *ngIf="clientCardBalance !== null" class="card-balance">
+      — {{ clientCardBalance | number:'1.0-2' }} ₽
+    </span>
+  </div>
+
+  <!-- Камера -->
+  <div *ngIf="showCamera && safeCameraUrl" class="camera-window">
+    <video *ngIf="isVideoUrl(cameraUrl)"
+           autoplay muted playsinline [src]="cameraUrl" class="camera-video"></video>
+    <iframe *ngIf="!isVideoUrl(cameraUrl)"
+            [src]="safeCameraUrl"
+            frameborder="0"
+            allow="autoplay; encrypted-media"
+            allowfullscreen></iframe>
+  </div>
+  <div *ngIf="showCamera && !safeCameraUrl" class="camera-warning">
+    ⚠️ Камера не настроена или URL не поддерживается
+  </div>
+
+  <div class="status">{{ post.busy ? '🔴 ЗАНЯТ' : '🟢 СВОБОДЕН' }}</div>
+  <div class="info-row"><span>💰 Баланс:</span><strong>{{ roundOne(post.balance) }} ₽</strong></div>
+  <div class="info-row"><span>🧼 Активная функция:</span><strong>{{ getProgramName(post.currentProgram) }}</strong></div>
+  <div *ngIf="post.busy" class="details">
+    <div>⏱️ Время работы: {{ formatTime(post.elapsedSec) }}</div>
+  </div>
+
+  <div *ngIf="isAdmin" class="admin-controls">
+    <div class="program-buttons">
+      <button *ngFor="let prog of programs"
+              (click)="selectProgram(prog.code)"
+              class="prog-btn"
+              [class.active]="post.currentProgram === prog.code">
+        {{ prog.name }}
+      </button>
+    </div>
+    <div class="balance-add">
+      <input type="number"
+             [(ngModel)]="addAmount"
+             (focus)="clearAddAmount()"
+             (keydown.enter)="addBalance()"
+             placeholder="Сумма"
+             step="10">
+      <button (click)="addBalance()" class="add-balance-btn">➕ Пополнить</button>
+    </div>
+    <div class="operator-buttons">
+      <button (click)="stopPost()" class="stop-btn">⏹️ Остановить</button>
+      <button (click)="pausePost()" class="pause-btn">⏸️ Пауза</button>
+      <button (click)="resetPost()" class="reset-btn">🔄 Сброс</button>
+      <button (click)="printReceipt()" class="print-receipt-btn">🧾 Печать чека</button>
+    </div>
+  </div>
+</div>

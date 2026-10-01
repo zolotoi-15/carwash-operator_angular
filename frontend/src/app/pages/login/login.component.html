@@ -1,0 +1,10 @@
+<div class="login-container">
+  <div class="login-card">
+    <h2>🚗 Мойка самообслуживания</h2>
+    <h3>Вход в систему</h3>
+    <input type="text" [(ngModel)]="username" placeholder="Логин">
+    <input type="password" [(ngModel)]="password" placeholder="Пароль">
+    <button (click)="login()">Войти</button>
+    <div *ngIf="error" class="error">{{ error }}</div>
+  </div>
+</div>

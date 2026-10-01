@@ -1,0 +1,37 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #f0f2f5;
+}
+
+button {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+  button:hover {
+    opacity: 0.9;
+    transform: translateY(-1px);
+  }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* чтобы управлять прокруткой внутри дашборда */
+}
+
+body {
+  font-size: 14px;
+}
+
+@media (min-width: 1200px) {
+  body {
+    font-size: 16px;
+  }
+}
