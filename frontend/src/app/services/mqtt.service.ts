@@ -136,7 +136,10 @@ export class MqttService {
       try {
         payload = JSON.parse(msgStr);
       } catch (e) {
-        console.warn(`⚠️ Невалидный JSON в топике ${topic}:`, msgStr);
+        // ⚠️ ESP32 и старые симуляторы иногда присылают plain-text в /status
+        // (например, "pause" или "stop"). Это не критично — просто игнорируем.
+        // Если нужен дебаг — раскомментируйте строку ниже.
+        // console.debug(`[MQTT] ${topic}: не-JSON payload: ${msgStr}`);
         return;
       }
 
