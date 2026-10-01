@@ -1,9 +1,12 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
+
 import { ClientCard, ClientCardType } from '../../models/client-card.model';
 import { ClientCardService } from '../../services/client-card.service';
-import { MqttService } from '../../services/mqtt.service';
-import { Router } from '@angular/router';
+import { MqttService, CardScanEvent } from '../../services/mqtt.service';
 
 interface EditableCard extends ClientCard {
   topUpAmount?: number;
@@ -11,6 +14,8 @@ interface EditableCard extends ClientCard {
 
 @Component({
   selector: 'app-cards-management',
+  standalone: true,
+  imports: [CommonModule, FormsModule],
   templateUrl: './cards-management.component.html',
   styleUrls: ['./cards-management.component.scss'],
 })
@@ -31,13 +36,24 @@ export class CardsManagementComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.loadCards();
 
-    // Подписка на карт-ридер
+    // Подписка на события карт-ридера (из MqttService)
     this.mqttSub = this.mqttService
-      .subscribe<string>('card-reader/scan')
-      .subscribe((cardNumber) => {
-        if (!cardNumber) return;
-        this.searchQuery = String(cardNumber).trim();
+      .getCardScanUpdates()
+      .subscribe((event: CardScanEvent) => {
+        if (!event?.card) return;
+        this.searchQuery = event.card;
         this.onSearch();
+
+        if (event.topUpStatus === 'ok' && event.topUpAmount && event.postId) {
+          console.log(
+            `Карта ${event.card} пополнена на ${event.topUpAmount.toFixed(2)} ₽ ` +
+            `с баланса поста ${event.postId}`,
+          );
+        } else if (event.topUpStatus === 'error') {
+          console.warn(
+            `Не удалось перенести баланс с поста ${event.postId} на карту ${event.card}`,
+          );
+        }
       });
   }
 
@@ -46,9 +62,12 @@ export class CardsManagementComponent implements OnInit, OnDestroy {
   }
 
   loadCards(): void {
-    this.cardService.getCards().subscribe((cards) => {
-      this.cards = cards as EditableCard[];
-      this.applyFilter();
+    this.cardService.getCards().subscribe({
+      next: (cards) => {
+        this.cards = (cards || []) as EditableCard[];
+        this.applyFilter();
+      },
+      error: (err) => console.error('Не удалось загрузить карты', err),
     });
   }
 
@@ -60,10 +79,13 @@ export class CardsManagementComponent implements OnInit, OnDestroy {
     }
     this.cardService.searchCards(q).subscribe({
       next: (cards) => {
-        this.cards = cards as EditableCard[];
+        this.cards = (cards || []) as EditableCard[];
         this.applyFilter();
       },
-      error: () => this.applyFilter(), // fallback на локальную фильтрацию
+      error: () => {
+        // Фолбэк: локальная фильтрация по уже загруженному списку
+        this.applyFilter();
+      },
     });
   }
 
@@ -85,25 +107,33 @@ export class CardsManagementComponent implements OnInit, OnDestroy {
       return;
     }
     const type = (this.newCard.type ?? 'client') as ClientCardType;
+    const cardNumber = this.newCard.card.trim().toUpperCase();
 
-    this.cardService.addCard(this.newCard.card, type).subscribe({
+    this.cardService.addCard(cardNumber, type).subscribe({
       next: () => {
         if (this.newCard.fullName || this.newCard.phone) {
           this.cardService
-            .updateCardInfo(this.newCard.card!, {
+            .updateCardInfo(cardNumber, {
               fullName: this.newCard.fullName,
               phone: this.newCard.phone,
             })
-            .subscribe(() => {
-              this.loadCards();
-              this.newCard = { type: 'client' };
+            .subscribe({
+              next: () => {
+                this.loadCards();
+                this.newCard = { type: 'client' };
+              },
+              error: (err) => {
+                console.error('Не удалось сохранить ФИО/телефон', err);
+                this.loadCards();
+                this.newCard = { type: 'client' };
+              },
             });
         } else {
           this.loadCards();
           this.newCard = { type: 'client' };
         }
       },
-      error: (err) => alert('Ошибка при добавлении карты: ' + err.message),
+      error: (err) => alert('Ошибка при добавлении карты: ' + (err?.message || err)),
     });
   }
 
@@ -113,23 +143,30 @@ export class CardsManagementComponent implements OnInit, OnDestroy {
       alert('Укажите сумму пополнения');
       return;
     }
-    this.cardService.topUp(card.card, amount).subscribe(() => {
-      card.topUpAmount = undefined;
-      this.loadCards();
+    this.cardService.topUp(card.card, amount).subscribe({
+      next: () => {
+        card.topUpAmount = undefined;
+        this.loadCards();
+      },
+      error: (err) => alert('Ошибка пополнения: ' + (err?.message || err)),
     });
   }
 
   deleteCard(card: EditableCard): void {
     if (!confirm(`Удалить карту ${card.card}?`)) return;
-    this.cardService.deleteCard(card.card).subscribe(() => this.loadCards());
+    this.cardService.deleteCard(card.card).subscribe({
+      next: () => this.loadCards(),
+      error: (err) => alert('Ошибка удаления: ' + (err?.message || err)),
+    });
   }
 
+  /** Ручной запуск сканирования (если ридер это поддерживает) */
+  scanCard(): void {
+    this.mqttService.requestCardScan();
+  }
+
+  /** Переход на страницу отчёта по карте */
   openReport(card: EditableCard): void {
     this.router.navigate(['/reports/card', card.card]);
-  }
-
-  /** Ручной запуск сканирования (если карт-ридер управляется командой) */
-  scanCard(): void {
-    this.mqttService.publish('card-reader/command', { action: 'scan' });
   }
 }
