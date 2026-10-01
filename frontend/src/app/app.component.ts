@@ -15,6 +15,7 @@ import { AuthService } from './services/auth.service';
       <a routerLink="/dashboard">📊 Дашборд</a>
       <a *ngIf="(auth.getRole() | async) === 'admin'" routerLink="/admin">⚙️ Админка</a>
       <a *ngIf="(auth.getRole() | async) === 'admin'" routerLink="/reports">📄 Отчёты</a>
+      <a *ngIf="(auth.getRole() | async) === 'admin'" routerLink="/cards">💳 Карты клиентов</a>
       <button (click)="logout()">🚪 Выйти</button>
     </nav>
     <main>
@@ -40,28 +41,66 @@ export class AppComponent implements OnInit {
   ngOnInit() {
     this.admin.getSettings().subscribe({
       next: (settings) => {
-        // Загружаем цены из настроек первого поста (если есть)
-        // или из глобальных полей для обратной совместимости
+        // Загружаем цены из настроек первого поста.
+        // В новой схеме они лежат внутри settings.posts[1].services[],
+        // а settings.posts[1].prices — пустой объект {} (truthy!),
+        // поэтому нужно явно предпочесть services, если в prices пусто.
         const postSettings = settings.posts?.[1];
-        const prices = postSettings?.prices || settings.prices;
+        const services: any[] = postSettings?.services || [];
 
-        if (prices) {
-          this.localPost.updatePrices(prices);
+        // Собираем карту цен: сначала из services, потом поверх — из prices
+        const prices: { [key: string]: number } = {};
 
-          const serviceKeys = ['water', 'foam', 'wax', 'teflon', 'osmosis', 'hotWater', 'waterFoam', 'turbo'];
-          const services: ServiceConfig[] = serviceKeys.map(key => ({
+        // 1) Из массива services (актуальная схема)
+        for (const svc of services) {
+          if (svc?.name && typeof svc.price === 'number') {
+            prices[svc.name] = svc.price;
+          }
+        }
+
+        // 2) Поверх — старый формат prices (если он есть и не пуст)
+        const legacyPrices = postSettings?.prices || settings.prices;
+        if (legacyPrices && typeof legacyPrices === 'object') {
+          for (const [k, v] of Object.entries(legacyPrices)) {
+            if (typeof v === 'number') prices[k] = v;
+          }
+        }
+
+        const hasPrices = Object.keys(prices).length > 0;
+
+        if (!hasPrices) {
+          console.warn(
+            '⚠️ Цены не найдены ни в services, ни в prices — ' +
+            'локальный fallback не сможет запускать программы'
+          );
+          return;
+        }
+
+        console.log('📦 Цены загружены:', prices);
+        this.localPost.updatePrices(prices);
+
+        // Публикуем конфигурацию в MQTT при старте.
+        // Ключи water/foam/... — это «машинные» имена, по ним
+        // backend и LocalPostService сопоставляют цены с программами.
+        const serviceKeys = [
+          'water', 'foam', 'wax', 'teflon',
+          'osmosis', 'hotWater', 'waterFoam', 'turbo'
+        ];
+        const mqttServices: ServiceConfig[] = serviceKeys
+          .filter(key => prices[key] !== undefined)
+          .map(key => ({
             name: this.getServiceName(key),
             price: prices[key]
           }));
-          services.push({
-            name: 'Пауза',
-            price: settings.pausePrice || 10,
-            free_time_sec: settings.pauseFreeTimeSec || 120
-          });
 
-          this.mqtt.publishConfig(services);
-          console.log('📤 Конфигурация цен опубликована в MQTT при старте');
-        }
+        mqttServices.push({
+          name: 'Пауза',
+          price: settings.pausePrice || 10,
+          free_time_sec: settings.pauseFreeTimeSec || 120
+        });
+
+        this.mqtt.publishConfig(mqttServices);
+        console.log('📤 Конфигурация цен опубликована в MQTT при старте');
       },
       error: (err) => {
         console.warn('Не удалось загрузить настройки при старте:', err);
