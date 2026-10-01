@@ -1,3 +1,4 @@
+// backend/server.js
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -11,7 +12,15 @@ const axios = require('axios');
 const mqtt = require('mqtt');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
+const shiftsRouter = require('./routes/shifts'); // ==== SHIFTS ====
 require('dotenv').config();
+
+// ============================================================
+// Адрес KkmProxy (эмулятор/проксирующий сервис ККМ).
+// Из контейнера к Windows-хосту — http://host.docker.internal:5000
+// Нативно локально — http://localhost:5000
+// ============================================================
+const KKM_PROXY_URL = process.env.KKM_PROXY_URL || 'http://localhost:5000';
 
 // ---------- MQTT Client ----------
 let mqttClient = null;
@@ -61,7 +70,7 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/config');
     mqttClient.subscribe('posts/+/clientcard');
     mqttClient.subscribe('posts/+/receipt');
-    mqttClient.subscribe('posts/+/lwt');         // NEW: LWT постов для освобождения карты
+    mqttClient.subscribe('posts/+/lwt');
 
     if (settings.posts) {
       publishConfigToAllPosts();
@@ -275,7 +284,6 @@ function connectMqtt(settings) {
             console.log(`🔄 [${postId}] Баланс поста сброшен вместе с картой`);
           }
 
-          // Сбросить экран сообщений на этом посту
           mqttClient.publish(
             `posts/${postId}/message`,
             JSON.stringify({ "": "" }),
@@ -351,7 +359,6 @@ function connectMqtt(settings) {
         );
         console.log(`📤 [${postId}] clientcardbalance → ${JSON.stringify(balancePayload)}`);
 
-        // На всякий случай очищаем экран сообщений
         mqttClient.publish(
           `posts/${postId}/message`,
           JSON.stringify({ "": "" }),
@@ -465,6 +472,12 @@ const shiftSchema = new mongoose.Schema({
   openedAt: { type: Date, default: Date.now },
   closedAt: { type: Date, default: null },
   cashier: { type: String, default: '' },
+  // ==== расширенные поля для ShiftService ====
+  closedBy: { type: String, default: null },
+  autoClosed: { type: Boolean, default: false },
+  openingBalance: { type: Number, default: 0 },
+  closingBalance: { type: Number, default: 0 },
+  // ============================================
   fiscalShiftNumber: { type: Number, default: null },
   xReports: [{
     timestamp: { type: Date, default: Date.now },
@@ -521,7 +534,8 @@ let settings = {
       clientEmail: process.env.ATOL_CLIENT_EMAIL || 'client@carwash.ru'
     },
     shtrihLocal: {
-      baseUrl: process.env.SHTRIH_LOCAL_URL || 'http://0.0.0.0:5001/api/kkm'
+      // Адрес KkmProxy (эмулятора/прокси) — читается из env или KKM_PROXY_URL
+      baseUrl: process.env.SHTRIH_LOCAL_URL || KKM_PROXY_URL
     }
   },
   kkmManual: {
@@ -712,9 +726,6 @@ function getPostState(postId) {
   return postsState[postId];
 }
 
-// ============================================================
-// NEW: поиск поста, на котором сейчас активна карта
-// ============================================================
 function findPostWithCard(cardNumber, excludePostId = null) {
   if (!cardNumber) return null;
   const target = String(cardNumber).toUpperCase();
@@ -756,9 +767,6 @@ function publishRelayStatus(postId) {
   mqttClient.publish(`posts/${postId}/status_relay`, JSON.stringify({ busy: state.busy, relayMask }), { qos: 0 });
 }
 
-// ============================================================
-// Списание с баланса карты в БД
-// ============================================================
 async function debitCardForPost(postId, amountRub) {
   const state = postsState[postId];
   if (!state || !state.clientCard) return;
@@ -1003,6 +1011,44 @@ async function initShift() {
   }
 }
 
+// ============================================================
+// Авто-закрытие кассовых смен через 24 часа + открытие новой
+// ============================================================
+async function autoCloseStaleShifts() {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const stale = await Shift.find({
+      shiftOpen: true,
+      openedAt: { $lte: cutoff },
+    });
+
+    for (const shift of stale) {
+      shift.shiftOpen = false;
+      shift.closedAt = new Date();
+      shift.closedBy = 'system';
+      shift.autoClosed = true;
+      await shift.save();
+
+      const nextNumber = await getNextShiftNumber();
+      await Shift.create({
+        shiftNumber: nextNumber,
+        shiftOpen: true,
+        openedAt: new Date(),
+        cashier: 'system',
+      });
+
+      console.log(
+        `[Shift] Авто-закрытие смены №${shift.shiftNumber} + открытие №${nextNumber}`
+      );
+    }
+  } catch (err) {
+    console.error('[Shift] Ошибка авто-закрытия:', err.message);
+  }
+}
+
+setInterval(autoCloseStaleShifts, 60 * 1000);
+autoCloseStaleShifts();
+
 // ---------- REST API ----------
 const app = express();
 app.use(cors());
@@ -1044,8 +1090,31 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
   }
 };
 
-// ---------- Роутер карт ----------
+// ---------- Хук: команда посту (например, reset_balance) ----------
+app.locals.publishCommand = function (postId, command) {
+  if (!mqttClient || !mqttClient.connected) {
+    console.warn(`[MQTT] publishCommand: клиент не подключён (postId=${postId})`);
+    return;
+  }
+  mqttClient.publish(
+    `posts/${postId}/command`,
+    JSON.stringify({ command }),
+    { qos: 1 },
+  );
+};
+
+// ---------- Хук: уменьшение баланса поста (внутреннее состояние) ----------
+app.locals.decrementPostBalance = function (postId, amount) {
+  const state = postsState[postId];
+  if (!state) return;
+  const num = Number(amount) || 0;
+  state.balance = Math.max(0, Math.round(((state.balance || 0) - num) * 100) / 100);
+  console.log(`💰 [Post ${postId}] decrementPostBalance: -${num} → ${state.balance}`);
+};
+
+// ---------- Роутеры ----------
 app.use('/api/cards', cardsRouter);
+app.use('/api/shifts', shiftsRouter);   // ==== SHIFTS ====
 
 // Инициализация администратора
 const initAdmin = async () => {
@@ -1233,9 +1302,12 @@ app.post('/api/tank-levels', auth, adminOnly, (req, res) => {
   }
 });
 
+// ============================================================
+// KKM: статус через KkmProxy — теперь URL читается из env
+// ============================================================
 app.get('/api/kkm/status', auth, adminOnly, async (req, res) => {
   try {
-    const response = await axios.get('http://0.0.0.0:5001/api/kkm/status', { timeout: 2000 });
+    const response = await axios.get(`${KKM_PROXY_URL}/api/kkm/status`, { timeout: 2000 });
     res.json(response.data);
   } catch (err) {
     res.json({
@@ -1616,7 +1688,7 @@ app.post('/api/receipts', async (req, res) => {
 });
 
 // ============================================================
-// NEW: принудительное освобождение карты оператором
+// Принудительное освобождение карты оператором
 // POST /api/cards/:card/release
 // ============================================================
 app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
@@ -1635,6 +1707,19 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
   res.json({ ok: true, released });
 });
 
+// ============================================================
+// Раздача собранного Angular (опционально)
+// ============================================================
+const FRONTEND_DIST = path.join(__dirname, '..', 'frontend', 'dist', 'carwash-operator-angular', 'browser');
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(path.join(FRONTEND_DIST, 'index.html'));
+  });
+  console.log('📦 Статика Angular подключена из', FRONTEND_DIST);
+}
+
+// ---------- Подключение MongoDB и запуск ----------
 mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');

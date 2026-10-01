@@ -46,3 +46,12 @@ tmp/
 temp/
 Thumbs.db
 .DS_Store
+
+# Временные файлы анализа
+blobs.txt
+blobs2.txt
+blobs2_sizes.txt
+
+# Мусор
+git
+backend/Новый текстовый документ.txt

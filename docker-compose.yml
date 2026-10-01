@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  # MongoDB
+  mongo:
+    image: mongo:7
+    container_name: carwash-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks:
+      - carwash-net
+
+  # MQTT-брокер (Mosquitto)
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: carwash-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT
+      - "9001:9001"   # WebSocket
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/log:/mosquitto/log
+    networks:
+      - carwash-net
+
+  # Backend (Node.js)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: carwash-backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+      - mosquitto
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - MONGO_URI=mongodb://mongo:27017/carwash
+      - MQTT_BROKER_URL=mqtt://mosquitto:1883
+      - JWT_SECRET=change-me-in-production
+    ports:
+      - "3000:3000"
+    networks:
+      - carwash-net
+
+  # Frontend (Angular + Nginx)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: carwash-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"  # Открываем на хосте порт 8080
+    networks:
+      - carwash-net
+
+volumes:
+  mongo-data:
+
+networks:
+  carwash-net:
+    driver: bridge
