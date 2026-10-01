@@ -9,9 +9,11 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const mqtt = require('mqtt');
+const ClientCard = require('./models/ClientCard');
+const cardsRouter = require('./routes/cards');
 require('dotenv').config();
 
-// ---------- MQTT Client (подключается к брокеру из настроек) ----------
+// ---------- MQTT Client ----------
 let mqttClient = null;
 let mqttSettings = {
   brokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
@@ -19,7 +21,7 @@ let mqttSettings = {
   password: ''
 };
 
-// ---------- Функция записи конфигурационного файла для симуляторов ----------
+// ---------- Запись mqtt-config.json для симуляторов ----------
 function writeMqttConfigFile(settings) {
   try {
     const configPath = path.join(__dirname, '..', 'mqtt-config.json');
@@ -50,15 +52,17 @@ function connectMqtt(settings) {
 
   mqttClient.on('connect', () => {
     console.log('✅ Подключено к MQTT брокеру:', brokerUrl);
-    // Подписки
+
     mqttClient.subscribe('kkm/print');
     mqttClient.subscribe('posts/+/command');
     mqttClient.subscribe('posts/+/status');
     mqttClient.subscribe('tank/levels');
     mqttClient.subscribe('reports/request');
-    mqttClient.subscribe('posts/+/config'); // подписываемся на конфиги постов
+    mqttClient.subscribe('posts/+/config');
+    mqttClient.subscribe('posts/+/clientcard');
+    mqttClient.subscribe('posts/+/receipt');
+    mqttClient.subscribe('posts/+/lwt');         // NEW: LWT постов для освобождения карты
 
-    // Публикация конфига при старте (если настройки загружены)
     if (settings.posts) {
       publishConfigToAllPosts();
     }
@@ -67,10 +71,16 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    // ---------- Обработка чеков ----------
-    if (topic === 'kkm/print') {
+    // ---------- Обработка чеков: kkm/print И posts/{id}/receipt ----------
+    if (topic === 'kkm/print' || /^posts\/[^/]+\/receipt$/.test(topic)) {
       try {
         const receiptData = JSON.parse(payload);
+
+        if (!receiptData.postId) {
+          const m = topic.match(/^posts\/(\d+)\//);
+          if (m) receiptData.postId = parseInt(m[1], 10);
+        }
+
         let timestamp = receiptData.timestamp;
         if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) {
           timestamp = new Date();
@@ -96,12 +106,13 @@ function connectMqtt(settings) {
           items: roundedItems,
           totalCost: roundedTotal,
           balanceAfter: Math.round((receiptData.balance || 0) * 10) / 10,
+          paymentMethod: receiptData.paymentMethod || null,
           discountTotal: receiptData.discountTotal || 0,
           correctionInfo: receiptData.correctionInfo || null,
           fiscalSent: false
         });
         await newReceipt.save();
-        console.log(`✅ Чек №${receiptNumber} сохранён в БД для поста ${receiptData.postId}`);
+        console.log(`✅ Чек №${receiptNumber} сохранён (payment=${newReceipt.paymentMethod || '—'})`);
 
         if (settings.kkm.enabled && !settings.kkm.mockReceipt) {
           console.log(`Отправка чека в ККТ (${settings.kkm.provider})`);
@@ -116,11 +127,11 @@ function connectMqtt(settings) {
           console.log(`📊 Опубликована сумма за смену №${currentShift.shiftNumber}: ${total} руб. (${count} чеков)`);
         }
       } catch (err) {
-        console.error('Ошибка сохранения чека:', err.message);
+        console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
       }
     }
 
-    // ---------- Обработка команд постов ----------
+    // ---------- Команды постов ----------
     if (topic.startsWith('posts/') && topic.endsWith('/command')) {
       const parts = topic.split('/');
       const postId = parts[1];
@@ -152,20 +163,211 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Обработка статусов постов ----------
+    // ---------- Статусы постов + расчёт дебета карты ----------
     if (topic.startsWith('posts/') && topic.endsWith('/status')) {
       const postId = topic.split('/')[1];
       try {
         const data = JSON.parse(payload);
-        postsState[postId] = { ...postsState[postId], ...data, lastSeen: Date.now() };
-      } catch (e) { }
+        if (!postsState[postId]) postsState[postId] = {};
+        const state = postsState[postId];
+
+        const cc = state.clientCard;
+        const ccb = state.clientCardBalance;
+        const cct = state.clientCardType;
+
+        const newEspBalance = typeof data.balance === 'number' ? data.balance : null;
+        const lastEspBalance = typeof state._lastEspBalance === 'number'
+          ? state._lastEspBalance
+          : null;
+
+        if (cc && newEspBalance !== null) {
+          if (lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
+            const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
+            const cardBal = typeof ccb === 'number' ? ccb : 0;
+            if (delta > 0.001 && delta <= cardBal + 0.01) {
+              debitCardForPost(postId, delta).catch((e) =>
+                console.warn(`[Post ${postId}] debitCardForPost error: ${e.message}`)
+              );
+            } else if (delta > cardBal + 0.01) {
+              console.warn(
+                `⚠️ [Post ${postId}] Пропущен большой дебет: delta=${delta}, ` +
+                `остаток карты=${cardBal}`
+              );
+            }
+          }
+        }
+
+        Object.assign(state, data, { lastSeen: Date.now() });
+        state.clientCard = cc;
+        state.clientCardBalance = ccb;
+        state.clientCardType = cct;
+        state._lastEspBalance = newEspBalance;
+
+        if (cc) {
+          state.balance = typeof ccb === 'number' ? ccb : 0;
+        }
+      } catch (e) {
+        // не-JSON — игнорируем
+      }
     }
 
-    // ---------- Обработка уровней баков ----------
+    // ============================================================
+    // LWT постов — освобождаем карту, если пост ушёл offline
+    // ============================================================
+    if (/^posts\/[^/]+\/lwt$/.test(topic)) {
+      const postId = topic.split('/')[1];
+      const status = (payload || '').trim().toLowerCase();
+
+      if (status === 'offline') {
+        const state = postsState[postId];
+        if (state && state.clientCard) {
+          console.log(
+            `📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`
+          );
+          delete state.clientCard;
+          delete state.clientCardBalance;
+          delete state.clientCardType;
+          state._lastEspBalance = null;
+          state.balance = 0;
+          state.busy = false;
+        }
+      }
+    }
+
+    // ---------- Карта клиента ----------
+    if (/^posts\/[^/]+\/clientcard$/.test(topic)) {
+      const postId = topic.split('/')[1];
+      try {
+        const data = JSON.parse(payload);
+        const cardNumber = (data.card || '').toString().trim().toUpperCase();
+
+        if (!postsState[postId]) postsState[postId] = {};
+        const state = postsState[postId];
+
+        // ---------- Снятие карты (NULL) ----------
+        if (!cardNumber || cardNumber === 'NULL') {
+          console.log(`ℹ️ Пост ${postId}: карта снята (NULL)`);
+          const hadCard = !!state.clientCard;
+
+          delete state.clientCard;
+          delete state.clientCardBalance;
+          delete state.clientCardType;
+          state._lastEspBalance = null;
+
+          if (hadCard) {
+            state.balance = 0;
+            state.totalPaid = 0;
+            state.receiptCount = 0;
+            state.servicesUsage = {};
+            state.elapsedSec = 0;
+            state.busy = false;
+            state.paused = false;
+            state.currentProgram = null;
+            if (state.timer) { clearInterval(state.timer); state.timer = null; }
+
+            mqttClient.publish(
+              `posts/${postId}/command`,
+              JSON.stringify({ command: 'reset' }),
+              { qos: 1 }
+            );
+            publishStatus(postId);
+            publishRelayStatus(postId);
+            console.log(`🔄 [${postId}] Баланс поста сброшен вместе с картой`);
+          }
+
+          // Сбросить экран сообщений на этом посту
+          mqttClient.publish(
+            `posts/${postId}/message`,
+            JSON.stringify({ "": "" }),
+            { qos: 0 }
+          );
+          return;
+        }
+
+        // ============================================================
+        // Проверяем, не занята ли карта на другом посту
+        // ============================================================
+        const busyPostId = findPostWithCard(cardNumber, postId);
+        if (busyPostId) {
+          console.warn(
+            `⚠️ Карта ${cardNumber} уже используется на посту ${busyPostId} — ` +
+            `отклоняем тап на посту ${postId}`
+          );
+
+          delete state.clientCard;
+          delete state.clientCardBalance;
+          delete state.clientCardType;
+          state._lastEspBalance = null;
+
+          mqttClient.publish(
+            `posts/${postId}/message`,
+            JSON.stringify({ ERR: `КАРТА УЖЕ ИСПОЛЬЗУЕТСЯ НА ПОСТУ ${busyPostId}` }),
+            { qos: 1 }
+          );
+          return;
+        }
+        // ============================================================
+
+        // ---------- Привязка карты ----------
+        const prevCard = state.clientCard;
+        state.clientCard = cardNumber;
+
+        const clientCard = await ClientCard.findOne({ card: cardNumber });
+        if (!clientCard) {
+          console.warn(`⚠️ Пост ${postId}: карта ${cardNumber} не найдена в БД`);
+          delete state.clientCardBalance;
+          delete state.clientCardType;
+          state._lastEspBalance = null;
+          return;
+        }
+
+        state._lastEspBalance = null;
+
+        const hasForeignBalance = !prevCard && typeof state.balance === 'number' && state.balance > 0.01;
+        const switchingCard = prevCard && prevCard !== cardNumber;
+
+        if (hasForeignBalance || switchingCard) {
+          mqttClient.publish(
+            `posts/${postId}/command`,
+            JSON.stringify({ command: 'reset' }),
+            { qos: 1 }
+          );
+          await new Promise(r => setTimeout(r, 300));
+        }
+
+        state.clientCardBalance = clientCard.balance;
+        state.clientCardType = clientCard.type;
+        state.balance = clientCard.balance;
+
+        const balancePayload = {
+          card: clientCard.card,
+          balance: clientCard.balance,
+          type: clientCard.type
+        };
+        mqttClient.publish(
+          `posts/${postId}/clientcardbalance`,
+          JSON.stringify(balancePayload),
+          { qos: 1 }
+        );
+        console.log(`📤 [${postId}] clientcardbalance → ${JSON.stringify(balancePayload)}`);
+
+        // На всякий случай очищаем экран сообщений
+        mqttClient.publish(
+          `posts/${postId}/message`,
+          JSON.stringify({ "": "" }),
+          { qos: 0 }
+        );
+
+        publishStatus(postId);
+      } catch (err) {
+        console.error(`Ошибка обработки posts/${postId}/clientcard:`, err.message);
+      }
+    }
+
+    // ---------- Уровни баков ----------
     if (topic === 'tank/levels') {
       try {
         const { tank, level } = JSON.parse(payload);
-        // Добавляем проверку
         if (settings.tankLevels && settings.tankLevels.hasOwnProperty(tank)) {
           const newLevel = Math.min(100, Math.max(0, Math.round(level)));
           if (settings.tankLevels[tank] !== newLevel) {
@@ -181,7 +383,7 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Обработка запросов отчётов ----------
+    // ---------- Запросы отчётов ----------
     if (topic === 'reports/request') {
       try {
         const request = JSON.parse(payload);
@@ -205,16 +407,10 @@ function connectMqtt(settings) {
     }
   });
 
-  mqttClient.on('error', (err) => {
-    console.error('MQTT error:', err);
-  });
-
-  mqttClient.on('close', () => {
-    console.warn('MQTT connection closed');
-  });
+  mqttClient.on('error', (err) => console.error('MQTT error:', err));
+  mqttClient.on('close', () => console.warn('MQTT connection closed'));
 }
 
-// Функция для переподключения с новыми настройками
 function reconnectMqtt(newSettings) {
   mqttSettings = { ...mqttSettings, ...newSettings };
   connectMqtt(mqttSettings);
@@ -245,6 +441,7 @@ const receiptSchema = new mongoose.Schema({
   }],
   totalCost: Number,
   balanceAfter: Number,
+  paymentMethod: { type: String, default: null },
   discountTotal: { type: Number, default: 0 },
   fiscalSent: { type: Boolean, default: false },
   fiscalUuid: { type: String, default: null },
@@ -306,7 +503,7 @@ const Setting = mongoose.model('Setting', settingSchema);
 // ---------- Настройки ----------
 let settings = {
   numberOfPosts: 8,
-  posts: {}, // { 1: { prices: {}, relayMask: {}, ... }, 2: { ... } }
+  posts: {},
   tankLevels: { water: 80, foam: 65, wax: 45, teflon: 90, osmosis: 30 },
   tankLowThreshold: { water: 20, foam: 15, wax: 10, teflon: 25, osmosis: 10 },
   kkm: {
@@ -344,10 +541,9 @@ let settings = {
   }
 };
 
-// ---------- Функции построения конфига для поста ----------
+// ---------- Конфиг постов ----------
 function buildServicesPayloadForPost(postId) {
   const postSettings = settings.posts?.[postId] || {};
-  // Если в посте нет своих услуг, используем глобальные (для обратной совместимости)
   const services = postSettings.services || [];
   const prices = postSettings.prices || {};
   const relayMask = postSettings.relayMask || {};
@@ -378,14 +574,14 @@ function publishConfigToAllPosts() {
   const numberOfPosts = settings.numberOfPosts || 8;
   for (let i = 1; i <= numberOfPosts; i++) {
     const servicesArray = buildServicesPayloadForPost(i);
-    const payload = { services: servicesArray };  // <-- оборачиваем в объект
+    const payload = { services: servicesArray };
     const topic = `posts/${i}/config`;
     mqttClient.publish(topic, JSON.stringify(payload), { qos: 1, retain: true });
   }
   console.log(`📤 Конфиг опубликован в posts/*/config (${numberOfPosts} постов)`);
 }
 
-// ---------- Загрузка и сохранение настроек ----------
+// ---------- Загрузка настроек ----------
 async function loadSettings() {
   try {
     let doc = await Setting.findOne({ key: 'main' });
@@ -404,29 +600,23 @@ async function loadSettings() {
       { name: 'Пауза', price: 10, free_time_sec: 120, enabled: true }
     ];
     if (!doc) {
-      // Создаём настройки с posts
       const posts = {};
       const numberOfPosts = settings.numberOfPosts || 8;
       for (let i = 1; i <= numberOfPosts; i++) {
         posts[i] = {
-          prices: {},
-          relayMask: {},
-          vfdFrequencies: {},
-          dimmerMask: {},
-          buttonInputs: {},
-          relayDelays: {},
+          prices: {}, relayMask: {}, vfdFrequencies: {},
+          dimmerMask: {}, buttonInputs: {}, relayDelays: {},
           services: defaultServices.map(s => ({ ...s }))
         };
       }
       settings.posts = posts;
-      settings.services = defaultServices; // для обратной совместимости
+      settings.services = defaultServices;
       doc = new Setting({ key: 'main', value: settings });
       await doc.save();
       console.log('Настройки созданы в БД с индивидуальными постами');
     } else {
       settings = doc.value;
 
-      // Миграция: если нет posts, создаём из старых полей
       if (!settings.posts) {
         const numberOfPosts = settings.numberOfPosts || 8;
         const posts = {};
@@ -443,7 +633,6 @@ async function loadSettings() {
           };
         }
         settings.posts = posts;
-        // Удаляем старые поля
         delete settings.prices;
         delete settings.relayMask;
         delete settings.vfdFrequencies;
@@ -454,24 +643,18 @@ async function loadSettings() {
         await saveSettings(settings);
         console.log('Настройки мигрированы в формат posts');
       } else {
-        // Убедимся, что у каждого поста есть поле services с enable
         const numberOfPosts = settings.numberOfPosts || 8;
-        const defaultServices = settings.posts[1]?.services || defaultServices;
+        const defaultServices2 = settings.posts[1]?.services || defaultServices;
         for (let i = 1; i <= numberOfPosts; i++) {
           if (!settings.posts[i]) {
             settings.posts[i] = {
-              prices: {},
-              relayMask: {},
-              vfdFrequencies: {},
-              dimmerMask: {},
-              buttonInputs: {},
-              relayDelays: {},
-              services: defaultServices.map(s => ({ ...s }))
+              prices: {}, relayMask: {}, vfdFrequencies: {},
+              dimmerMask: {}, buttonInputs: {}, relayDelays: {},
+              services: defaultServices2.map(s => ({ ...s }))
             };
           } else if (!settings.posts[i].services) {
-            settings.posts[i].services = defaultServices.map(s => ({ ...s }));
+            settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
-          // Убедимся, что у каждой услуги есть enable
           settings.posts[i].services = settings.posts[i].services.map(s => ({
             ...s,
             enabled: s.enable !== undefined ? s.enable : true
@@ -482,7 +665,6 @@ async function loadSettings() {
       }
       console.log('Настройки загружены из БД');
     }
-    // Подключаемся к MQTT
     if (settings.mqtt) {
       mqttSettings = settings.mqtt;
       connectMqtt(mqttSettings);
@@ -490,7 +672,6 @@ async function loadSettings() {
       connectMqtt({ brokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883' });
     }
     writeMqttConfigFile(settings);
-    // Публикуем конфиг для всех постов
     publishConfigToAllPosts();
   } catch (err) {
     console.warn('Не удалось загрузить настройки из БД:', err.message);
@@ -531,12 +712,24 @@ function getPostState(postId) {
   return postsState[postId];
 }
 
+// ============================================================
+// NEW: поиск поста, на котором сейчас активна карта
+// ============================================================
+function findPostWithCard(cardNumber, excludePostId = null) {
+  if (!cardNumber) return null;
+  const target = String(cardNumber).toUpperCase();
+  for (const [id, st] of Object.entries(postsState)) {
+    if (excludePostId && id === excludePostId) continue;
+    if (st && st.clientCard === target) return id;
+  }
+  return null;
+}
+
 function findService(postId, name) {
   const postSettings = settings.posts?.[postId];
   if (postSettings && postSettings.services) {
     return postSettings.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
   }
-  // fallback на глобальные
   if (settings.services) {
     return settings.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
   }
@@ -563,12 +756,47 @@ function publishRelayStatus(postId) {
   mqttClient.publish(`posts/${postId}/status_relay`, JSON.stringify({ busy: state.busy, relayMask }), { qos: 0 });
 }
 
+// ============================================================
+// Списание с баланса карты в БД
+// ============================================================
+async function debitCardForPost(postId, amountRub) {
+  const state = postsState[postId];
+  if (!state || !state.clientCard) return;
+
+  const amount = Math.round(amountRub * 100) / 100;
+  if (amount <= 0) return;
+
+  const card = await ClientCard.findOne({ card: state.clientCard });
+  if (!card) {
+    console.warn(`[Post ${postId}] debitCardForPost: карта ${state.clientCard} не найдена`);
+    return;
+  }
+
+  const actual = Math.min(amount, card.balance);
+  if (actual <= 0.001) return;
+
+  card.balance = Math.round((card.balance - actual) * 100) / 100;
+  if (card.balance < 0) card.balance = 0;
+  await card.save();
+
+  state.clientCardBalance = card.balance;
+  state.balance = card.balance;
+
+  console.log(
+    `💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с карты ${card.card} → ` +
+    `остаток ${card.balance.toFixed(2)} ₽`
+  );
+}
+
+// ---------- Таймер (серверный) ----------
 function startTimer(postId) {
   const state = getPostState(postId);
   if (state.timer) clearInterval(state.timer);
   const TICK_INTERVAL_MS = 1000;
   state.timer = setInterval(() => {
     if (!state.busy || state.paused) return;
+    if (state.clientCard) return;
+
     const service = findService(postId, state.currentProgram);
     if (!service) { stopPost(postId, true, false); return; }
     const pricePerSec = service.price / 60;
@@ -723,16 +951,11 @@ function printReceipt(postId) {
   console.log(`🧾 Пост ${postId}: чек отправлен (${items.length} услуг, сумма ${totalCost.toFixed(2)} ₽)`);
 }
 
-// ---------- Вспомогательные функции для чеков ----------
+// ---------- Вспомогательные ----------
 const programNamesRu = {
-  water: 'Вода',
-  foam: 'Пена',
-  wax: 'Воск',
-  teflon: 'Тефлон',
-  osmosis: 'Осмос',
-  hotWater: 'Горячая вода',
-  waterFoam: 'Вода+Пена',
-  turbo: 'Турбо мойка'
+  water: 'Вода', foam: 'Пена', wax: 'Воск', teflon: 'Тефлон',
+  osmosis: 'Осмос', hotWater: 'Горячая вода',
+  waterFoam: 'Вода+Пена', turbo: 'Турбо мойка'
 };
 
 function translateReceiptItems(items) {
@@ -785,6 +1008,45 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ---------- Хук: публикация баланса карты во все посты ----------
+app.locals.publishCardBalanceToPosts = async function (cardNumber) {
+  if (!mqttClient || !cardNumber) return;
+  try {
+    const normalized = String(cardNumber).toUpperCase();
+    const clientCard = await ClientCard.findOne({ card: normalized });
+    if (!clientCard) return;
+
+    const postsWithCard = [];
+    for (const [id, st] of Object.entries(postsState)) {
+      if (st && st.clientCard === clientCard.card) {
+        st.clientCardBalance = clientCard.balance;
+        st.clientCardType = clientCard.type;
+        st.balance = clientCard.balance;
+        postsWithCard.push(id);
+      }
+    }
+
+    if (postsWithCard.length === 0) return;
+
+    const payload = JSON.stringify({
+      card: clientCard.card,
+      balance: clientCard.balance,
+      type: clientCard.type
+    });
+
+    for (const postId of postsWithCard) {
+      mqttClient.publish(`posts/${postId}/clientcardbalance`, payload, { qos: 1 });
+      publishStatus(postId);
+      console.log(`📤 [${postId}] clientcardbalance (после изменения баланса) → ${payload}`);
+    }
+  } catch (err) {
+    console.error('publishCardBalanceToPosts error:', err.message);
+  }
+};
+
+// ---------- Роутер карт ----------
+app.use('/api/cards', cardsRouter);
+
 // Инициализация администратора
 const initAdmin = async () => {
   try {
@@ -824,7 +1086,6 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// ---------- API: настройки MQTT (получение и обновление) ----------
 app.get('/api/mqtt/settings', auth, adminOnly, (req, res) => {
   res.json(settings.mqtt || { brokerUrl: '', username: '', password: '' });
 });
@@ -832,9 +1093,7 @@ app.get('/api/mqtt/settings', auth, adminOnly, (req, res) => {
 app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   try {
     const { brokerUrl, username, password } = req.body;
-    if (!brokerUrl) {
-      return res.status(400).json({ error: 'brokerUrl обязателен' });
-    }
+    if (!brokerUrl) return res.status(400).json({ error: 'brokerUrl обязателен' });
     settings.mqtt = { brokerUrl, username: username || '', password: password || '' };
     await saveSettings(settings);
     reconnectMqtt(settings.mqtt);
@@ -845,7 +1104,6 @@ app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   }
 });
 
-// ---------- API: публикация конфига (без сохранения) ----------
 app.post('/api/publish-config', auth, adminOnly, async (req, res) => {
   try {
     publishConfigToAllPosts();
@@ -856,7 +1114,6 @@ app.post('/api/publish-config', auth, adminOnly, async (req, res) => {
   }
 });
 
-// ---------- Логин ----------
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   const user = await findUser(username);
@@ -872,16 +1129,23 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, role: user.role });
 });
 
-// ---------- Посты ----------
 app.get('/api/posts', auth, (req, res) => {
   try {
     const numberOfPosts = (typeof settings.numberOfPosts === 'number' && settings.numberOfPosts > 0)
-      ? settings.numberOfPosts
-      : 8;
+      ? settings.numberOfPosts : 8;
     const result = {};
     for (let i = 1; i <= numberOfPosts; i++) {
       const id = i.toString();
-      result[id] = postsState[id] || { busy: false };
+      const state = postsState[id];
+      if (state) {
+        const { timer, _lastEspBalance, ...safeState } = state;
+        if (safeState.clientCard && typeof safeState.clientCardBalance === 'number') {
+          safeState.balance = safeState.clientCardBalance;
+        }
+        result[id] = safeState;
+      } else {
+        result[id] = { busy: false };
+      }
     }
     res.json(result);
   } catch (error) {
@@ -891,10 +1155,7 @@ app.get('/api/posts', auth, (req, res) => {
   }
 });
 
-// ---------- Настройки (основные) ----------
 app.get('/api/settings', (req, res) => {
-  // Возвращаем настройки в старом формате для обратной совместимости фронтенда
-  // Но также добавляем posts
   res.json(settings);
 });
 
@@ -902,7 +1163,6 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
   try {
     const newSettings = req.body;
 
-    // Если клиент прислал старые поля (prices, relayMask и т.д.) — мигрируем
     if (newSettings.prices || newSettings.relayMask || newSettings.vfdFrequencies ||
       newSettings.dimmerMask || newSettings.buttonInputs || newSettings.relayDelays ||
       newSettings.services) {
@@ -930,19 +1190,15 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
       delete newSettings.services;
     }
 
-    // Обновляем глобальные настройки
     settings = { ...settings, ...newSettings };
 
-    // Если пришёл новый список услуг для постов, обновляем каждый пост
     if (newSettings.posts) {
       for (const [postId, postData] of Object.entries(newSettings.posts)) {
         if (!settings.posts[postId]) settings.posts[postId] = {};
         settings.posts[postId] = { ...settings.posts[postId], ...postData };
-        // Убедимся, что у каждой услуги есть enable
         if (settings.posts[postId].services) {
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
-            ...s,
-            enabled: s.enable !== undefined ? s.enable : true
+            ...s, enabled: s.enable !== undefined ? s.enable : true
           }));
         }
       }
@@ -958,14 +1214,12 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
   }
 });
 
-// ---------- Команды постам (REST) ----------
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   const { command } = req.body;
   mqttClient.publish(`posts/${req.params.postId}/command`, JSON.stringify({ command }), { qos: 1 });
   res.json({ ok: true });
 });
 
-// ---------- Дополнительные эндпоинты ----------
 app.get('/api/relays', auth, (req, res) => res.json(relaysState));
 app.get('/api/vfds', auth, (req, res) => res.json(vfdsState));
 app.post('/api/tank-levels', auth, adminOnly, (req, res) => {
@@ -979,16 +1233,13 @@ app.post('/api/tank-levels', auth, adminOnly, (req, res) => {
   }
 });
 
-// ---------- ККМ (статус, ручные настройки) ----------
 app.get('/api/kkm/status', auth, adminOnly, async (req, res) => {
   try {
     const response = await axios.get('http://0.0.0.0:5001/api/kkm/status', { timeout: 2000 });
     res.json(response.data);
   } catch (err) {
     res.json({
-      ready: true,
-      connected: false,
-      paper: true,
+      ready: true, connected: false, paper: true,
       kkNumber: settings.kkmManual.kkNumber || null,
       shiftNumber: settings.kkmManual.fiscalShiftNumber || null,
       cashierName: settings.kkmManual.cashierName || null,
@@ -1050,12 +1301,7 @@ app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
   const receipts = await Receipt.find({ timestamp: { $gte: shift.openedAt } });
   const total = receipts.reduce((sum, r) => sum + (r.totalCost || 0), 0);
   const count = receipts.length;
-  shift.xReports.push({
-    timestamp: new Date(),
-    total,
-    count,
-    cashier: req.user.username
-  });
+  shift.xReports.push({ timestamp: new Date(), total, count, cashier: req.user.username });
   await shift.save();
   res.json({ message: 'X-отчёт сформирован (промежуточный)', total, count });
 });
@@ -1066,22 +1312,12 @@ app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
   const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt, $lte: new Date() } });
   const total = receipts.reduce((sum, r) => sum + (r.totalCost || 0), 0);
   const count = receipts.length;
-  currentShift.zReport = {
-    total,
-    count,
-    generatedAt: new Date(),
-    cashier: req.user.username
-  };
+  currentShift.zReport = { total, count, generatedAt: new Date(), cashier: req.user.username };
   currentShift.shiftOpen = false;
   currentShift.closedAt = new Date();
   await currentShift.save();
-
   const nextNumber = await getNextShiftNumber();
-  const newShift = new Shift({
-    shiftNumber: nextNumber,
-    shiftOpen: true,
-    cashier: req.user.username
-  });
+  const newShift = new Shift({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
   await newShift.save();
   res.json({ message: 'Z-отчёт сформирован, смена закрыта', total, count });
 });
@@ -1093,20 +1329,12 @@ app.post('/api/kkm/toggle-shift', auth, adminOnly, async (req, res) => {
     currentShift.closedAt = new Date();
     await currentShift.save();
     const nextNumber = await getNextShiftNumber();
-    const newShift = new Shift({
-      shiftNumber: nextNumber,
-      shiftOpen: true,
-      cashier: req.user.username
-    });
+    const newShift = new Shift({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
     await newShift.save();
     return res.json({ shiftOpen: true, shiftNumber: nextNumber, cashier: req.user.username });
   } else {
     const nextNumber = await getNextShiftNumber();
-    const newShift = new Shift({
-      shiftNumber: nextNumber,
-      shiftOpen: true,
-      cashier: req.user.username
-    });
+    const newShift = new Shift({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
     await newShift.save();
     return res.json({ shiftOpen: true, shiftNumber: nextNumber, cashier: req.user.username });
   }
@@ -1118,15 +1346,12 @@ app.get('/api/kkm/settings', auth, adminOnly, (req, res) => {
 
 app.get('/api/shift-total', auth, adminOnly, async (req, res) => {
   const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) {
-    return res.json({ total: 0, count: 0 });
-  }
+  if (!currentShift) return res.json({ total: 0, count: 0 });
   const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
   const total = receipts.reduce((sum, r) => sum + (r.totalCost || 0), 0);
   res.json({ total, count: receipts.length });
 });
 
-// ---------- Фискальная регистрация ----------
 app.get('/api/kkm/fiscal-registration', auth, adminOnly, async (req, res) => {
   const reg = await FiscalRegistration.findOne();
   res.json(reg || {});
@@ -1139,16 +1364,12 @@ app.post('/api/kkm/fiscal-registration', auth, adminOnly, async (req, res) => {
   }
   await FiscalRegistration.deleteMany({});
   const newReg = new FiscalRegistration({
-    registrationNumber,
-    inn,
-    fnNumber,
-    validUntil: new Date(validUntil)
+    registrationNumber, inn, fnNumber, validUntil: new Date(validUntil)
   });
   await newReg.save();
   res.json(newReg);
 });
 
-// ---------- Ручные фискальные команды (заглушки) ----------
 app.post('/api/kkm/fiscal/open-shift', auth, adminOnly, async (req, res) => {
   res.json({ ok: true, message: 'Открытие смены (заглушка)' });
 });
@@ -1162,7 +1383,6 @@ app.post('/api/kkm/fiscal/z-report', auth, adminOnly, async (req, res) => {
   res.json({ message: 'Z-отчёт (заглушка)' });
 });
 
-// ---------- PDF и JSON отчёты ----------
 async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 30, size: 'A4' });
@@ -1174,11 +1394,9 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
     const fontPathArial = path.join(__dirname, 'fonts', 'Arial.ttf');
     const fontPathTimes = path.join(__dirname, 'fonts', 'times.ttf');
     if (fs.existsSync(fontPathArial)) {
-      doc.registerFont('MainFont', fontPathArial);
-      doc.font('MainFont');
+      doc.registerFont('MainFont', fontPathArial); doc.font('MainFont');
     } else if (fs.existsSync(fontPathTimes)) {
-      doc.registerFont('MainFont', fontPathTimes);
-      doc.font('MainFont');
+      doc.registerFont('MainFont', fontPathTimes); doc.font('MainFont');
     } else {
       console.warn('⚠️ Шрифт для кириллицы не найден');
       doc.font('Helvetica');
@@ -1194,9 +1412,9 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
 
     const startX = 40;
     let y = doc.y + 10;
-    const colWidths = [30, 35, 120, 50, 275];
+    const colWidths = [30, 35, 120, 50, 70, 205];
     const headerHeight = 25;
-    const headers = ['№', 'Пост', 'Дата', 'Сумма', 'Услуги'];
+    const headers = ['№', 'Пост', 'Дата', 'Сумма', 'Оплата', 'Услуги'];
 
     function drawHeaders(yPos) {
       let x = startX;
@@ -1222,8 +1440,18 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
       doc.rect(x, yPos, colWidths[3], rowHeight).stroke();
       doc.text((Number(receipt.totalCost) || 0).toFixed(2) + ' ₽', x + 5, yPos + 5);
       x += colWidths[3];
+
       doc.rect(x, yPos, colWidths[4], rowHeight).stroke();
-      doc.text(itemsStr, x + 5, yPos + 5, { width: colWidths[4] - 10, align: 'left' });
+      const pm = receipt.paymentMethod;
+      const pmLabel = pm === 'cash' ? 'Наличные'
+        : pm === 'card_terminal' ? 'Безнал'
+          : pm === 'client_card' ? 'Карта'
+            : '—';
+      doc.text(pmLabel, x + 5, yPos + 5, { width: colWidths[4] - 10 });
+      x += colWidths[4];
+
+      doc.rect(x, yPos, colWidths[5], rowHeight).stroke();
+      doc.text(itemsStr, x + 5, yPos + 5, { width: colWidths[5] - 10, align: 'left' });
     }
 
     y = drawHeaders(y);
@@ -1234,7 +1462,7 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
       const itemsStr = items.map(i =>
         `${i.name} (цена сек: ${(Number(i.pricePerSecond) || 0).toFixed(1)}коп, время: ${(Number(i.seconds) || 0).toFixed(1)}с, сумма: ${(Number(i.cost) || 0).toFixed(2)})`
       ).join(', ');
-      const textHeight = doc.heightOfString(itemsStr, { width: colWidths[4] - 10 });
+      const textHeight = doc.heightOfString(itemsStr, { width: colWidths[5] - 10 });
       const currentRowHeight = Math.max(20, textHeight + 10);
       const dateStr = new Date(receipt.timestamp).toLocaleString('ru-RU', {
         day: '2-digit', month: '2-digit', year: '2-digit',
@@ -1275,10 +1503,7 @@ app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
   const start = new Date(from); start.setHours(0, 0, 0, 0);
   const end = new Date(to); end.setHours(23, 59, 59, 999);
   let receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
-  receipts = receipts.map(r => ({
-    ...r.toObject(),
-    items: translateReceiptItems(r.items)
-  }));
+  receipts = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   const pdfData = await generatePDFReport(receipts, totalSum, from, to);
   res.setHeader('Content-Type', 'application/pdf');
@@ -1337,7 +1562,6 @@ app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
   res.json(summary);
 });
 
-// ---------- Приём чеков по HTTP ----------
 app.post('/api/receipts', async (req, res) => {
   try {
     const receiptData = req.body;
@@ -1369,12 +1593,13 @@ app.post('/api/receipts', async (req, res) => {
       items: roundedItems,
       totalCost: roundedTotal,
       balanceAfter: Math.round((receiptData.balance || 0) * 10) / 10,
+      paymentMethod: receiptData.paymentMethod || null,
       discountTotal: receiptData.discountTotal || 0,
       correctionInfo: receiptData.correctionInfo || null,
       fiscalSent: false
     });
     await newReceipt.save();
-    console.log(`✅ Чек сохранён через HTTP для поста ${receiptData.postId}, сумма ${roundedTotal} руб.`);
+    console.log(`✅ Чек сохранён через HTTP (payment=${newReceipt.paymentMethod || '—'})`);
 
     const currentShift = await Shift.findOne({ shiftOpen: true });
     if (currentShift) {
@@ -1390,7 +1615,26 @@ app.post('/api/receipts', async (req, res) => {
   }
 });
 
-// ---------- Запуск ----------
+// ============================================================
+// NEW: принудительное освобождение карты оператором
+// POST /api/cards/:card/release
+// ============================================================
+app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
+  const cardNumber = req.params.card.toUpperCase();
+  let released = false;
+  for (const [id, st] of Object.entries(postsState)) {
+    if (st && st.clientCard === cardNumber) {
+      delete st.clientCard;
+      delete st.clientCardBalance;
+      delete st.clientCardType;
+      st._lastEspBalance = null;
+      released = true;
+      console.log(`🔓 [${id}] Карта ${cardNumber} принудительно освобождена оператором`);
+    }
+  }
+  res.json({ ok: true, released });
+});
+
 mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
