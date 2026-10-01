@@ -5,7 +5,6 @@ import { JwtModule } from '@auth0/angular-jwt';
 import { routes } from './app.routes';
 import { AuthInterceptor } from './interceptors/auth.interceptor';
 
-
 export function tokenGetter() {
   if (typeof window !== 'undefined') {
     return localStorage.getItem('jwt_token');
