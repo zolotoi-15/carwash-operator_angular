@@ -31,6 +31,59 @@
     opacity: 0.8;
   }
 
+/* NEW: индикатор режима работы поста */
+.esp-mode-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+  .esp-mode-badge.online {
+    background: #e7f8ec;
+    color: #0b6b3a;
+    border: 1px solid #b6e2c6;
+  }
+
+  .esp-mode-badge.offline {
+    background: #fff4e5;
+    color: #8a5a00;
+    border: 1px solid #ffd9a3;
+  }
+
+/* Блок с номером карты клиента */
+.client-card-info {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0;
+  padding: 4px 8px;
+  background: #eef6ff;
+  border: 1px solid #c5ddf7;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: #1a4971;
+  text-align: center;
+}
+
+  .client-card-info strong {
+    font-family: monospace;
+    letter-spacing: 0.5px;
+  }
+
+  .client-card-info .card-balance {
+    font-weight: 700;
+    color: #0b6b3a;
+    font-family: monospace;
+  }
+
 .camera-window {
   width: 100%;
   aspect-ratio: 16/9;

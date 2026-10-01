@@ -1,5 +1,8 @@
 // src/app/pages/dashboard/post-card.component.ts
-import { Component, Input, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
+import {
+  Component, Input, OnInit, OnDestroy,
+  ChangeDetectionStrategy, ChangeDetectorRef
+} from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
@@ -20,6 +23,8 @@ export class PostCardComponent implements OnInit, OnDestroy {
   @Input() postId!: string;
   @Input() isAdmin: boolean = false;
   @Input() cameraUrl: string = '';
+  @Input() clientCard: string = '';
+  @Input() clientCardBalance: number | null = null;
 
   post: PostState = {
     busy: false,
@@ -32,13 +37,15 @@ export class PostCardComponent implements OnInit, OnDestroy {
     timer: null,
     servicesUsage: {},
     receiptSent: false,
-    pricePerSecond: 0  // добавлено
+    pricePerSecond: 0
   };
 
   isEspOnline: boolean = false;
+  localMode: boolean = false;
   addAmount: number | null = null;
   safeCameraUrl: SafeResourceUrl | null = null;
   showCamera: boolean = false;
+
   private subs: Subscription = new Subscription();
   private currentSettings: AppSettings | null = null;
 
@@ -85,7 +92,20 @@ export class PostCardComponent implements OnInit, OnDestroy {
       })
     );
 
-    // Периодическая проверка онлайн-статуса (каждые 5 секунд)
+    // Подписка на режим offline/online LocalPostService
+    this.subs.add(
+      this.localPost.getOfflineModeObservable().subscribe(
+        (list: { postId: string; offline: boolean }[]) => {
+          const item = list.find(p => p.postId === this.postId);
+          if (item) {
+            this.localMode = item.offline;
+            this.cdr.markForCheck();
+          }
+        }
+      )
+    );
+
+    // Периодическая проверка онлайн-статуса
     this.subs.add(
       interval(5000).subscribe(() => {
         this.isEspOnline = this.mqtt.isOnline(this.postId);
@@ -95,6 +115,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
     // Проверка текущего статуса
     this.isEspOnline = this.mqtt.isOnline(this.postId);
+    this.localMode = this.localPost.isPostOffline(this.postId);
 
     // Загружаем начальное состояние
     const initial = this.localPost.getPostState(this.postId);
@@ -126,7 +147,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       console.log(`📤 Команда program ${program} отправлена через MQTT на пост ${this.postId}`);
     } else {
       this.localPost.startProgram(this.postId, program);
-      console.log(`💻 Пост ${this.postId}: программа ${program} запущена локально`);
+      console.log(`💻 [LOCAL] Пост ${this.postId}: программа ${program} запущена локально`);
     }
   }
 
@@ -142,7 +163,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       console.log(`📤 Команда add_balance отправлена через MQTT на пост ${this.postId}`);
     } else {
       this.localPost.addBalance(this.postId, this.addAmount);
-      console.log(`💵 Баланс поста ${this.postId} пополнен локально на ${this.addAmount} ₽`);
+      console.log(`💵 [LOCAL] Баланс поста ${this.postId} пополнен на ${this.addAmount} ₽`);
     }
 
     this.addAmount = null;
@@ -155,7 +176,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       console.log(`📤 Команда stop отправлена через MQTT на пост ${this.postId}`);
     } else {
       this.localPost.stopProgram(this.postId, true);
-      console.log(`💻 Пост ${this.postId} остановлен локально`);
+      console.log(`💻 [LOCAL] Пост ${this.postId} остановлен локально`);
     }
   }
 
@@ -166,7 +187,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       console.log(`📤 Команда pause отправлена через MQTT на пост ${this.postId}`);
     } else {
       this.localPost.togglePause(this.postId);
-      console.log(`💻 Пост ${this.postId}: пауза переключена локально`);
+      console.log(`💻 [LOCAL] Пост ${this.postId}: пауза переключена локально`);
     }
   }
 
@@ -177,7 +198,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       console.log(`📤 Команда reset отправлена через MQTT на пост ${this.postId}`);
     } else {
       this.localPost.resetPost(this.postId);
-      console.log(`💻 Пост ${this.postId} сброшен локально`);
+      console.log(`💻 [LOCAL] Пост ${this.postId} сброшен локально`);
     }
   }
 
@@ -188,7 +209,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       console.log(`📤 Команда print_receipt отправлена через MQTT на пост ${this.postId}`);
     } else {
       this.localPost.printReceipt(this.postId);
-      console.log(`🧾 Чек для поста ${this.postId} напечатан локально`);
+      console.log(`🧾 [LOCAL] Чек для поста ${this.postId} напечатан локально`);
     }
   }
 

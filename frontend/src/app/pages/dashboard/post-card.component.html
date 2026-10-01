@@ -6,14 +6,28 @@
     </button>
   </div>
 
-  <!-- Блок камеры -->
+  <!-- Индикатор режима работы -->
+  <div class="esp-mode-badge" [class.online]="isEspOnline" [class.offline]="!isEspOnline">
+    <ng-container *ngIf="isEspOnline">
+      🟢 ESP32 подключён — управление через пульт
+    </ng-container>
+    <ng-container *ngIf="!isEspOnline">
+      ⚠️ Пульт не работает — локальный режим
+    </ng-container>
+  </div>
+
+  <!-- Номер карты клиента -->
+  <div class="client-card-info" *ngIf="clientCard">
+    💳 Карта: <strong>{{ clientCard }}</strong>
+    <span *ngIf="clientCardBalance !== null" class="card-balance">
+      — {{ clientCardBalance | number:'1.0-2' }} ₽
+    </span>
+  </div>
+
+  <!-- Камера -->
   <div *ngIf="showCamera && safeCameraUrl" class="camera-window">
     <video *ngIf="isVideoUrl(cameraUrl)"
-           autoplay
-           muted
-           playsinline
-           [src]="cameraUrl"
-           class="camera-video"></video>
+           autoplay muted playsinline [src]="cameraUrl" class="camera-video"></video>
     <iframe *ngIf="!isVideoUrl(cameraUrl)"
             [src]="safeCameraUrl"
             frameborder="0"
@@ -33,10 +47,20 @@
 
   <div *ngIf="isAdmin" class="admin-controls">
     <div class="program-buttons">
-      <button *ngFor="let prog of programs" (click)="selectProgram(prog.code)" class="prog-btn" [class.active]="post.currentProgram === prog.code">{{ prog.name }}</button>
+      <button *ngFor="let prog of programs"
+              (click)="selectProgram(prog.code)"
+              class="prog-btn"
+              [class.active]="post.currentProgram === prog.code">
+        {{ prog.name }}
+      </button>
     </div>
     <div class="balance-add">
-      <input type="number" [(ngModel)]="addAmount" (focus)="clearAddAmount()" (keydown.enter)="addBalance()" placeholder="Сумма" step="10">
+      <input type="number"
+             [(ngModel)]="addAmount"
+             (focus)="clearAddAmount()"
+             (keydown.enter)="addBalance()"
+             placeholder="Сумма"
+             step="10">
       <button (click)="addBalance()" class="add-balance-btn">➕ Пополнить</button>
     </div>
     <div class="operator-buttons">

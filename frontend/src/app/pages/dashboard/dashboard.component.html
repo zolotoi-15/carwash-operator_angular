@@ -7,6 +7,11 @@
 
   <h2>📋 Состояние постов мойки</h2>
   <div class="posts-grid">
-    <app-post-card *ngFor="let id of postIds" [postId]="id" [isAdmin]="isAdmin" [cameraUrl]="getCameraUrl(id)"></app-post-card>
+    <app-post-card *ngFor="let id of postIds"
+                   [postId]="id"
+                   [isAdmin]="isAdmin"
+                   [cameraUrl]="getCameraUrl(id)"
+                   [clientCard]="getClientCard(id)">
+    </app-post-card>
   </div>
 </div>

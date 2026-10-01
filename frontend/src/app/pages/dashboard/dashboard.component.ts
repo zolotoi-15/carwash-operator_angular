@@ -5,10 +5,10 @@ import { FormsModule } from '@angular/forms';
 import { Subscription, interval } from 'rxjs';
 import { switchMap } from 'rxjs/operators';
 import { isPlatformBrowser } from '@angular/common';
-import { HttpClient } from '@angular/common/http';   // добавить импорт
+import { HttpClient } from '@angular/common/http';
 import { AdminService } from '../../services/admin.service';
 import { AuthService } from '../../services/auth.service';
-import { LocalPostService } from '../../services/local-post.service'; // добавить
+import { LocalPostService } from '../../services/local-post.service';
 import { PostCardComponent } from './post-card.component';
 import { KkmStatusComponent } from './kkm-status.component';
 import { TankLevelsComponent } from './tank-levels.component';
@@ -32,6 +32,7 @@ export class DashboardComponent implements OnInit, OnDestroy {
   postIds: string[] = [];
   isAdmin = false;
   cameraUrls: { [key: string]: string } = {};
+  clientCards: { [key: string]: string } = {};       // NEW: номер карты клиента по постам
   numberOfPosts = 8;
   private subs: Subscription = new Subscription();
   private isBrowser: boolean;
@@ -39,8 +40,8 @@ export class DashboardComponent implements OnInit, OnDestroy {
   constructor(
     private admin: AdminService,
     private auth: AuthService,
-    private http: HttpClient,              // добавить
-    private localPost: LocalPostService,   // добавить
+    private http: HttpClient,
+    private localPost: LocalPostService,
     @Inject(PLATFORM_ID) platformId: Object
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
@@ -65,24 +66,9 @@ export class DashboardComponent implements OnInit, OnDestroy {
         })
       );
 
-      // ===== НОВЫЙ КОД: загрузка статусов постов =====
-      // 1. Загрузка при старте
+      // 1. Загрузка статусов постов при старте
       this.http.get('/api/posts').subscribe({
-        next: (posts: any) => {
-          Object.keys(posts).forEach(postId => {
-            const state = posts[postId];
-            this.localPost.syncFromMqtt(postId, {
-              busy: state.busy,
-              paused: state.paused,
-              balance: state.balance,
-              currentProgram: state.currentProgram,
-              elapsedSec: state.elapsedSec,
-              totalPaid: state.totalPaid,
-              receiptCount: state.receiptCount || 0
-            });
-          });
-          console.log('✅ Статусы постов загружены с сервера');
-        },
+        next: (posts: any) => this.applyPostsSnapshot(posts),
         error: (err) => console.warn('⚠️ Не удалось загрузить статусы постов', err)
       });
 
@@ -91,29 +77,45 @@ export class DashboardComponent implements OnInit, OnDestroy {
         interval(15000).pipe(
           switchMap(() => this.http.get('/api/posts'))
         ).subscribe({
-          next: (posts: any) => {
-            Object.keys(posts).forEach(postId => {
-              const state = posts[postId];
-              this.localPost.syncFromMqtt(postId, {
-                busy: state.busy,
-                paused: state.paused,
-                balance: state.balance,
-                currentProgram: state.currentProgram,
-                elapsedSec: state.elapsedSec,
-                totalPaid: state.totalPaid,
-                receiptCount: state.receiptCount || 0
-              });
-            });
-          },
+          next: (posts: any) => this.applyPostsSnapshot(posts),
           error: (err) => console.warn('⚠️ Ошибка опроса статусов постов', err)
         })
       );
-      // ===== КОНЕЦ НОВОГО КОДА =====
     }
+  }
+
+  // NEW: единая обработка снимка состояния постов + clientCard
+  private applyPostsSnapshot(posts: any): void {
+    Object.keys(posts).forEach(postId => {
+      const state = posts[postId] || {};
+
+      this.localPost.syncFromMqtt(postId, {
+        busy: state.busy,
+        paused: state.paused,
+        balance: state.balance,
+        currentProgram: state.currentProgram,
+        elapsedSec: state.elapsedSec,
+        totalPaid: state.totalPaid,
+        receiptCount: state.receiptCount || 0
+      });
+
+      // Номер карты клиента, привязанной к посту (приходит с бэкенда,
+      // куда он попадает через MQTT-топик posts/{postId}/clientcard)
+      if (state.clientCard) {
+        this.clientCards[postId] = state.clientCard;
+      } else {
+        delete this.clientCards[postId];
+      }
+    });
   }
 
   getCameraUrl(postId: string): string {
     return this.cameraUrls[postId] || '';
+  }
+
+  // NEW: геттер для шаблона
+  getClientCard(postId: string): string {
+    return this.clientCards[postId] || '';
   }
 
   ngOnDestroy() {
