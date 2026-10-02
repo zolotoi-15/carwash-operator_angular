@@ -41,9 +41,21 @@ jobs:
       - name: SPA fallback
         run: cp dist/*/browser/index.html dist/*/browser/404.html || true
       - uses: actions/configure-pages@v5
+      - name: Locate built assets
+        id: dist
+        working-directory: frontend
+        run: |
+          if [ -d dist/carwash-operator-angular/browser ]; then
+            echo "path=dist/carwash-operator-angular/browser" >> "$GITHUB_OUTPUT"
+          else
+            # fallback: первая найденная папка browser
+            p=$(find dist -type d -name browser | head -n1)
+            echo "path=$p" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: frontend/dist
+          path: frontend/${{ steps.dist.outputs.path }}
 
   deploy:
     needs: build
