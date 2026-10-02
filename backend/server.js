@@ -289,6 +289,7 @@ function connectMqtt(settings) {
             state.currentProgram = null;
             if (state.timer) { clearInterval(state.timer); state.timer = null; }
 
+<<<<<<< HEAD
             // ВАЖНО: НЕ отправляем команду "reset" в ESP32.
             // ESP32 сам вызывает reset_balance() при обработке
             // clientcard → NULL (см. finalize_shown_card в interface.c).
@@ -296,6 +297,16 @@ function connectMqtt(settings) {
             //   server → reset → ESP32 → status(0) → server → debitCardForPost
             // и полностью списывает баланс только что приложенной карты.
             console.log(`🔄 [${postId}] Состояние поста сброшено (без reset в ESP32)`);
+=======
+            mqttClient.publish(
+              `posts/${postId}/command`,
+              JSON.stringify({ command: 'reset' }),
+              { qos: 1 }
+            );
+            publishStatus(postId);
+            publishRelayStatus(postId);
+            console.log(`🔄 [${postId}] Баланс поста сброшен вместе с картой`);
+>>>>>>> parent of 0ccc03f (update)
           }
 
           // Сбросить экран сообщений на этом посту
