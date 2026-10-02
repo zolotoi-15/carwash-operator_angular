@@ -61,7 +61,7 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/config');
     mqttClient.subscribe('posts/+/clientcard');
     mqttClient.subscribe('posts/+/receipt');
-    mqttClient.subscribe('posts/+/lwt');
+    mqttClient.subscribe('posts/+/lwt');         // NEW: LWT постов для освобождения карты
 
     if (settings.posts) {
       publishConfigToAllPosts();
@@ -168,13 +168,6 @@ function connectMqtt(settings) {
       const postId = topic.split('/')[1];
       try {
         const data = JSON.parse(payload);
-
-        // Игнорируем собственные публикации сервера, чтобы не дебетовать
-        // карту по своим же сообщениям (важно при reset-post)
-        if (data.source === 'server') {
-          return;
-        }
-
         if (!postsState[postId]) postsState[postId] = {};
         const state = postsState[postId];
 
@@ -187,20 +180,8 @@ function connectMqtt(settings) {
           ? state._lastEspBalance
           : null;
 
-        // Подавление дебета в течение 1 секунды после снятия карты.
-        // Это защита от ложных списаний: сразу после clientcard=NULL ESP32
-        // может ещё успеть прислать status(balance=0), и дебет по разнице
-        // списал бы весь баланс карты.
-        const now = Date.now();
-        const suppress = state._suppressDebitUntil && now < state._suppressDebitUntil;
-
         if (cc && newEspBalance !== null) {
-          if (suppress) {
-            console.log(
-              `⏸ [Post ${postId}] Дебет подавлён (окно после NULL): ` +
-              `last=${lastEspBalance}, new=${newEspBalance}`
-            );
-          } else if (lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
+          if (lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
             const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
             const cardBal = typeof ccb === 'number' ? ccb : 0;
             if (delta > 0.001 && delta <= cardBal + 0.01) {
@@ -247,7 +228,6 @@ function connectMqtt(settings) {
           delete state.clientCardBalance;
           delete state.clientCardType;
           state._lastEspBalance = null;
-          state._suppressDebitUntil = Date.now() + 1000;
           state.balance = 0;
           state.busy = false;
         }
@@ -274,10 +254,6 @@ function connectMqtt(settings) {
           delete state.clientCardType;
           state._lastEspBalance = null;
 
-          // Сразу после снятия карты возможен ложный status(balance=0)
-          // от ESP32 — подавляем дебет на 1 секунду.
-          state._suppressDebitUntil = Date.now() + 1000;
-
           if (hadCard) {
             state.balance = 0;
             state.totalPaid = 0;
@@ -289,15 +265,6 @@ function connectMqtt(settings) {
             state.currentProgram = null;
             if (state.timer) { clearInterval(state.timer); state.timer = null; }
 
-<<<<<<< HEAD
-            // ВАЖНО: НЕ отправляем команду "reset" в ESP32.
-            // ESP32 сам вызывает reset_balance() при обработке
-            // clientcard → NULL (см. finalize_shown_card в interface.c).
-            // Публикация "reset" из сервера приводит к петле:
-            //   server → reset → ESP32 → status(0) → server → debitCardForPost
-            // и полностью списывает баланс только что приложенной карты.
-            console.log(`🔄 [${postId}] Состояние поста сброшено (без reset в ESP32)`);
-=======
             mqttClient.publish(
               `posts/${postId}/command`,
               JSON.stringify({ command: 'reset' }),
@@ -306,7 +273,6 @@ function connectMqtt(settings) {
             publishStatus(postId);
             publishRelayStatus(postId);
             console.log(`🔄 [${postId}] Баланс поста сброшен вместе с картой`);
->>>>>>> parent of 0ccc03f (update)
           }
 
           // Сбросить экран сообщений на этом посту
@@ -332,7 +298,6 @@ function connectMqtt(settings) {
           delete state.clientCardBalance;
           delete state.clientCardType;
           state._lastEspBalance = null;
-          state._suppressDebitUntil = Date.now() + 1000;
 
           mqttClient.publish(
             `posts/${postId}/message`,
@@ -362,21 +327,12 @@ function connectMqtt(settings) {
         const switchingCard = prevCard && prevCard !== cardNumber;
 
         if (hasForeignBalance || switchingCard) {
-          // Внутренняя очистка состояния поста без отправки reset в ESP32.
-          // ESP32 сам сбросит баланс при смене карты (finalize_shown_card).
-          state.balance = 0;
-          state.totalPaid = 0;
-          state.receiptCount = 0;
-          state.servicesUsage = {};
-          state.elapsedSec = 0;
-          state.busy = false;
-          state.paused = false;
-          state.currentProgram = null;
-          if (state.timer) { clearInterval(state.timer); state.timer = null; }
-
-          // Подавляем дебет на 1 секунду — смена карты тоже может
-          // спровоцировать ложный status(balance=0) от ESP32
-          state._suppressDebitUntil = Date.now() + 1000;
+          mqttClient.publish(
+            `posts/${postId}/command`,
+            JSON.stringify({ command: 'reset' }),
+            { qos: 1 }
+          );
+          await new Promise(r => setTimeout(r, 300));
         }
 
         state.clientCardBalance = clientCard.balance;
@@ -757,7 +713,7 @@ function getPostState(postId) {
 }
 
 // ============================================================
-// Поиск поста, на котором сейчас активна карта
+// NEW: поиск поста, на котором сейчас активна карта
 // ============================================================
 function findPostWithCard(cardNumber, excludePostId = null) {
   if (!cardNumber) return null;
@@ -780,12 +736,9 @@ function findService(postId, name) {
   return null;
 }
 
-// Пометка "source: 'server'" нужна, чтобы сервер не обрабатывал
-// свои же сообщения posts/N/status как чужие (не дебетовал карту).
 function publishStatus(postId) {
   const state = getPostState(postId);
   const status = {
-    source: 'server',
     busy: state.busy,
     paused: state.paused,
     balance: Math.round(state.balance * 100) / 100,
@@ -1185,7 +1138,7 @@ app.get('/api/posts', auth, (req, res) => {
       const id = i.toString();
       const state = postsState[id];
       if (state) {
-        const { timer, _lastEspBalance, _suppressDebitUntil, ...safeState } = state;
+        const { timer, _lastEspBalance, ...safeState } = state;
         if (safeState.clientCard && typeof safeState.clientCardBalance === 'number') {
           safeState.balance = safeState.clientCardBalance;
         }
@@ -1663,7 +1616,7 @@ app.post('/api/receipts', async (req, res) => {
 });
 
 // ============================================================
-// Принудительное освобождение карты оператором
+// NEW: принудительное освобождение карты оператором
 // POST /api/cards/:card/release
 // ============================================================
 app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
@@ -1675,7 +1628,6 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
       delete st.clientCardBalance;
       delete st.clientCardType;
       st._lastEspBalance = null;
-      st._suppressDebitUntil = Date.now() + 1000;
       released = true;
       console.log(`🔓 [${id}] Карта ${cardNumber} принудительно освобождена оператором`);
     }
