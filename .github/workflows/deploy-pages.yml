@@ -20,38 +20,61 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v5
+
       - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
       - name: Build for Pages
+        working-directory: frontend
         run: |
           REPO_NAME="${GITHUB_REPOSITORY##*/}"
-          npm run build -- \
-            --configuration production \
-            --base-href "/${REPO_NAME}/" \
-            --deploy-url "/${REPO_NAME}/"
-      - name: SPA fallback
-        run: cp dist/*/browser/index.html dist/*/browser/404.html || true
-      - uses: actions/configure-pages@v5
-      - name: Locate built assets
+          npm run build -- --base-href "/${REPO_NAME}/"
+
+      - name: Inspect dist structure
+        working-directory: frontend
+        run: |
+          echo "=== dist tree (3 levels) ==="
+          find dist -maxdepth 3 -type d | sort
+          echo "=== index.html locations ==="
+          find dist -name index.html
+
+      - name: Locate browser folder with index.html
         id: dist
         working-directory: frontend
         run: |
-          if [ -d dist/carwash-operator-angular/browser ]; then
-            echo "path=dist/carwash-operator-angular/browser" >> "$GITHUB_OUTPUT"
-          else
-            # fallback: первая найденная папка browser
-            p=$(find dist -type d -name browser | head -n1)
-            echo "path=$p" >> "$GITHUB_OUTPUT"
+          set -e
+          # Ищем index.html и берём его директорию — это и есть корень сайта
+          INDEX_PATH=$(find dist -name index.html | head -n1)
+          if [ -z "$INDEX_PATH" ]; then
+            echo "❌ index.html не найден после сборки" >&2
+            exit 1
           fi
+          SITE_ROOT=$(dirname "$INDEX_PATH")
+          echo "Site root: $SITE_ROOT"
+          echo "path=$SITE_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: SPA fallback (copy index.html → 404.html)
+        working-directory: frontend
+        run: |
+          cp "${{ steps.dist.outputs.path }}/index.html" \
+             "${{ steps.dist.outputs.path }}/404.html"
+
+      - name: Verify upload contents
+        working-directory: frontend
+        run: |
+          echo "Files that will be published:"
+          ls -la "${{ steps.dist.outputs.path }}"
+
+      - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
