@@ -265,13 +265,13 @@ function connectMqtt(settings) {
             state.currentProgram = null;
             if (state.timer) { clearInterval(state.timer); state.timer = null; }
 
-            mqttClient.publish(
+           /* mqttClient.publish(
               `posts/${postId}/command`,
               JSON.stringify({ command: 'reset' }),
               { qos: 1 }
             );
             publishStatus(postId);
-            publishRelayStatus(postId);
+            publishRelayStatus(postId);*/
             console.log(`🔄 [${postId}] Баланс поста сброшен вместе с картой`);
           }
 
