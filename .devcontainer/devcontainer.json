@@ -1,0 +1,30 @@
+{
+  "name": "Carwash Operator Angular",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "angular.ng-template",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode"
+      ]
+    }
+  },
+  "postCreateCommand": "npm install",
+  "forwardPorts": [4200, 3000],
+  "portsAttributes": {
+    "4200": {
+      "label": "Angular Frontend",
+      "onAutoForward": "openPreview"
+    },
+    "3000": {
+      "label": "Node.js Backend",
+      "onAutoForward": "silent"
+    }
+  }
+}
