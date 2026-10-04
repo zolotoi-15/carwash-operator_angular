@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 ﻿import { Routes } from '@angular/router';
 import { AuthGuard } from '../../core/guards/auth.guard';
 import { RoleGuard } from '../../core/guards/role.guard';
@@ -16,3 +17,31 @@ export const CLIENT_CARDS_ROUTES: Routes = [
     canActivate: [AuthGuard, RoleGuard, PermissionGuard],
     data: { roles: [Role.Administrator, Role.Developer], resource: ResourceType.ClientCards, action: PermissionAction.Delete } }
 ];
+=======
+export const CLIENT_CARDS_ROUTES: Routes = [
+  {
+    path: '',
+    component: CardListComponent,
+    canActivate: [AuthGuard, PermissionGuard],
+    data: { resource: ResourceType.ClientCards, action: PermissionAction.Read }
+  },
+  {
+    path: 'create',
+    component: CardFormComponent,
+    canActivate: [AuthGuard, PermissionGuard],
+    data: { resource: ResourceType.ClientCards, action: PermissionAction.Write }
+  },
+  {
+    path: 'edit/:id',
+    component: CardFormComponent,
+    canActivate: [AuthGuard, PermissionGuard],
+    data: { resource: ResourceType.ClientCards, action: PermissionAction.Update }
+  },
+  {
+    path: 'delete/:id',
+    component: CardDeleteComponent,
+    canActivate: [AuthGuard, PermissionGuard],
+    data: { resource: ResourceType.ClientCards, action: PermissionAction.Delete }
+  }
+];
+>>>>>>> Stashed changes

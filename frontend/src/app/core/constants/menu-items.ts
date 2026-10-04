@@ -7,6 +7,7 @@ export const MENU_ITEMS: MenuItem[] = [
   { label: '📄 Отчёты', icon: 'reports', route: '/reports', resource: ResourceType.Reports },
   { label: '💳 Карты клиентов', icon: 'cards', route: '/client-cards', resource: ResourceType.ClientCards },
 
+<<<<<<< Updated upstream
   {
     label: '👥 Пользователи', icon: 'users', route: '/admin/users',
     resource: ResourceType.Users, allowedRoles: [Role.Administrator, Role.Developer]
@@ -31,4 +32,20 @@ export const MENU_ITEMS: MenuItem[] = [
     label: '⚙️ Настройки', icon: 'settings', route: '/admin/settings',
     resource: ResourceType.SystemSettings, allowedRoles: [Role.Administrator, Role.Developer]
   }
+=======
+  { label: '👥 Пользователи', icon: 'users', route: '/admin/users',
+    resource: ResourceType.Users, allowedRoles: [Role.Administrator, Role.Developer] },
+  { label: '👥 Группы', icon: 'groups', route: '/admin/groups',
+    resource: ResourceType.Groups, allowedRoles: [Role.Administrator, Role.Developer] },
+  { label: '🔐 Права доступа', icon: 'permissions', route: '/admin/permissions',
+    resource: ResourceType.Permissions, allowedRoles: [Role.Developer] },
+  { label: '🗄️ База данных', icon: 'database', route: '/admin/database',
+    resource: ResourceType.Database, allowedRoles: [Role.Developer] },
+  { label: '🧾 ККМ', icon: 'kkm', route: '/admin/kkm',
+    resource: ResourceType.KKM, allowedRoles: [Role.Developer] },
+  { label: '⚙️ Настройки', icon: 'settings', route: '/admin/settings',
+    resource: ResourceType.SystemSettings, allowedRoles: [Role.Administrator, Role.Developer] },
+
+  { label: '🚪 Выйти', icon: 'logout', route: '/logout' }
+>>>>>>> Stashed changes
 ];

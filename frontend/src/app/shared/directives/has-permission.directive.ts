@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 import { Directive, Input, TemplateRef, ViewContainerRef, inject, effect } from '@angular/core';
 import { AuthService } from '../../core/services/auth.service';
 import { ResourceType } from '../../core/models/resource.enum';
@@ -34,6 +35,15 @@ export class HasPermissionDirective {
     } else if (!allowed && this.rendered) {
       this.vcr.clear();
       this.rendered = false;
+=======
+@Directive({ selector: '[appHasPermission]', standalone: true })
+export class HasPermissionDirective {
+  @Input() set appHasPermission([resource, action]: [ResourceType, PermissionAction]) {
+    if (this.authService.hasPermission(resource, action)) {
+      this.viewContainer.createEmbeddedView(this.templateRef);
+    } else {
+      this.viewContainer.clear();
+>>>>>>> Stashed changes
     }
   }
 }

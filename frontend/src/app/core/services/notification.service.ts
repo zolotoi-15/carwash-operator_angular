@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 ﻿import { Injectable } from '@angular/core';
 import { BehaviorSubject } from 'rxjs';
 export interface Notification { id: number; type: 'success'|'error'|'warning'|'info'; message: string; }
@@ -16,3 +17,12 @@ export class NotificationService {
     setTimeout(() => this.s.next(this.s.value.filter(n => n.id !== id)), 4000);
   }
 }
+=======
+@Injectable({ providedIn: 'root' })
+export class NotificationService {
+  success(message: string): void { }
+  error(message: string): void { }
+  warning(message: string): void { }
+  info(message: string): void { }
+}
+>>>>>>> Stashed changes

@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 ﻿import { Injectable } from '@angular/core';
 import { Observable, of } from 'rxjs';
 import { Group, CreateGroupDto } from '../models/group.model';
@@ -40,4 +41,15 @@ export class GroupService {
     if (i >= 0) MOCK_GROUPS.splice(i, 1);
     return of(void 0);
   }
+=======
+@Injectable({ providedIn: 'root' })
+export class GroupService {
+  private apiUrl = `${environment.apiUrl}/groups`;
+
+  getGroups(): Observable<Group[]> { }
+  getGroup(id: number): Observable<Group> { }
+  createGroup(dto: CreateGroupDto): Observable<Group> { }
+  updateGroup(id: number, dto: Partial<CreateGroupDto>): Observable<Group> { }
+  deleteGroup(id: number): Observable<void> { }
+>>>>>>> Stashed changes
 }
