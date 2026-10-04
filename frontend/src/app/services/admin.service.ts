@@ -4,18 +4,30 @@ import { Observable, map, switchMap } from 'rxjs';
 import { ServiceConfig } from './mqtt.service';
 
 export interface PostSettings {
-  prices?: { [key: string]: number };
-  relayMask?: { [key: string]: number };
-  vfdFrequencies?: { [key: string]: number };
-  dimmerMask?: { [key: string]: number };
-  buttonInputs?: { [key: string]: number };
-  relayDelays?: { [key: string]: { onDelay: number; offDelay: number } };
-  services?: ServiceConfig[];
+  services: ServiceConfig[];
+  prices: { [key: string]: number };
+  relayMask: { [key: string]: number };
+  vfdFrequencies: { [key: string]: number };
+  dimmerMask: { [key: string]: number };
+  buttonInputs: { [key: string]: number };
+  relayDelays: { [key: string]: { onDelay: number; offDelay: number } };
+}
+
+export function emptyPostSettings(): PostSettings {
+  return {
+    services: [],
+    prices: {},
+    relayMask: {},
+    vfdFrequencies: {},
+    dimmerMask: {},
+    buttonInputs: {},
+    relayDelays: {}
+  };
 }
 
 export interface AppSettings {
   numberOfPosts: number;
-  posts?: { [postId: string]: PostSettings };
+  posts?: { [postId: string]: Partial<PostSettings> };
   cameras?: { [key: string]: string };
   mqtt?: { brokerUrl: string; username?: string; password?: string };
   kkmManual?: { kkNumber?: string; fiscalShiftNumber?: number; cashierName?: string };
@@ -24,7 +36,6 @@ export interface AppSettings {
   tankLowThreshold?: { [key: string]: number };
   pausePrice?: number;
   pauseFreeTimeSec?: number;
-  // Старые поля для обратной совместимости
   prices?: { [key: string]: number };
   services?: ServiceConfig[];
   vfdFrequencies?: { [key: string]: number };
@@ -54,10 +65,21 @@ export class AdminService {
     return this.http.post('/api/publish-config', {});
   }
 
-  // Новые методы для работы с постами
   getPostSettings(postId: number): Observable<PostSettings> {
     return this.getSettings().pipe(
-      map(settings => settings.posts?.[postId] || {})
+      map(settings => {
+        const raw = settings.posts?.[postId];
+        if (!raw) return emptyPostSettings();
+        return {
+          services: raw.services ? raw.services.map(s => ({ ...s })) : [],
+          prices: { ...(raw.prices ?? {}) },
+          relayMask: { ...(raw.relayMask ?? {}) },
+          vfdFrequencies: { ...(raw.vfdFrequencies ?? {}) },
+          dimmerMask: { ...(raw.dimmerMask ?? {}) },
+          buttonInputs: { ...(raw.buttonInputs ?? {}) },
+          relayDelays: JSON.parse(JSON.stringify(raw.relayDelays ?? {}))
+        };
+      })
     );
   }
 
@@ -71,7 +93,6 @@ export class AdminService {
     );
   }
 
-  // ---- НОВЫЙ МЕТОД: копирование настроек с поста 1 на все остальные ----
   copySettingsFromPost1ToAll(): Observable<any> {
     return this.getSettings().pipe(
       switchMap(settings => {
@@ -92,7 +113,6 @@ export class AdminService {
             services: post1Settings.services ? post1Settings.services.map(s => ({ ...s })) : []
           };
         }
-        // Сохраняем обновлённые настройки
         return this.updateSettings({ posts: newPosts });
       })
     );
