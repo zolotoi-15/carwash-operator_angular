@@ -4,9 +4,11 @@ export interface Group {
   id: number;
   name: Role;
   displayName: string;
+  description?: string;   // 👈 добавлено
 }
 
 export interface CreateGroupDto {
   name: Role;
   displayName: string;
+  description?: string;
 }

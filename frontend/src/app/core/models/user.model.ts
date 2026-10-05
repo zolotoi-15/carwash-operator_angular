@@ -1,12 +1,26 @@
-import { Role } from './role.enum';
+import { Group } from './group.model';
 
-export interface Group {
+export interface User {
   id: number;
-  name: Role;
-  displayName: string;
+  username: string;
+  name: string;
+  fullName: string;
+  email: string;
+  groupId: number;
+  group?: Group;
 }
 
-export interface CreateGroupDto {
-  name: Role;
-  displayName: string;
+export interface CreateUserDto {
+  username: string;
+  fullName: string;
+  email: string;
+  password: string;
+  groupId: number;
+}
+
+export interface UpdateUserDto {
+  username?: string;
+  fullName?: string;
+  email?: string;
+  groupId?: number;
 }

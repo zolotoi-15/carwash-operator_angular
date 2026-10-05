@@ -1,35 +1,24 @@
-﻿import { Component } from '@angular/core';
+﻿import { Component, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { PostCardComponent } from './post-card/post-card.component';
 import { AuthService } from '../../core/services/auth.service';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, PostCardComponent],
+  imports: [CommonModule],
   template: `
     <div class="dashboard">
-      <h1>📊 Дашборд</h1>
-      <p class="welcome" *ngIf="auth.currentUser$ | async as user">
+      <p class="welcome" *ngIf="auth.currentUser$() as user">
         Добро пожаловать, <strong>{{ user.fullName }}</strong>!
       </p>
-
-      <div class="posts-grid">
-        <app-post-card *ngFor="let id of postIds" [postId]="id"></app-post-card>
-      </div>
+      <p *ngIf="!auth.currentUser$()">Пожалуйста, войдите в систему.</p>
     </div>
   `,
   styles: [`
-    h1 { color: #1e293b; margin-bottom: 8px; }
-    .welcome { color: #64748b; margin-bottom: 24px; }
-    .posts-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 16px;
-    }
+    .dashboard { padding: 24px; }
+    .welcome { font-size: 18px; color: #1e293b; }
   `]
 })
 export class DashboardComponent {
-  postIds = ['1', '2', '3', '4', '5', '6', '7', '8'];
-  constructor(public auth: AuthService) {}
+  auth = inject(AuthService);
 }

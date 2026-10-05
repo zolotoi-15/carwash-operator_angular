@@ -1,23 +1,22 @@
 import { ResourceType } from './resource.enum';
 
-export { ResourceType };   // ← реэкспорт
+// Реэкспорт, чтобы сервисы могли импортировать оба из одного места
+export { ResourceType };
 
 export enum PermissionAction {
-  View = 'view',
-  Create = 'create',
+  Read = 'read',
+  Write = 'write',
   Update = 'update',
   Delete = 'delete'
 }
 
 export interface Permission {
-  id: number;
+  id?: number;
   groupId: number;
   resource: ResourceType;
-  action: PermissionAction;
+  actions: PermissionAction[];   // 👈 именно массив
 }
 
 export interface PermissionMatrix {
-  [groupId: number]: {
-    [resource in ResourceType]?: PermissionAction[];
-  };
+  [resource: string]: PermissionAction[];
 }
