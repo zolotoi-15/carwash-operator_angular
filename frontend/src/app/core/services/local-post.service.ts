@@ -360,7 +360,7 @@ export class LocalPostService {
 
     if (this.mqttService.isConnected()) {
       const receiptData: ReceiptData = {
-        postId: postId,
+        postId: Number(postId),
         items: mqttItems,
         totalCash: totalCash,
         cashierName: 'Оператор (локально)',

@@ -16,6 +16,8 @@ export class NotificationService {
   private notificationsSubject = new BehaviorSubject<Notification[]>([]);
   readonly notifications$: Observable<Notification[]> = this.notificationsSubject.asObservable();
 
+  // ================= PUBLIC API =================
+
   show(message: string, type: NotificationType = 'info', durationMs = 3000): void {
     const note: Notification = {
       id: ++this.counter,
@@ -24,12 +26,14 @@ export class NotificationService {
       timestamp: new Date()
     };
     this.notificationsSubject.next([...this.notificationsSubject.value, note]);
-    if (durationMs > 0) setTimeout(() => this.dismiss(note.id), durationMs);
+    if (durationMs > 0) {
+      setTimeout(() => this.dismiss(note.id), durationMs);
+    }
   }
 
   success(message: string): void { this.show(message, 'success'); }
-  error(message: string): void   { this.show(message, 'error'); }
-  info(message: string): void    { this.show(message, 'info'); }
+  error(message: string): void   { this.show(message, 'error');   }
+  info(message: string): void    { this.show(message, 'info');    }
   warning(message: string): void { this.show(message, 'warning'); }
 
   dismiss(id: number): void {

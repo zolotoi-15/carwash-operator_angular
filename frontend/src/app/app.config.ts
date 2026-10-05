@@ -13,21 +13,9 @@ import { errorInterceptor } from './core/interceptors/error.interceptor';
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    // Зоновая детекция с объединением событий — стандарт для Angular 17+
     provideZoneChangeDetection({ eventCoalescing: true }),
-
-    // Роутинг + привязка параметров маршрута к @Input() компонентов
     provideRouter(routes, withComponentInputBinding()),
-
-    // HTTP-клиент с интерсепторами.
-    // ВАЖНО: provideHttpClient вызывается РОВНО ОДИН РАЗ.
-    provideHttpClient(
-      withInterceptors([authInterceptor, errorInterceptor])
-    ),
-
-    // Анимации (нужны для Material и для transition-ов)
+    provideHttpClient(withInterceptors([authInterceptor, errorInterceptor])),
     importProvidersFrom(BrowserAnimationsModule)
-
-    // ❌ JwtModule.forRoot(...) — НЕ добавлять, AuthService больше не использует JwtHelperService
   ]
 };

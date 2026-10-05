@@ -3,6 +3,8 @@ import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
+// ================= MODELS =================
+
 export interface ServiceConfig {
   name: string;
   price: number;
@@ -10,8 +12,8 @@ export interface ServiceConfig {
 }
 
 export interface PostSettings {
-  postId: number;                                    // 👈 обязательно
-  services: ServiceConfig[];                         // 👈 обязательно, без ?
+  postId: number;
+  services: ServiceConfig[];
   relayMask: Record<string, boolean>;
   vfdFrequencies: Record<string, number>;
   dimmerMask: Record<string, boolean>;
@@ -23,7 +25,7 @@ export interface PostSettings {
 export interface GeneralSettings {
   posts: PostSettings[];
   mqtt: {
-    brokerUrl: string;      // 👈 вместо host/port
+     brokerUrl: string; 
     username?: string;
     password?: string;
   };
@@ -33,8 +35,11 @@ export interface GeneralSettings {
     cashierName?: string;
     fiscalShiftNumber?: number;
   };
+  cameras: Record<string, string>;      // 👈 добавлено
   numberOfPosts: number;
 }
+
+// ================= EMPTY DEFAULTS =================
 
 export const emptyPostSettings: PostSettings = {
   postId: 0,
@@ -51,8 +56,11 @@ export const emptyGeneralSettings: GeneralSettings = {
   posts: [],
   mqtt: { brokerUrl: '', username: '', password: '' },
   kkm: { enabled: false, model: '', cashierName: '', fiscalShiftNumber: 0 },
+  cameras: {},
   numberOfPosts: 0
 };
+
+// ================= SERVICE =================
 
 @Injectable({ providedIn: 'root' })
 export class AdminService {
@@ -68,32 +76,42 @@ export class AdminService {
           { name: 'Пена', price: 42, free_time_sec: 0 },
           { name: 'Воск', price: 45, free_time_sec: 0 }
         ],
-        relayMask: {},
-        vfdFrequencies: {},
-        dimmerMask: {},
-        buttonInputs: {},
-        relayDelays: {}
+        relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+        buttonInputs: {}, relayDelays: {}
       },
       {
         postId: 2,
-        services: [
-          { name: 'Вода', price: 30, free_time_sec: 0 }
-        ],
-        relayMask: {},
-        vfdFrequencies: {},
-        dimmerMask: {},
-        buttonInputs: {},
-        relayDelays: {}
+        services: [{ name: 'Вода', price: 30, free_time_sec: 0 }],
+        relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+        buttonInputs: {}, relayDelays: {}
+      },
+      {
+        postId: 3,
+        services: [{ name: 'Вода', price: 30, free_time_sec: 0 }],
+        relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+        buttonInputs: {}, relayDelays: {}
       }
     ],
- mqtt: {
-    brokerUrl: 'wss://m2.wqtt.ru:13260',
-    username: 'u_GGENLB',
-    password: ''
-  },
-  kkm: { enabled: false, model: '', cashierName: 'Оператор', fiscalShiftNumber: 0 },
-  numberOfPosts: 8
-};
+    mqtt: {
+      brokerUrl: 'wss://m2.wqtt.ru:13260',
+      username: 'u_GGENLB',
+      password: 'LTHNW22D'
+    },
+    kkm: {
+      enabled: false,
+      model: '',
+      cashierName: 'Оператор',
+      fiscalShiftNumber: 0
+    },
+    cameras: {
+      '1': 'http://192.168.31.211:8080/stream1',
+      '2': '',
+      '3': ''
+    },
+    numberOfPosts: 3
+  };
+
+  // ================= API =================
 
   getSettings(): Observable<GeneralSettings> {
     return of(this.mockSettings);
@@ -127,5 +145,11 @@ export class AdminService {
     }));
     return of(void 0);
     // return this.http.post<void>(`${this.apiUrl}/posts/copy-from-first`, {});
+  }
+
+  updateCameras(cameras: Record<string, string>): Observable<Record<string, string>> {
+    this.mockSettings.cameras = cameras;
+    return of(cameras);
+    // return this.http.put<Record<string, string>>(`${this.apiUrl}/cameras`, cameras);
   }
 }

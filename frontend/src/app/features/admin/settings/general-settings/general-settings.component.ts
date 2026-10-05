@@ -5,6 +5,7 @@ import {
   AdminService,
   GeneralSettings,
   PostSettings,
+  ServiceConfig,
   emptyPostSettings,
   emptyGeneralSettings
 } from '../../../../core/services/admin.service';
@@ -30,15 +31,12 @@ import { NotificationService } from '../../../../core/services/notification.serv
 
         <label>
           Имя пользователя:
-          <input [(ngModel)]="settings.mqtt.username"
-                 placeholder="u_XXXXXX" />
+          <input [(ngModel)]="settings.mqtt.username" placeholder="u_XXXXXX" />
         </label>
 
         <label>
           Пароль:
-          <input type="password"
-                 [(ngModel)]="settings.mqtt.password"
-                 placeholder="••••••••" />
+          <input type="password" [(ngModel)]="settings.mqtt.password" placeholder="••••••••" />
         </label>
 
         <button (click)="saveMqtt()">💾 Сохранить и переподключиться</button>
@@ -63,7 +61,7 @@ import { NotificationService } from '../../../../core/services/notification.serv
               <tr>
                 <th>Услуга</th>
                 <th>Цена (руб/мин)</th>
-                <th>Беспл. время, сек (опц.)</th>
+                <th>Беспл. время, сек</th>
                 <th></th>
               </tr>
             </thead>
@@ -129,6 +127,7 @@ export class GeneralSettingsComponent implements OnInit {
   private admin = inject(AdminService);
   private notify = inject(NotificationService);
 
+  // Инициализация из дефолтов — гарантирует наличие всех полей (в т.ч. cameras)
   settings: GeneralSettings = { ...emptyGeneralSettings };
 
   selectedPostId: number | null = null;
@@ -144,13 +143,17 @@ export class GeneralSettingsComponent implements OnInit {
     this.admin.getSettings().subscribe({
       next: (s: GeneralSettings) => {
         this.settings = {
+          // Раскладываем на defaults + фактические значения, чтобы не потерять поля
+          ...emptyGeneralSettings,
+          ...s,
           posts: (s.posts ?? []).map((raw: PostSettings) => ({
             ...emptyPostSettings,
             ...raw,
             services: raw.services ?? []
           })),
-          mqtt: s.mqtt ?? { brokerUrl: '', username: '', password: '' },
+          mqtt: s.mqtt ?? emptyGeneralSettings.mqtt,
           kkm: s.kkm ?? emptyGeneralSettings.kkm,
+          cameras: s.cameras ?? {},                                 // 👈 обязательно
           numberOfPosts: s.numberOfPosts ?? (s.posts?.length ?? 0)
         };
 
@@ -239,12 +242,16 @@ export class GeneralSettingsComponent implements OnInit {
   }
 
   publishToAll(): void {
-    // Заглушка: реальная публикация в MQTT — через MqttService.publishConfig()
-    this.notify.info('Публикация конфига (реализация в MqttService.publishConfig)');
+    // TODO: подключить MqttService.publishConfig(), если нужно
+    this.notify.info('Публикация конфига: реализуйте через MqttService.publishConfig()');
   }
 
   // ================= HELPERS =================
 
+  /**
+   * Создаёт глубокую копию PostSettings с гарантией наличия всех полей.
+   * Это предотвращает "possibly undefined" при работе с ps.services.
+   */
   private clonePs(ps: PostSettings): PostSettings {
     return {
       ...emptyPostSettings,

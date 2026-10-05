@@ -1,121 +1,189 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { ShiftService } from '../../../core/services/shift.service';
 import { ReceiptService } from '../../../core/services/receipt.service';
-import { CashShift } from '../../../models/shift.model';
+import { ShiftService } from '../../../core/services/shift.service';
+import { ReceiptData } from '../../../core/models/receipt.model';
+import { CashShift } from '../../../core/models/shift.model';
+
+type Period = 'day' | 'week' | 'month' | 'shift' | 'custom';
 
 @Component({
   selector: 'app-report-list',
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="reports">
-      <h1>📄 Отчёты</h1>
+    <div class="reports-page">
+      <h2>📊 Отчёты по кассовым чекам</h2>
 
       <div class="filters">
-        <label>С даты:</label>
-        <input type="date" [(ngModel)]="fromDate" (change)="refresh()" />
-        <label>По дату:</label>
-        <input type="date" [(ngModel)]="toDate" (change)="refresh()" />
-        <button (click)="refresh()">Обновить</button>
+        <button [class.active]="period === 'day'"    (click)="setPeriod('day')">День</button>
+        <button [class.active]="period === 'week'"   (click)="setPeriod('week')">Неделя</button>
+        <button [class.active]="period === 'month'"  (click)="setPeriod('month')">Месяц</button>
+        <button [class.active]="period === 'shift'"  (click)="setPeriod('shift')">Смена (8–20)</button>
+
+        <span class="range-label">Диапазон:</span>
+        <input type="date" [(ngModel)]="dateFrom" (change)="onCustomRangeChange()" />
+        <input type="date" [(ngModel)]="dateTo"   (change)="onCustomRangeChange()" />
+
+        <button class="pdf-btn" (click)="downloadPdf()">📄 Скачать PDF</button>
       </div>
 
-      <div class="totals">
-        <div class="card">
-          <span>Выручка за период</span>
-          <strong>{{ total }} ₽</strong>
-        </div>
-        <div class="card">
-          <span>Чеков</span>
-          <strong>{{ count }}</strong>
-        </div>
-        <div class="card">
-          <span>Смена сейчас</span>
-          <strong>{{ currentShift ? 'Открыта' : 'Закрыта' }}</strong>
-          <small *ngIf="currentShift">
-            с {{ currentShift.openedAt | date:'HH:mm' }}
-          </small>
-        </div>
-      </div>
+      <p class="summary">
+        Итого: <strong>{{ total | number:'1.2-2' }}</strong> руб.,
+        чеков: <strong>{{ receipts.length }}</strong>
+      </p>
 
-      <h2>Чеки</h2>
-      <table>
+      <table class="receipts-table">
         <thead>
           <tr>
-            <th>Дата</th><th>Пост</th><th>Сумма</th><th>Операция</th>
+            <th>№</th>
+            <th>№ чека</th>
+            <th>Пост</th>
+            <th>Дата</th>
+            <th>Сумма</th>
+            <th>Услуги</th>
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let r of receipts">
-            <td>{{ r.timestamp | date:'dd.MM.yyyy HH:mm' }}</td>
-            <td>Пост {{ r.postId }}</td>
-            <td>{{ r.totalCash | number:'1.2-2' }} ₽</td>
-            <td>{{ r.operation || '—' }}</td>
+          <tr *ngFor="let r of receipts; let i = index">
+            <td>{{ i + 1 }}</td>
+            <td>{{ r.receiptNumber }}</td>
+            <td>{{ r.postId }}</td>
+            <td>{{ r.date | date:'dd.MM.yy HH:mm' }}</td>
+            <td class="amount">{{ r.total | number:'1.2-2' }} ₽</td>
+            <td class="services">
+              <span *ngFor="let svc of r.services; let last = last">
+                {{ svc.name }} (цена сек: {{ svc.pricePerSecond }}коп,
+                время: {{ svc.seconds }}с,
+                сумма: {{ svc.total | number:'1.2-2' }})<span *ngIf="!last">, </span>
+              </span>
+            </td>
           </tr>
           <tr *ngIf="!receipts.length">
-            <td colspan="4" style="text-align:center;color:#94a3b8;padding:24px">
-              Нет чеков за период
-            </td>
+            <td colspan="6" class="empty">Нет чеков за выбранный период</td>
           </tr>
         </tbody>
       </table>
     </div>
   `,
   styles: [`
-    h1 { color: #1e293b; }
-    .filters { display: flex; gap: 12px; align-items: center; margin-bottom: 20px; }
-    .filters input { padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; }
-    .filters button { padding: 8px 16px; background: #0ea5e9; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
-    .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-    .card span { display: block; font-size: 13px; color: #64748b; margin-bottom: 8px; }
-    .card strong { font-size: 24px; color: #1e293b; }
-    .card small { display: block; color: #94a3b8; margin-top: 4px; }
-    h2 { color: #1e293b; font-size: 18px; margin-top: 24px; }
-    table { width: 100%; background: #fff; border-collapse: collapse; border-radius: 8px; overflow: hidden; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
-    th { background: #f8fafc; color: #475569; font-weight: 600; }
+    .reports-page { padding: 24px; }
+    .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+    .filters button { padding: 6px 12px; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; border-radius: 4px; }
+    .filters button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+    .range-label { margin-left: 12px; color: #64748b; font-size: 13px; }
+    .filters input[type=date] { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; }
+    .pdf-btn { margin-left: auto; }
+    .summary { margin: 16px 0; font-size: 15px; }
+    .receipts-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .receipts-table th, .receipts-table td { padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+    .receipts-table th { background: #f8fafc; font-weight: 600; }
+    .amount { font-weight: 500; white-space: nowrap; }
+    .services { font-size: 12px; color: #475569; max-width: 480px; }
+    .empty { text-align: center; color: #94a3b8; padding: 24px; }
   `]
 })
 export class ReportListComponent implements OnInit, OnDestroy {
-  fromDate = '';
-  toDate = '';
-  total = 0;
-  count = 0;
-  receipts: any[] = [];
-  currentShift: CashShift | null = null;
-  private subs: Subscription[] = [];
+  private receiptService = inject(ReceiptService);
+  private shiftService = inject(ShiftService);
 
-  constructor(
-    private shiftService: ShiftService,
-    private receiptService: ReceiptService
-  ) {}
+  receipts: ReceiptData[] = [];
+  total = 0;
+  currentShift: CashShift | null = null;
+
+  period: Period = 'day';
+  dateFrom = '';
+  dateTo = '';
+
+  private subs = new Subscription();
 
   ngOnInit(): void {
-    const today = new Date();
-    const first = new Date(today.getFullYear(), today.getMonth(), 1);
-    this.fromDate = first.toISOString().slice(0, 10);
-    this.toDate = today.toISOString().slice(0, 10);
+    this.setPeriod('day');
 
-    this.subs.push(this.receiptService.getReceipts().subscribe(list => {
-      this.receipts = list;
-      this.refresh();
-    }));
-    this.subs.push(this.shiftService.currentShift$.subscribe(s => this.currentShift = s));
-    this.shiftService.getCurrentShift().subscribe();
-    this.refresh();
+    this.subs.add(
+      this.shiftService.currentShift$.subscribe(s => {
+        this.currentShift = s;
+      })
+    );
   }
 
-  ngOnDestroy(): void { this.subs.forEach(s => s.unsubscribe()); }
+  ngOnDestroy(): void {
+    this.subs.unsubscribe();
+  }
 
-  refresh(): void {
-    const start = new Date(this.fromDate + 'T00:00:00');
-    const end = new Date(this.toDate + 'T23:59:59');
+  // ================= PERIOD =================
+
+  setPeriod(p: Period): void {
+    this.period = p;
+
+    const now = new Date();
+    const start = new Date(now);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+
+    switch (p) {
+      case 'day':
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'week':
+        start.setDate(now.getDate() - 6);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'month':
+        start.setDate(1);
+        start.setHours(0, 0, 0, 0);
+        break;
+      case 'shift':
+        start.setHours(8, 0, 0, 0);
+        end.setHours(20, 0, 0, 0);
+        break;
+      case 'custom':
+        // диапазон выбран вручную — используем dateFrom/dateTo
+        this.loadReport();
+        return;
+    }
+
+    this.dateFrom = this.toInputDate(start);
+    this.dateTo = this.toInputDate(end);
+    this.loadReport();
+  }
+
+  onCustomRangeChange(): void {
+    this.period = 'custom';
+    this.loadReport();
+  }
+
+  // ================= DATA =================
+
+  private loadReport(): void {
+    const start = this.dateFrom ? new Date(this.dateFrom) : new Date(0);
+    const end = this.dateTo ? new Date(this.dateTo) : new Date();
+    end.setHours(23, 59, 59, 999);
+
     const list = this.receiptService.getReceiptsForPeriod(start, end);
-    this.total = list.reduce((s, r) => s + r.totalCash, 0);
-    this.count = list.length;
     this.receipts = list;
+    this.total = list.reduce((sum, r) => sum + (r.total ?? 0), 0);
+  }
+
+  downloadPdf(): void {
+    // TODO: подключить сервис генерации PDF
+    console.log('Скачивание PDF:', {
+      period: this.period,
+      from: this.dateFrom,
+      to: this.dateTo,
+      receipts: this.receipts.length,
+      total: this.total
+    });
+  }
+
+  // ================= HELPERS =================
+
+  private toInputDate(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
   }
 }
