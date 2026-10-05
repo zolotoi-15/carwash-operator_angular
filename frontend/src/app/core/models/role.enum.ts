@@ -1,9 +1,5 @@
-<<<<<<< Updated upstream
-﻿export enum Role { Administrator = 'administrator', Developer = 'developer', Operator = 'operator' }
-=======
 export enum Role {
-  Administrator = 'administrator',
-  Developer = 'developer',
-  Operator = 'operator'
+  ADMIN = 'admin',
+  OPERATOR = 'operator',
+  DEVELOPER = 'developer',
 }
->>>>>>> Stashed changes

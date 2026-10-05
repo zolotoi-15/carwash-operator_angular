@@ -111,9 +111,7 @@ export class LocalPostService {
     });
   }
 
-  // ============================================================
   // Публичные методы проверки режима
-  // ============================================================
   isPostOffline(postId: string): boolean {
     return this.offlinePosts.get(postId) === true;
   }

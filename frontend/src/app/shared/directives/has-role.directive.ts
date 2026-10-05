@@ -1,4 +1,3 @@
-<<<<<<< Updated upstream
 import { Directive, Input, TemplateRef, ViewContainerRef, inject, effect } from '@angular/core';
 import { AuthService } from '../../core/services/auth.service';
 import { Role } from '../../core/models/role.enum';
@@ -32,7 +31,7 @@ export class HasRoleDirective {
     } else if (!allowed && this.rendered) {
       this.vcr.clear();
       this.rendered = false;
-=======
+
 @Directive({ selector: '[appHasRole]', standalone: true })
 export class HasRoleDirective {
   @Input() set appHasRole(roles: Role | Role[]) {
@@ -41,7 +40,6 @@ export class HasRoleDirective {
       this.viewContainer.clear();
     } else {
       this.viewContainer.createEmbeddedView(this.templateRef);
->>>>>>> Stashed changes
     }
   }
 }
