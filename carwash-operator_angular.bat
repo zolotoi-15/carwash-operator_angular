@@ -8,6 +8,12 @@ if errorlevel 1 (
     echo MongoDB service not found or already running.
 )
 
+:: Запуск локального MQTT-брокера (Aedes + мост к WQTT)
+echo Starting Local MQTT Broker (ws://0.0.0.0:8083/mqtt, mqtt://0.0.0.0:1883)...
+start "CarWash Local MQTT Broker" cmd /k "cd /d C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\backend && node local-mqtt-broker.js"
+:: Даём брокеру подняться (2 секунды)
+timeout /t 2 /nobreak >nul
+
 echo Starting Backend (auto-starts MQTT)...
 start "CarWash Backend" cmd /k "cd /d C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\backend && node server.js"
 :: Ждём, пока бэкенд создаст mqtt-config.json (3 секунды достаточно)
