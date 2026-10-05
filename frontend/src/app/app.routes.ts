@@ -12,32 +12,15 @@ export const routes: Routes = [
   { path: 'logout',
     loadComponent: () => import('./features/auth/logout/logout.component').then(m => m.LogoutComponent) },
 
-  // ===== ВАШИ ОРИГИНАЛЬНЫЕ МАРШРУТЫ (пусть будут с AuthGuard, если хотите) =====
-  {
-    path: 'dashboard',
-    canActivate: [AuthGuard],
-    loadComponent: () => import('./features/dashboard/dashboard.component').then(m => m.DashboardComponent)
-  },
-  {
-    path: 'reports',
-    canActivate: [AuthGuard],
-    loadComponent: () => import('./features/reports/report-list/report-list.component').then(m => m.ReportListComponent)
-  },
-  {
-    path: 'client-cards',
-    canActivate: [AuthGuard],
-    loadComponent: () => import('./features/client-cards/card-list/card-list.component').then(m => m.CardListComponent)
-  },
-  {
-  path: 'settings',
-  canActivate: [AuthGuard],
-  loadComponent: () => import('./features/admin/settings/general-settings/general-settings.component')
-    .then(m => m.GeneralSettingsComponent)
-},
- 
+  // ===== Основные =====
+  { path: 'dashboard', canActivate: [AuthGuard],
+    loadComponent: () => import('./features/dashboard/dashboard.component').then(m => m.DashboardComponent) },
+  { path: 'reports', canActivate: [AuthGuard],
+    loadComponent: () => import('./features/reports/report-list/report-list.component').then(m => m.ReportListComponent) },
+  { path: 'client-cards', canActivate: [AuthGuard],
+    loadComponent: () => import('./features/client-cards/card-list/card-list.component').then(m => m.CardListComponent) },
 
-
-  // ===== НОВЫЕ RBAC-разделы (не трогают оригиналы) =====
+  // ===== Админка =====
   {
     path: 'admin',
     canActivate: [AuthGuard, RoleGuard],
@@ -62,7 +45,11 @@ export const routes: Routes = [
       { path: 'kkm',
         canActivate: [RoleGuard],
         data: { roles: [Role.DEVELOPER] },
-        loadComponent: () => import('./features/admin/kkm/kkm-list/kkm-list.component').then(m => m.KkmListComponent) }
+        loadComponent: () => import('./features/admin/kkm/kkm-list/kkm-list.component').then(m => m.KkmListComponent) },
+
+      // 👇 ПЕРЕНЕСЕНО СЮДА
+      { path: 'settings',
+        loadComponent: () => import('./features/admin/settings/general-settings/general-settings.component').then(m => m.GeneralSettingsComponent) }
     ]
   },
 
