@@ -5,15 +5,53 @@
   <details class="settings-section" open>
     <summary>📡 Настройки MQTT</summary>
     <div class="section-body">
-      <label>URL брокера (ws:// или mqtt://):
-        <input [(ngModel)]="settings.mqtt.brokerUrl" placeholder="wss://..." />
-      </label>
-      <label>Имя пользователя:
-        <input [(ngModel)]="settings.mqtt.username" />
-      </label>
-      <label>Пароль:
-        <input type="password" [(ngModel)]="settings.mqtt.password" />
-      </label>
+
+      <fieldset class="mqtt-group">
+        <legend>Локальный брокер (Aedes)</legend>
+
+        <label>Хост:
+          <input [(ngModel)]="settings.mqtt.local.host" placeholder="192.168.31.211" />
+        </label>
+        <label>TCP-порт (mqtt://):
+          <input type="number" [(ngModel)]="settings.mqtt.local.portTcp" placeholder="1883" />
+        </label>
+        <label>WebSocket-порт (ws://):
+          <input type="number" [(ngModel)]="settings.mqtt.local.portWs" placeholder="8083" />
+        </label>
+        <label>Путь WS:
+          <input [(ngModel)]="settings.mqtt.local.path" placeholder="/mqtt" />
+        </label>
+        <label>Пользователь:
+          <input [(ngModel)]="settings.mqtt.local.username" placeholder="admin" />
+        </label>
+        <label>Пароль:
+          <input type="password" [(ngModel)]="settings.mqtt.local.password" />
+        </label>
+      </fieldset>
+
+      <fieldset class="mqtt-group">
+        <legend>Удалённый брокер (WQTT)</legend>
+
+        <label>Хост:
+          <input [(ngModel)]="settings.mqtt.remote.host" placeholder="m2.wqtt.ru" />
+        </label>
+        <label>TCP-порт (mqtt://):
+          <input type="number" [(ngModel)]="settings.mqtt.remote.portTcp" placeholder="13257" />
+        </label>
+        <label>TLS-порт (mqtts://):
+          <input type="number" [(ngModel)]="settings.mqtt.remote.portTls" placeholder="13258" />
+        </label>
+        <label>WebSocket TLS (wss://):
+          <input type="number" [(ngModel)]="settings.mqtt.remote.portWss" placeholder="13260" />
+        </label>
+        <label>Пользователь:
+          <input [(ngModel)]="settings.mqtt.remote.username" placeholder="u_GGENLB" />
+        </label>
+        <label>Пароль:
+          <input type="password" [(ngModel)]="settings.mqtt.remote.password" />
+        </label>
+      </fieldset>
+
       <button (click)="saveMqtt()">💾 Сохранить и переподключиться</button>
     </div>
   </details>

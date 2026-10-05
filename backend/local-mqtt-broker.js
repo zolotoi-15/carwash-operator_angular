@@ -1,6 +1,5 @@
 ﻿// backend/local-mqtt-broker.js
 // Local MQTT broker (Aedes 1.x) + bridge to remote broker.
-// Settings are loaded from MongoDB (collection "settings", doc { key: "main" }).
 
 const { Aedes } = require('aedes');
 const http = require('http');
@@ -9,8 +8,7 @@ const websocketStream = require('websocket-stream');
 const mqtt = require('mqtt');
 const mongoose = require('mongoose');
 
-// Mongo connection string — подхватываем из env, если задан
-const MONGO_URL = process.env.MONGO_URL || 'mongodb://127.0.0.1:27017/test';
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://0.0.0.0:27017/carwash';
 
 const SUBSCRIBE_TOPICS = [
   'posts/+/status',
@@ -28,8 +26,7 @@ const FORWARD_UP_TOPICS = [
   /^card-reader\/command$/,
 ];
 
-// ---------- Defaults (используются, если БД недоступна) ----------
-const defaults = {
+const DEFAULTS = {
   localHost: '0.0.0.0',
   localPortTcp: 1883,
   localPortWs: 8083,
@@ -46,18 +43,61 @@ async function loadSettings() {
   try {
     await mongoose.connect(MONGO_URL);
     console.log('[SETTINGS] connected to MongoDB');
+    // server.js хранит настройки в коллекции settings как { key: 'main', value: {...} }
     const doc = await mongoose.connection.db
       .collection('settings')
       .findOne({ key: 'main' });
     await mongoose.disconnect();
-    if (doc && doc.mqtt) {
-      console.log('[SETTINGS] loaded from DB:', JSON.stringify(doc.mqtt));
-      return { ...defaults, ...doc.mqtt };
+
+    const mqttCfg = (doc && doc.value && doc.value.mqtt) || (doc && doc.mqtt) || null;
+    if (!mqttCfg) {
+      console.warn('[SETTINGS] mqtt не найден в БД, используются значения по умолчанию');
+      return DEFAULTS;
     }
+
+    // Новый формат { local, remote }
+    if (mqttCfg.local || mqttCfg.remote) {
+      const local = mqttCfg.local || {};
+      const remote = mqttCfg.remote || {};
+      const cfg = {
+        localHost: local.host ?? DEFAULTS.localHost,
+        localPortTcp: local.portTcp ?? DEFAULTS.localPortTcp,
+        localPortWs: local.portWs ?? DEFAULTS.localPortWs,
+        localPath: local.path ?? DEFAULTS.localPath,
+        localUsername: local.username ?? DEFAULTS.localUsername,
+        localPassword: local.password ?? DEFAULTS.localPassword,
+        remoteHost: remote.host ?? DEFAULTS.remoteHost,
+        remotePortTls: remote.portTls ?? DEFAULTS.remotePortTls,
+        remoteUsername: remote.username ?? DEFAULTS.remoteUsername,
+        remotePassword: remote.password ?? DEFAULTS.remotePassword,
+      };
+      console.log('[SETTINGS] loaded from DB (new format)');
+      return cfg;
+    }
+
+    // Legacy формат { brokerUrl, username, password } — используем для удалённого
+    if (mqttCfg.brokerUrl) {
+      try {
+        const u = new URL(mqttCfg.brokerUrl);
+        const cfg = {
+          ...DEFAULTS,
+          remoteHost: u.hostname,
+          remotePortTls: Number(u.port) || DEFAULTS.remotePortTls,
+          remoteUsername: mqttCfg.username || DEFAULTS.remoteUsername,
+          remotePassword: mqttCfg.password || DEFAULTS.remotePassword,
+        };
+        console.log('[SETTINGS] loaded from DB (legacy format), remote =', mqttCfg.brokerUrl);
+        return cfg;
+      } catch (e) {
+        console.warn('[SETTINGS] некорректный brokerUrl:', mqttCfg.brokerUrl);
+      }
+    }
+
+    return DEFAULTS;
   } catch (e) {
     console.warn('[SETTINGS] fallback to defaults:', e.message);
+    return DEFAULTS;
   }
-  return defaults;
 }
 
 (async () => {
@@ -65,7 +105,6 @@ async function loadSettings() {
 
   const aedes = await Aedes.createBroker();
 
-  // ---------- Auth ----------
   aedes.authenticate = (client, username, password, callback) => {
     const pass = password ? password.toString() : '';
     const ok = (username === cfg.localUsername) && (pass === cfg.localPassword);
@@ -75,13 +114,11 @@ async function loadSettings() {
     return callback(err, false);
   };
 
-  // ---------- TCP ----------
   const tcpServer = net.createServer((socket) => aedes.handle(socket));
   tcpServer.listen(cfg.localPortTcp, cfg.localHost, () => {
     console.log(`Local MQTT (TCP) listening on mqtt://${cfg.localHost}:${cfg.localPortTcp}`);
   });
 
-  // ---------- WebSocket ----------
   const httpServer = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Local MQTT broker (WebSocket) is running\n');
@@ -94,7 +131,6 @@ async function loadSettings() {
     console.log(`Local MQTT (WS)  listening on ws://${cfg.localHost}:${cfg.localPortWs}${cfg.localPath}`);
   });
 
-  // ---------- Bridge to remote ----------
   const remoteUrl = `mqtts://${cfg.remoteHost}:${cfg.remotePortTls}`;
   console.log(`[BRIDGE] Connecting to remote ${remoteUrl} as ${cfg.remoteUsername}...`);
 
@@ -119,12 +155,10 @@ async function loadSettings() {
   remote.on('offline',   () => console.warn('[BRIDGE] remote offline'));
   remote.on('error',     (err) => console.error('[BRIDGE] remote error:', err.message));
 
-  // remote -> local
   remote.on('message', (topic, payload) => {
     aedes.publish({ topic, payload, qos: 0, retain: false }, () => {});
   });
 
-  // local -> remote
   aedes.on('publish', (packet, client) => {
     if (!client) return;
     if (!FORWARD_UP_TOPICS.some(re => re.test(packet.topic))) return;
@@ -132,7 +166,6 @@ async function loadSettings() {
     remote.publish(packet.topic, packet.payload, { qos: 1 });
   });
 
-  // ---------- Logging ----------
   aedes.on('client',           (c) => console.log('[LOCAL] client connected:', c.id));
   aedes.on('clientDisconnect', (c) => console.log('[LOCAL] client disconnected:', c.id));
   aedes.on('subscribe', (subs, c) => {

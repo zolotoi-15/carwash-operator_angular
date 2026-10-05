@@ -12,6 +12,7 @@ const mqtt = require('mqtt');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
 require('dotenv').config();
+//require('./local-mqtt-broker');
 
 // ---------- MQTT Client ----------
 let mqttClient = null;
@@ -25,13 +26,30 @@ let mqttSettings = {
 function writeMqttConfigFile(settings) {
   try {
     const configPath = path.join(__dirname, '..', 'mqtt-config.json');
-    const mqttConfig = {
-      brokerUrl: settings.mqtt?.brokerUrl || process.env.MQTT_BROKER_URL || 'ws://localhost:8083',
-      username: settings.mqtt?.username || '',
-      password: settings.mqtt?.password || ''
-    };
+    const mqtt = settings.mqtt || {};
+    const local = mqtt.local || {};
+
+    let mqttConfig;
+    if (local.host) {
+      // Новый формат: локальный брокер
+      const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
+      const port = local.portTcp ?? 1883;
+      mqttConfig = {
+        brokerUrl: `mqtt://${host}:${port}`,
+        username: local.username || '',
+        password: local.password || ''
+      };
+    } else {
+      // Legacy: плоский brokerUrl
+      mqttConfig = {
+        brokerUrl: mqtt.brokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
+        username: mqtt.username || '',
+        password: mqtt.password || ''
+      };
+    }
+
     fs.writeFileSync(configPath, JSON.stringify(mqttConfig, null, 2));
-    console.log('✅ mqtt-config.json обновлён');
+    console.log('✅ mqtt-config.json обновлён:', mqttConfig.brokerUrl);
   } catch (err) {
     console.warn('⚠️ Не удалось сохранить mqtt-config.json:', err.message);
   }
@@ -43,11 +61,31 @@ function connectMqtt(settings) {
     mqttClient = null;
   }
 
-  const { brokerUrl, username, password } = settings;
+  // settings — это объект mqtt (либо { brokerUrl }, либо { local, remote })
+  const mqtt = settings || {};
+  const local = mqtt.local || {};
+
+  let brokerUrl, username, password;
+  if (local.host) {
+    const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
+    brokerUrl = `mqtt://${host}:${local.portTcp ?? 1883}`;
+    username = local.username || '';
+    password = local.password || '';
+  } else if (mqtt.brokerUrl) {
+    brokerUrl = mqtt.brokerUrl;
+    username = mqtt.username || '';
+    password = mqtt.password || '';
+  } else {
+    brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883';
+    username = '';
+    password = '';
+  }
+
   const options = {};
   if (username) options.username = username;
   if (password) options.password = password;
 
+  console.log('Подключение к локальному брокеру:', brokerUrl);
   mqttClient = mqtt.connect(brokerUrl, options);
 
   mqttClient.on('connect', () => {
@@ -534,11 +572,24 @@ let settings = {
   },
   pausePrice: 10,
   pauseFreeTimeSec: 120,
-  mqtt: {
-    brokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
-    username: '',
-    password: ''
+mqtt: {
+  local: {
+    host: '192.168.31.211',
+    portTcp: 1883,
+    portWs: 8083,
+    path: '/mqtt',
+    username: 'admin',
+    password: 'Zavulon56'
+  },
+  remote: {
+    host: 'm2.wqtt.ru',
+    portTcp: 13257,
+    portTls: 13258,
+    portWss: 13260,
+    username: 'u_GGENLB',
+    password: 'LTHNW22D'
   }
+}
 };
 
 // ---------- Конфиг постов ----------
@@ -1087,17 +1138,48 @@ function adminOnly(req, res, next) {
 }
 
 app.get('/api/mqtt/settings', auth, adminOnly, (req, res) => {
-  res.json(settings.mqtt || { brokerUrl: '', username: '', password: '' });
+  res.json(settings.mqtt || {
+    local: { host: '192.168.31.211', portTcp: 1883, portWs: 8083, path: '/mqtt', username: 'admin', password: 'Zavulon56' },
+    remote: { host: 'm2.wqtt.ru', portTcp: 13257, portTls: 13258, portWss: 13260, username: 'u_GGENLB', password: 'LTHNW22D' }
+  });
 });
 
 app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   try {
-    const { brokerUrl, username, password } = req.body;
-    if (!brokerUrl) return res.status(400).json({ error: 'brokerUrl обязателен' });
-    settings.mqtt = { brokerUrl, username: username || '', password: password || '' };
+    const { local, remote, brokerUrl, username, password } = req.body;
+
+    // Поддерживаем оба формата: новый { local, remote } и старый { brokerUrl }
+    let newMqtt;
+    if (local || remote) {
+      newMqtt = {
+        local: {
+          host: local?.host ?? '192.168.31.211',
+          portTcp: local?.portTcp ?? 1883,
+          portWs: local?.portWs ?? 8083,
+          path: local?.path ?? '/mqtt',
+          username: local?.username ?? 'admin',
+          password: local?.password ?? 'Zavulon56',
+        },
+        remote: {
+          host: remote?.host ?? 'm2.wqtt.ru',
+          portTcp: remote?.portTcp ?? 13257,
+          portTls: remote?.portTls ?? 13258,
+          portWss: remote?.portWss ?? 13260,
+          username: remote?.username ?? 'u_GGENLB',
+          password: remote?.password ?? 'LTHNW22D',
+        },
+      };
+    } else if (brokerUrl) {
+      newMqtt = { brokerUrl, username: username || '', password: password || '' };
+    } else {
+      return res.status(400).json({ error: 'Укажите local/remote или brokerUrl' });
+    }
+
+    settings.mqtt = newMqtt;
     await saveSettings(settings);
-    reconnectMqtt(settings.mqtt);
-    res.json({ ok: true, message: 'Настройки MQTT обновлены и применены' });
+    reconnectMqtt(newMqtt);
+
+    res.json({ ok: true, mqtt: newMqtt });
   } catch (err) {
     console.error('Ошибка обновления настроек MQTT:', err);
     res.status(500).json({ error: 'Ошибка обновления настроек MQTT' });

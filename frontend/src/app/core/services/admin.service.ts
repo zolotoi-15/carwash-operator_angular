@@ -1,6 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, of } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 
 // ================= МОДЕЛИ =================
@@ -9,6 +10,7 @@ export interface ServiceConfig {
   name: string;
   price: number;
   free_time_sec: number;
+  enabled?: boolean;
 }
 
 export interface PostSettings {
@@ -19,21 +21,38 @@ export interface PostSettings {
   dimmerMask: Record<string, boolean>;
   buttonInputs: Record<string, number>;
   relayDelays: Record<string, { onDelay: number; offDelay: number }>;
-  cameras: Record<string, string>;     // 👈 ОБЯЗАТЕЛЬНОЕ (без ?)
+  cameras: Record<string, string>;
 }
 
 export interface KkmSettings {
   enabled: boolean;
-  simulate: boolean;                    // 👈 ДОБАВЛЕНО
+  simulate: boolean;
   model: string;
   fiscalShiftNumber: number;
   cashierName: string;
 }
 
+export interface LocalMqttSettings {
+  host: string;
+  portTcp: number;
+  portWs: number;
+  path: string;
+  username: string;
+  password: string;
+}
+
+export interface RemoteMqttSettings {
+  host: string;
+  portTcp: number;
+  portTls: number;
+  portWss: number;
+  username: string;
+  password: string;
+}
+
 export interface MqttSettings {
-  brokerUrl: string;
-  username?: string;
-  password?: string;
+  local: LocalMqttSettings;
+  remote: RemoteMqttSettings;
 }
 
 export interface GeneralSettings {
@@ -41,6 +60,8 @@ export interface GeneralSettings {
   mqtt: MqttSettings;
   kkm: KkmSettings;
   numberOfPosts: number;
+  tankLevels?: any;
+  tankLowThreshold?: any;
 }
 
 // ================= ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ =================
@@ -56,17 +77,30 @@ export const emptyPostSettings: PostSettings = {
   cameras: {}
 };
 
+export const DEFAULT_MQTT: MqttSettings = {
+  local: {
+    host: '192.168.31.211',
+    portTcp: 1883,
+    portWs: 8083,
+    path: '/mqtt',
+    username: 'admin',
+    password: 'Zavulon56',
+  },
+  remote: {
+    host: 'm2.wqtt.ru',
+    portTcp: 13257,
+    portTls: 13258,
+    portWss: 13260,
+    username: 'u_GGENLB',
+    password: 'LTHNW22D',
+  },
+};
+
 export const emptyGeneralSettings: GeneralSettings = {
   posts: [],
-  mqtt: { brokerUrl: '', username: '', password: '' },
-  kkm: {
-    enabled: false,
-    simulate: false,
-    model: '',
-    fiscalShiftNumber: 0,
-    cashierName: ''
-  },
-  numberOfPosts: 8
+  mqtt: DEFAULT_MQTT,
+  kkm: { enabled: false, simulate: false, model: '', fiscalShiftNumber: 0, cashierName: '' },
+  numberOfPosts: 8,
 };
 
 // ================= СЕРВИС =================
@@ -74,99 +108,116 @@ export const emptyGeneralSettings: GeneralSettings = {
 @Injectable({ providedIn: 'root' })
 export class AdminService {
   private http = inject(HttpClient);
-  private apiUrl = `${environment.apiUrl}/admin`;
+  private apiUrl = `${environment.apiUrl}`;
 
-  private mockSettings: GeneralSettings = {
-    posts: [
-      {
-        postId: 1,
-        services: [
-          { name: 'Вода',   price: 30, free_time_sec: 0 },
-          { name: 'Пена',   price: 42, free_time_sec: 0 },
-          { name: 'Воск',   price: 45, free_time_sec: 0 },
-          { name: 'Тефлон', price: 48, free_time_sec: 0 },
-          { name: 'Антимошка', price: 50, free_time_sec: 0 },
-          { name: 'Шампунь', price: 43, free_time_sec: 0 },
-          { name: 'Турбо',   price: 35, free_time_sec: 0 },
-          { name: 'Пылесос', price: 15, free_time_sec: 0 },
-          { name: 'Воздух',  price: 12, free_time_sec: 0 },
-          { name: 'Пауза',   price: 12, free_time_sec: 120 }
-        ],
-        relayMask: {},
-        vfdFrequencies: {},
-        dimmerMask: {},
-        buttonInputs: {},
-        relayDelays: {},
-        cameras: {}
-      },
-      {
-        postId: 2,
-        services: [
-          { name: 'Вода', price: 30, free_time_sec: 0 }
-        ],
-        relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-        buttonInputs: {}, relayDelays: {}, cameras: {}
-      },
-      {
-        postId: 3,
-        services: [{ name: 'Вода', price: 30, free_time_sec: 0 }],
-        relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-        buttonInputs: {}, relayDelays: {}, cameras: {}
-      },
-      {
-        postId: 4,
-        services: [{ name: 'Вода', price: 30, free_time_sec: 0 }],
-        relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-        buttonInputs: {}, relayDelays: {}, cameras: {}
-      }
-    ],
-    mqtt: {
-      brokerUrl: 'wss://m2.wqtt.ru:13260',
-      username: 'u_GGENLB',
-      password: ''
-    },
-    kkm: {
-      enabled: false,
-      simulate: true,
-      model: '0000111118041361',
-      fiscalShiftNumber: 0,
-      cashierName: 'Оператор'
-    },
-    numberOfPosts: 8
-  };
+  // ------- Трансформация posts: объект (server) <-> массив (UI) -------
+
+  private fromServer(data: any): GeneralSettings {
+    const postsObj = data?.posts || {};
+    const posts: PostSettings[] = [];
+
+    for (const [postIdStr, pdRaw] of Object.entries<any>(postsObj)) {
+      const postId = Number(postIdStr);
+      const pd = pdRaw || {};
+      const prices = pd.prices || {};
+      const services: ServiceConfig[] = (pd.services || []).map((svc: any) => ({
+        name: svc.name,
+        price: typeof svc.price === 'number'
+          ? svc.price
+          : (typeof prices[svc.name] === 'number' ? prices[svc.name] : 0),
+        free_time_sec: svc.free_time_sec ?? 0,
+        enabled: svc.enabled !== undefined ? svc.enabled : (svc.enable !== false),
+      }));
+
+      posts.push({
+        postId,
+        services,
+        relayMask: pd.relayMask || {},
+        vfdFrequencies: pd.vfdFrequencies || {},
+        dimmerMask: pd.dimmerMask || {},
+        buttonInputs: pd.buttonInputs || {},
+        relayDelays: pd.relayDelays || {},
+        cameras: pd.cameras || {},
+      });
+    }
+
+    posts.sort((a, b) => a.postId - b.postId);
+
+    // MQTT — нормализуем (поддержка старого формата)
+    const mqttRaw = data?.mqtt || {};
+    let mqtt: MqttSettings;
+    if (mqttRaw.local || mqttRaw.remote) {
+      mqtt = {
+        local: { ...DEFAULT_MQTT.local, ...(mqttRaw.local || {}) },
+        remote: { ...DEFAULT_MQTT.remote, ...(mqttRaw.remote || {}) },
+      };
+    } else if (mqttRaw.brokerUrl) {
+      mqtt = {
+        local: { ...DEFAULT_MQTT.local },
+        remote: { ...DEFAULT_MQTT.remote },
+      };
+      try {
+        const u = new URL(mqttRaw.brokerUrl);
+        mqtt.remote.host = u.hostname;
+        mqtt.remote.portTls = Number(u.port) || mqtt.remote.portTls;
+        if (mqttRaw.username) mqtt.remote.username = mqttRaw.username;
+        if (mqttRaw.password) mqtt.remote.password = mqttRaw.password;
+      } catch {}
+    } else {
+      mqtt = { ...DEFAULT_MQTT };
+    }
+
+    return {
+      ...data,
+      posts,
+      mqtt,
+      kkm: { ...emptyGeneralSettings.kkm, ...(data?.kkm || {}) },
+      numberOfPosts: data?.numberOfPosts ?? 8,
+    };
+  }
+
+  private toServer(settings: GeneralSettings): any {
+    const postsObj: any = {};
+    settings.posts.forEach(p => {
+      const prices: any = {};
+      p.services.forEach(svc => { prices[svc.name] = svc.price; });
+      postsObj[p.postId] = {
+        prices,
+        relayMask: p.relayMask,
+        vfdFrequencies: p.vfdFrequencies,
+        dimmerMask: p.dimmerMask,
+        buttonInputs: p.buttonInputs,
+        relayDelays: p.relayDelays,
+        cameras: p.cameras,
+        services: p.services.map(s => ({
+          name: s.name,
+          price: s.price,
+          free_time_sec: s.free_time_sec ?? 0,
+          enabled: s.enabled !== false,
+        })),
+      };
+    });
+    return { ...settings, posts: postsObj };
+  }
+
+  // ================= API =================
 
   getSettings(): Observable<GeneralSettings> {
-    return of(this.mockSettings);
-    // return this.http.get<GeneralSettings>(`${this.apiUrl}/settings`);
+    return this.http.get<any>(`${this.apiUrl}/settings`)
+      .pipe(map(data => this.fromServer(data)));
   }
 
   updateSettings(settings: GeneralSettings): Observable<GeneralSettings> {
-    this.mockSettings = settings;
-    return of(settings);
-    // return this.http.put<GeneralSettings>(`${this.apiUrl}/settings`, settings);
+    const body = this.toServer(settings);
+    return this.http.put<any>(`${this.apiUrl}/settings`, body)
+      .pipe(map(data => this.fromServer(data)));
   }
 
   updatePostSettings(postId: number, ps: PostSettings): Observable<PostSettings> {
-    const idx = this.mockSettings.posts.findIndex(p => p.postId === postId);
-    if (idx >= 0) this.mockSettings.posts[idx] = ps;
     return of(ps);
-    // return this.http.put<PostSettings>(`${this.apiUrl}/posts/${postId}`, ps);
   }
 
   copySettingsFromPost1ToAll(): Observable<void> {
-    const post1 = this.mockSettings.posts[0];
-    if (!post1) return of(void 0);
-    this.mockSettings.posts = this.mockSettings.posts.map(p => ({
-      ...p,
-      services: [...post1.services],
-      relayMask: { ...post1.relayMask },
-      vfdFrequencies: { ...post1.vfdFrequencies },
-      dimmerMask: { ...post1.dimmerMask },
-      buttonInputs: { ...post1.buttonInputs },
-      relayDelays: { ...post1.relayDelays },
-      cameras: { ...post1.cameras }
-    }));
     return of(void 0);
-    // return this.http.post<void>(`${this.apiUrl}/posts/copy-from-first`, {});
   }
 }

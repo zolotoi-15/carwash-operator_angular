@@ -75,6 +75,45 @@ h2 {
   }
 }
 
+// ---------- НОВОЕ: две группы MQTT ----------
+.mqtt-group {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 0 0 16px;
+
+  legend {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;
+    padding: 0 6px;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: #334155;
+
+    input {
+      display: block;
+      width: 100%;
+      max-width: 400px;
+      padding: 8px 10px;
+      margin-top: 4px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 13px;
+
+      &:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      }
+    }
+  }
+}
+
 .service-row {
   padding: 10px 0;
   border-bottom: 1px dashed #e2e8f0;

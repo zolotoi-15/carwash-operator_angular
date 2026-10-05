@@ -1,4 +1,4 @@
-// src/app/services/local-post.service.ts
+// src/app/core/services/local-post.service.ts
 import { Injectable } from '@angular/core';
 import { BehaviorSubject, Subscription } from 'rxjs';
 import { ReceiptService, ReceiptItem as LocalReceiptItem } from './receipt.service';
@@ -70,11 +70,11 @@ export class LocalPostService {
     private mqttService: MqttService,
     private admin: AdminService
   ) {
-    // Услуги из /api/settings
+    // Услуги из /api/settings — теперь posts это массив, берём первый элемент
     this.admin.getSettings().subscribe(settings => {
-      const post1Settings = settings.posts?.[1];
-      if (post1Settings?.services) {
-        this.availableServices = post1Settings.services;
+      const post1 = settings.posts?.find(p => p.postId === 1) || settings.posts?.[0];
+      if (post1?.services) {
+        this.availableServices = post1.services;
         this.servicesSubject.next(this.availableServices);
         this.updatePricesFromServices(this.availableServices);
         console.log('📦 LocalPostService: services loaded from /api/settings',

@@ -29,17 +29,11 @@ export class MqttService {
   private username = '';
   private password = '';
 
-  // --- fallback на локальный брокер ---
-  private remoteBrokerUrl = '';
-  private localBrokerUrl = '';
-  private usingLocalBroker = false;
-  private readonly MAX_REMOTE_ATTEMPTS = 3;
-  private readonly MAX_LOCAL_ATTEMPTS = 10;
-
   private pendingCommands: { postId: string; command: string }[] = [];
   private readonly MAX_PENDING_COMMANDS = 50;
 
   private reconnectAttempts = 0;
+  private readonly MAX_RECONNECT_ATTEMPTS = 15;
   private reconnectTimer: any = null;
 
   private postStatusSubject = new Subject<any>();
@@ -68,13 +62,13 @@ export class MqttService {
   private async initMqttSettings() {
     try {
       const settings = await firstValueFrom(this.admin.getSettings());
-      if (settings.mqtt && settings.mqtt.brokerUrl) {
-        this.connect(settings.mqtt.brokerUrl, settings.mqtt.username, settings.mqtt.password);
-        return;
-      }
+      const mqttCfg: any = settings?.mqtt || {};
+      this.applyMqttSettings(mqttCfg);
+      return;
     } catch (e) {
       console.warn('Не удалось загрузить настройки MQTT с бэкенда', e);
     }
+
     const saved = localStorage.getItem('mqttSettings');
     if (saved) {
       try {
@@ -82,13 +76,44 @@ export class MqttService {
         if (s.brokerUrl) { this.connect(s.brokerUrl, s.username, s.password); return; }
       } catch {}
     }
-    const defaultUrl = `ws://${window.location.hostname}:8083/mqtt`;
-    console.warn('MQTT по умолчанию:', defaultUrl);
-    this.connect(defaultUrl);
+    const fallback = `ws://${window.location.hostname}:8083/mqtt`;
+    console.warn('MQTT по умолчанию:', fallback);
+    this.connect(fallback, 'admin', 'Zavulon56');
+  }
+
+  reconnectFromSettings(mqttCfg: any): void {
+    this.applyMqttSettings(mqttCfg);
+  }
+
+  private applyMqttSettings(mqttCfg: any): void {
+    const local = mqttCfg?.local || {};
+    let host = local.host;
+    let port = local.portWs;
+    let path = local.path;
+    let user = local.username;
+    let pass = local.password;
+
+    if ((!host || host === '0.0.0.0') && mqttCfg?.brokerUrl) {
+      try {
+        const u = new URL(mqttCfg.brokerUrl);
+        host = u.hostname;
+        port = Number(u.port) || 8083;
+        path = u.pathname || '/mqtt';
+        user = user || mqttCfg.username;
+        pass = pass || mqttCfg.password;
+      } catch {}
+    }
+
+    host = (host && host !== '0.0.0.0') ? host : window.location.hostname;
+    port = port ?? 8083;
+    path = path ?? '/mqtt';
+
+    const url = `ws://${host}:${port}${path}`;
+    console.log('MQTT URL из настроек:', url);
+    this.connect(url, user, pass);
   }
 
   connect(brokerUrl: string, username?: string, password?: string) {
-    // Нормализация URL
     let normalizedUrl = brokerUrl;
     if (brokerUrl.startsWith('mqtt://')) {
       normalizedUrl = brokerUrl.replace('mqtt://', 'ws://');
@@ -96,21 +121,8 @@ export class MqttService {
       normalizedUrl = brokerUrl.replace('mqtts://', 'wss://');
     }
 
-    // Запоминаем удалённый URL и локальный fallback при первой попытке
-    if (!this.remoteBrokerUrl) {
-      this.remoteBrokerUrl = normalizedUrl;
-      this.localBrokerUrl = `ws://${window.location.hostname}:8083/mqtt`;
-      this.usingLocalBroker = false;
-    }
-
-    if (this.client) {
-      this.client.end(true);
-      this.client = null;
-    }
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
+    if (this.client) { this.client.end(true); this.client = null; }
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
 
     this.brokerUrl = normalizedUrl;
     this.username = username || '';
@@ -121,41 +133,33 @@ export class MqttService {
       connectTimeout: 5000,
       reconnectPeriod: 0,
     };
-    // Локальный брокер без аутентификации
-    if (!this.usingLocalBroker) {
-      if (this.username) options.username = this.username;
-      if (this.password) options.password = this.password;
-    }
+    if (this.username) options.username = this.username;
+    if (this.password) options.password = this.password;
 
-    console.log(
-      `Попытка подключения к MQTT: ${this.brokerUrl}` +
-      (this.usingLocalBroker ? ' [ЛОКАЛЬНЫЙ]' : ' [удалённый]')
-    );
-
+    console.log(`Попытка подключения к MQTT: ${this.brokerUrl}`);
     this.client = mqtt.connect(this.brokerUrl, options);
 
     this.client.on('connect', () => {
       console.log('✅ MQTT connected to', this.brokerUrl);
       this.reconnectAttempts = 0;
 
-      // === ПОДПИСКИ ===
       this.client.subscribe('posts/+/status');
       this.client.subscribe('posts/+/lwt');
       this.client.subscribe('posts/+/local_LWT');
       this.client.subscribe('posts/+/config');
       this.client.subscribe('posts/+/clientcard');
+      this.client.subscribe('posts/+/clientcardbalance');
+      this.client.subscribe('posts/+/status_relay');
       this.client.subscribe('system/config');
       this.client.subscribe('shift/total');
       this.client.subscribe('kkm/print');
       this.client.subscribe('card-reader/scan');
       this.client.subscribe('cards/+/scan');
 
-      // Сохраняем именно удалённый URL, чтобы при следующей загрузке
-      // снова попробовать удалённый, а не залипнуть на локальном
       localStorage.setItem('mqttSettings', JSON.stringify({
-        brokerUrl: this.remoteBrokerUrl,
+        brokerUrl: this.brokerUrl,
         username: this.username,
-        password: this.password
+        password: this.password,
       }));
 
       if (this.pendingCommands.length) {
@@ -201,6 +205,8 @@ export class MqttService {
             if (!isNaN(num)) this.postBalances[postId] = num;
           }
           this.postStatusSubject.next({ postId, data: payload });
+        } else if (subtopic === 'clientcardbalance') {
+          this.postStatusSubject.next({ postId, data: payload });
         }
       } else if (topic === 'system/config') {
         this.systemConfigSubject.next(payload);
@@ -245,45 +251,17 @@ export class MqttService {
   }
 
   private scheduleReconnect() {
-    // --- Уже на локальном брокере ---
-    if (this.usingLocalBroker) {
-      this.reconnectAttempts++;
-      if (this.reconnectAttempts > this.MAX_LOCAL_ATTEMPTS) {
-        console.error('❌ Локальный MQTT-брокер недоступен. Запустите: node local-mqtt-broker.js');
-        return;
-      }
-      const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 15000);
-      console.log(`Повтор к локальному MQTT через ${delay} мс (попытка ${this.reconnectAttempts})`);
-      this.reconnectTimer = setTimeout(() => {
-        this.connect(this.localBrokerUrl);
-      }, delay);
-      return;
-    }
-
-    // --- Удалённый брокер ---
     this.reconnectAttempts++;
-
-    if (this.reconnectAttempts >= this.MAX_REMOTE_ATTEMPTS) {
-      console.warn(`⚠️ Удалённый MQTT недоступен после ${this.reconnectAttempts} попыток. Переключаюсь на локальный: ${this.localBrokerUrl}`);
-      this.usingLocalBroker = true;
-      this.reconnectAttempts = 0;
-      this.brokerUrl = this.localBrokerUrl;
-      this.username = '';
-      this.password = '';
-      this.reconnectTimer = setTimeout(() => {
-        this.connect(this.localBrokerUrl);
-      }, 1000);
+    if (this.reconnectAttempts > this.MAX_RECONNECT_ATTEMPTS) {
+      console.error('❌ Достигнут лимит попыток подключения к MQTT');
       return;
     }
-
-    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 15000);
-    console.log(`Повтор к удалённому MQTT через ${delay} мс (попытка ${this.reconnectAttempts}/${this.MAX_REMOTE_ATTEMPTS})`);
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+    console.log(`Повтор к MQTT через ${delay} мс (попытка ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})`);
     this.reconnectTimer = setTimeout(() => {
-      this.connect(this.remoteBrokerUrl, this.username, this.password);
+      this.connect(this.brokerUrl, this.username, this.password);
     }, delay);
   }
-
-  // ==== Карт-ридер ====
 
   private async handleCardScan(topic: string, msgStr: string): Promise<void> {
     let cardNumber = '';
@@ -330,20 +308,12 @@ export class MqttService {
     }
 
     this.cardScanSubject.next({
-      card: cardNumber,
-      source: 'reader',
-      timestamp: Date.now(),
-      postId,
-      topUpAmount: balance,
-      topUpStatus,
-      topUpResult
+      card: cardNumber, source: 'reader', timestamp: Date.now(),
+      postId, topUpAmount: balance, topUpStatus, topUpResult,
     });
   }
 
   reconnect(brokerUrl: string, username?: string, password?: string) {
-    // Сбрасываем состояние, чтобы снова попробовать удалённый
-    this.remoteBrokerUrl = '';
-    this.usingLocalBroker = false;
     this.reconnectAttempts = 0;
     this.connect(brokerUrl, username, password);
   }
@@ -366,11 +336,14 @@ export class MqttService {
     }
   }
 
-  publishConfig(services: ServiceConfig[]) {
-    if (!this.client?.connected) {
-      console.warn('MQTT не подключён');
-      return;
+  publishRelayStatus(postId: string, status: any): void {
+    if (this.client?.connected) {
+      this.client.publish(`posts/${postId}/status_relay`, JSON.stringify(status), { qos: 0 });
     }
+  }
+
+  publishConfig(services: ServiceConfig[]) {
+    if (!this.client?.connected) { console.warn('MQTT не подключён'); return; }
     const config = { services };
     this.admin.getSettings().subscribe(settings => {
       const count = settings.numberOfPosts || 8;
@@ -389,13 +362,9 @@ export class MqttService {
 
   isOnline(postId: string): boolean { return this.onlineStatusMap[postId] || false; }
   isConnected(): boolean { return this.client?.connected || false; }
-  isUsingLocalBroker(): boolean { return this.usingLocalBroker; }
 
   requestCardScan(): void {
-    if (!this.client?.connected) {
-      console.warn('MQTT не подключён');
-      return;
-    }
+    if (!this.client?.connected) { console.warn('MQTT не подключён'); return; }
     this.client.publish('card-reader/command', JSON.stringify({ action: 'scan' }));
   }
 
