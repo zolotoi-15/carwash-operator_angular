@@ -4,7 +4,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 
-import { ClientCardService, CardReportResponse } from '../../services/client-card.service';
+import { ClientCardService, CardReportResponse } from '../../core/servicesclient-card.service';
 import { CardOperation, CardReportSummary } from '../../models/client-card.model';
 
 @Component({

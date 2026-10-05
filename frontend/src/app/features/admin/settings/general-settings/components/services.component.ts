@@ -2,8 +2,8 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, FormArray, ReactiveFormsModule, Validators } from '@angular/forms';
-import { AdminService } from '../../../services/admin.service';
-import { ServiceConfig } from '../../../services/mqtt.service';
+import { AdminService } from '../../../core/services/admin.service';
+import { ServiceConfig } from '../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-services',

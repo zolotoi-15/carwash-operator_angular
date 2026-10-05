@@ -1,7 +1,7 @@
 // src/app/pages/dashboard/tank-levels.component.ts
 import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRef } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { MqttService } from '../../services/mqtt.service';
+import { MqttService } from '../../core/servicesmqtt.service';
 import { Subscription } from 'rxjs';
 
 @Component({

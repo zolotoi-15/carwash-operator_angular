@@ -1,9 +1,9 @@
-﻿import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { Subscription } from 'rxjs';
-import { ShiftService } from '../../../services/shift.service';
-import { ReceiptService } from '../../../services/receipt.service';
+import { ShiftService } from '../../../core/services/shift.service';
+import { ReceiptService } from '../../../core/services/receipt.service';
 import { CashShift } from '../../../models/shift.model';
 
 @Component({

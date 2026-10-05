@@ -1,8 +1,8 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../services/admin.service';
-import { MqttService } from '../../../services/mqtt.service';
+import { AdminService } from '../../../core/services/admin.service';
+import { MqttService } from '../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-mqtt-settings',

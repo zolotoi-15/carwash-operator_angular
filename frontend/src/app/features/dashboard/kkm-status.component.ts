@@ -2,7 +2,7 @@ import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRe
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Subscription, interval } from 'rxjs';
-import { AdminService } from '../../services/admin.service';
+import { AdminService } from '../../core/servicesadmin.service';
 
 @Component({
   selector: 'app-kkm-status',

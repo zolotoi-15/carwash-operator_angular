@@ -7,9 +7,9 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
 import { Subscription, interval } from 'rxjs';
-import { MqttService } from '../../services/mqtt.service';
-import { AdminService, AppSettings } from '../../services/admin.service';
-import { LocalPostService, PostState } from '../../services/local-post.service';
+import { MqttService } from '../../core/servicesmqtt.service';
+import { AdminService, AppSettings } from '../../core/servicesadmin.service';
+import { LocalPostService, PostState } from '../../core/serviceslocal-post.service';
 
 @Component({
   selector: 'app-post-card',

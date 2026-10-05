@@ -3,8 +3,8 @@ import { Component, OnInit, OnDestroy, ChangeDetectionStrategy, ChangeDetectorRe
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Subscription } from 'rxjs';
-import { ReceiptService } from '../../services/receipt.service';
-import { MqttService } from '../../services/mqtt.service';
+import { ReceiptService } from '../../core/servicesreceipt.service';
+import { MqttService } from '../../core/servicesmqtt.service';
 
 @Component({
   selector: 'app-shift-total',

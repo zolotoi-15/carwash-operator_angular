@@ -2,7 +2,7 @@ import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';  // <-- добавить
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../services/admin.service';
+import { AdminService } from '../../../core/services/admin.service';
 
 @Component({
   selector: 'app-prices',
