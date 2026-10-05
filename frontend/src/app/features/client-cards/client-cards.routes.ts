@@ -11,10 +11,10 @@ export const CLIENT_CARDS_ROUTES: Routes = [
     canActivate: [AuthGuard, PermissionGuard], data: { resource: ResourceType.ClientCards, action: PermissionAction.Read } },
   { path: 'edit/:id', loadComponent: () => import('./card-form/card-form.component').then(m => m.CardFormComponent),
     canActivate: [AuthGuard, RoleGuard, PermissionGuard],
-    data: { roles: [Role.Administrator, Role.Developer], resource: ResourceType.ClientCards, action: PermissionAction.Update } },
+    data: { roles: [Role.ADMINISTRATOR, Role.DEVELOPER], resource: ResourceType.ClientCards, action: PermissionAction.Update } },
   { path: 'delete/:id', loadComponent: () => import('./card-delete/card-delete.component').then(m => m.CardDeleteComponent),
     canActivate: [AuthGuard, RoleGuard, PermissionGuard],
-    data: { roles: [Role.Administrator, Role.Developer], resource: ResourceType.ClientCards, action: PermissionAction.Delete } }
+    data: { roles: [Role.ADMINISTRATOR, Role.DEVELOPER], resource: ResourceType.ClientCards, action: PermissionAction.Delete } }
 ];
 
 export const CLIENT_CARDS_ROUTES: Routes = [

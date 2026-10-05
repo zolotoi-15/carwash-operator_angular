@@ -1,36 +1,3 @@
-<<<<<<< Updated upstream
-﻿import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Router } from '@angular/router';
-import { BehaviorSubject, Observable, of, tap, delay } from 'rxjs';
-import { User, LoginDto, LoginResponse } from '../models/user.model';
-import { Permission } from '../models/permission.model';
-import { Role } from '../models/role.enum';
-import { ResourceType } from '../models/resource.enum';
-import { PermissionAction } from '../models/action.enum';
-import { StorageService } from './storage.service';
-import { environment } from '../../../environments/environment';
-
-const TOKEN_KEY = 'cw_token';
-const USER_KEY = 'cw_user';
-const PERMS_KEY = 'cw_permissions';
-
-@Injectable({ providedIn: 'root' })
-export class AuthService {
-  private http = inject(HttpClient);
-  private router = inject(Router);
-  private storage = inject(StorageService);
-
-  private currentUserSubject = new BehaviorSubject<User | null>(null);
-  public currentUser$ = this.currentUserSubject.asObservable();
-
-  private permissionsSubject = new BehaviorSubject<Permission[]>([]);
-  public permissions$ = this.permissionsSubject.asObservable();
-
-  get currentUser(): User | null { return this.currentUserSubject.value; }
-  get token(): string | null { return this.storage.get<string>(TOKEN_KEY); }
-
-  // ================= MOCK USERS =================
   private mockUsers: Record<string, { password: string; user: User; permissions: Permission[] }> = {
     admin: {
       password: 'admin',
@@ -189,6 +156,5 @@ export class AuthService {
       'operator': 3
     };
     return map[groupName] || 0;
->>>>>>> Stashed changes
   }
 }

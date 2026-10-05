@@ -8,15 +8,15 @@ import { environment } from '../../../environments/environment';
 const MOCK_USERS: User[] = [
   { id: 1, username: 'admin', email: 'admin@cw.ru', fullName: 'Администратор',
     groupId: 1, isActive: true,
-    group: { id: 1, name: Role.Administrator, displayName: 'Администратор',
+    group: { id: 1, name: Role.ADMINISTRATOR, displayName: 'Администратор',
              description: '', isSystem: true } },
   { id: 2, username: 'dev', email: 'dev@cw.ru', fullName: 'Разработчик',
     groupId: 2, isActive: true,
-    group: { id: 2, name: Role.Developer, displayName: 'Разработчик',
+    group: { id: 2, name: Role.DEVELOPER, displayName: 'Разработчик',
              description: '', isSystem: true } },
   { id: 3, username: 'operator', email: 'op@cw.ru', fullName: 'Оператор',
     groupId: 3, isActive: true,
-    group: { id: 3, name: Role.Operator, displayName: 'Оператор',
+    group: { id: 3, name: Role.OPERATOR, displayName: 'Оператор',
              description: '', isSystem: true } }
 ];
 
