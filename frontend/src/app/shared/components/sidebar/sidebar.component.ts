@@ -11,12 +11,12 @@ const MENU: MenuItem[] = [
   { label: '📊 Дашборд', icon: 'd', route: '/dashboard', resource: ResourceType.Dashboard },
   { label: '📄 Отчёты', icon: 'r', route: '/reports', resource: ResourceType.Reports },
   { label: '💳 Карты клиентов', icon: 'c', route: '/client-cards', resource: ResourceType.ClientCards },
-  { label: '👥 Пользователи', icon: 'u', route: '/admin/users', resource: ResourceType.Users, allowedRoles: [Role.Administrator, Role.Developer] },
-  { label: '👥 Группы', icon: 'g', route: '/admin/groups', resource: ResourceType.Groups, allowedRoles: [Role.Administrator, Role.Developer] },
-  { label: '🔐 Права доступа', icon: 'p', route: '/admin/permissions', resource: ResourceType.Permissions, allowedRoles: [Role.Developer] },
-  { label: '🗄️ База данных', icon: 'db', route: '/admin/database', resource: ResourceType.Database, allowedRoles: [Role.Developer] },
-  { label: '🧾 ККМ', icon: 'k', route: '/admin/kkm', resource: ResourceType.KKM, allowedRoles: [Role.Developer] },
-  { label: '⚙️ Настройки', icon: 's', route: '/admin/settings', resource: ResourceType.SystemSettings, allowedRoles: [Role.Administrator, Role.Developer] }
+  { label: '👥 Пользователи', icon: 'u', route: '/admin/users', resource: ResourceType.Users, allowedRoles: [Role.ADMINISTRATOR, Role.DEVELOPER] },
+  { label: '👥 Группы', icon: 'g', route: '/admin/groups', resource: ResourceType.Groups, allowedRoles: [Role.ADMINISTRATOR, Role.DEVELOPER] },
+  { label: '🔐 Права доступа', icon: 'p', route: '/admin/permissions', resource: ResourceType.Permissions, allowedRoles: [Role.DEVELOPER] },
+  { label: '🗄️ База данных', icon: 'db', route: '/admin/database', resource: ResourceType.Database, allowedRoles: [Role.DEVELOPER] },
+  { label: '🧾 ККМ', icon: 'k', route: '/admin/kkm', resource: ResourceType.KKM, allowedRoles: [Role.DEVELOPER] },
+  { label: '⚙️ Настройки', icon: 's', route: '/admin/settings', resource: ResourceType.SystemSettings, allowedRoles: [Role.ADMINISTRATOR, Role.DEVELOPER] }
 ];
 
 @Component({

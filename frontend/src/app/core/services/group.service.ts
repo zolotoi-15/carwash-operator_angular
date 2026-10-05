@@ -5,11 +5,11 @@ import { Group, CreateGroupDto } from '../models/group.model';
 import { Role } from '../models/role.enum';
 
 const MOCK_GROUPS: Group[] = [
-  { id: 1, name: Role.Administrator, displayName: 'Администратор',
+  { id: 1, name: Role.ADMINISTRATOR, displayName: 'Администратор',
     description: 'Полный доступ', isSystem: true, userCount: 1 },
-  { id: 2, name: Role.Developer, displayName: 'Разработчик',
+  { id: 2, name: Role.DEVELOPER, displayName: 'Разработчик',
     description: 'Полный доступ + БД/ККМ', isSystem: true, userCount: 1 },
-  { id: 3, name: Role.Operator, displayName: 'Оператор',
+  { id: 3, name: Role.OPERATOR, displayName: 'Оператор',
     description: 'Ограниченный доступ', isSystem: true, userCount: 1 }
 ];
 

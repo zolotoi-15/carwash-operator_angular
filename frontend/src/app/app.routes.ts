@@ -2,7 +2,6 @@ import { Routes } from '@angular/router';
 import { AuthGuard } from './core/guards/auth.guard';
 import { RoleGuard } from './core/guards/role.guard';
 import { Role } from './core/models/role.enum';
-import { UsersComponent } from './features/users/users.component';
 
 export const routes: Routes = [
   { path: '', redirectTo: '/dashboard', pathMatch: 'full' },
@@ -35,14 +34,14 @@ export const routes: Routes = [
   loadComponent: () => import('./features/admin/settings/general-settings/general-settings.component')
     .then(m => m.GeneralSettingsComponent)
 },
-  { path: 'users', component: UsersComponent },
+ 
 
 
   // ===== НОВЫЕ RBAC-разделы (не трогают оригиналы) =====
   {
     path: 'admin',
     canActivate: [AuthGuard, RoleGuard],
-    data: { roles: [Role.Administrator, Role.Developer] },
+    data: { roles: [Role.ADMINISTRATOR, Role.DEVELOPER] },
     children: [
       { path: 'users',
         loadComponent: () => import('./features/admin/users/user-list/user-list.component').then(m => m.UserListComponent) },
@@ -54,15 +53,15 @@ export const routes: Routes = [
         loadComponent: () => import('./features/admin/groups/group-list/group-list.component').then(m => m.GroupListComponent) },
       { path: 'permissions',
         canActivate: [RoleGuard],
-        data: { roles: [Role.Developer] },
+        data: { roles: [Role.DEVELOPER] },
         loadComponent: () => import('./features/admin/permissions/permission-editor/permission-editor.component').then(m => m.PermissionEditorComponent) },
       { path: 'database',
         canActivate: [RoleGuard],
-        data: { roles: [Role.Developer] },
+        data: { roles: [Role.DEVELOPER] },
         loadComponent: () => import('./features/admin/database/database-backup/database-backup.component').then(m => m.DatabaseBackupComponent) },
       { path: 'kkm',
         canActivate: [RoleGuard],
-        data: { roles: [Role.Developer] },
+        data: { roles: [Role.DEVELOPER] },
         loadComponent: () => import('./features/admin/kkm/kkm-list/kkm-list.component').then(m => m.KkmListComponent) }
     ]
   },
