@@ -1,0 +1,51 @@
+<aside class="sidebar">
+  <div class="sidebar-brand">🚗 CarWash</div>
+
+  <nav class="sidebar-nav">
+    <a routerLink="/dashboard" routerLinkActive="active" class="sidebar-link">
+      <span class="icon">📊</span> <span>Дашборд</span>
+    </a>
+
+    <a routerLink="/reports" routerLinkActive="active" class="sidebar-link">
+      <span class="icon">📄</span> <span>Отчёты</span>
+    </a>
+
+    <a routerLink="/client-cards" routerLinkActive="active" class="sidebar-link">
+      <span class="icon">💳</span> <span>Карты клиентов</span>
+    </a>
+
+    <!-- RBAC: раздел для администратора и разработчика -->
+    <ng-container *ngIf="auth.hasAdminAccess()">
+      <div class="sidebar-divider">Администрирование</div>
+
+      <a routerLink="/admin/users" routerLinkActive="active" class="sidebar-link">
+        <span class="icon">👥</span> <span>Пользователи</span>
+      </a>
+
+      <a routerLink="/admin/groups" routerLinkActive="active" class="sidebar-link">
+        <span class="icon">👥</span> <span>Группы</span>
+      </a>
+
+      <a routerLink="/admin/settings" routerLinkActive="active" class="sidebar-link">
+        <span class="icon">⚙️</span> <span>Настройки</span>
+      </a>
+    </ng-container>
+
+    <!-- RBAC: раздел только для разработчика -->
+    <ng-container *ngIf="auth.isDeveloper()">
+      <a routerLink="/admin/permissions" routerLinkActive="active" class="sidebar-link">
+        <span class="icon">🔐</span> <span>Права доступа</span>
+      </a>
+      <a routerLink="/admin/database" routerLinkActive="active" class="sidebar-link">
+        <span class="icon">🗄️</span> <span>База данных</span>
+      </a>
+      <a routerLink="/admin/kkm" routerLinkActive="active" class="sidebar-link">
+        <span class="icon">🧾</span> <span>ККМ</span>
+      </a>
+    </ng-container>
+  </nav>
+
+  <div class="sidebar-footer">
+    <button class="logout-btn" (click)="auth.logout()">🚪 Выйти</button>
+  </div>
+</aside>

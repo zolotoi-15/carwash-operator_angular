@@ -1,7 +1,13 @@
-﻿import { Component, OnInit } from '@angular/core';
+﻿import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { AdminService, GeneralSettings, PostSettings, emptyPostSettings } from '../../../../core/services/admin.service';
+import {
+  AdminService,
+  GeneralSettings,
+  PostSettings,
+  emptyPostSettings,
+  emptyGeneralSettings
+} from '../../../../core/services/admin.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 
 @Component({
@@ -10,27 +16,40 @@ import { NotificationService } from '../../../../core/services/notification.serv
   imports: [CommonModule, FormsModule],
   template: `
     <div class="settings-page">
-      <h2>Общие настройки</h2>
+      <h2>⚙️ Панель администратора</h2>
 
-      <!-- ============ ОБЩИЕ ============ -->
+      <!-- ============ MQTT ============ -->
       <section class="settings-section">
-        <h3>MQTT</h3>
+        <h3>📡 Настройки MQTT</h3>
+
         <label>
-          Хост:
-          <input [(ngModel)]="settings.mqtt.host" />
+          URL брокера (ws:// или mqtt://):
+          <input [(ngModel)]="settings.mqtt.brokerUrl"
+                 placeholder="wss://m2.wqtt.ru:13260" />
         </label>
+
         <label>
-          Порт:
-          <input type="number" [(ngModel)]="settings.mqtt.port" />
+          Имя пользователя:
+          <input [(ngModel)]="settings.mqtt.username"
+                 placeholder="u_XXXXXX" />
         </label>
+
+        <label>
+          Пароль:
+          <input type="password"
+                 [(ngModel)]="settings.mqtt.password"
+                 placeholder="••••••••" />
+        </label>
+
+        <button (click)="saveMqtt()">💾 Сохранить и переподключиться</button>
       </section>
 
-      <!-- ============ ПОСТЫ ============ -->
+      <!-- ============ ПОСТЫ: услуги ============ -->
       <section class="settings-section">
-        <h3>Посты</h3>
+        <h3>📋 Услуги</h3>
 
         <label>
-          Выберите пост:
+          Пост:
           <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
             <option *ngFor="let p of settings.posts" [ngValue]="p.postId">
               Пост {{ p.postId }}
@@ -39,14 +58,12 @@ import { NotificationService } from '../../../../core/services/notification.serv
         </label>
 
         <ng-container *ngIf="ps as currentPs">
-          <h4>Услуги поста {{ currentPs.postId }}</h4>
-
           <table class="services-table">
             <thead>
               <tr>
                 <th>Услуга</th>
-                <th>Цена</th>
-                <th>Свободное время (сек)</th>
+                <th>Цена (руб/мин)</th>
+                <th>Беспл. время, сек (опц.)</th>
                 <th></th>
               </tr>
             </thead>
@@ -55,9 +72,7 @@ import { NotificationService } from '../../../../core/services/notification.serv
                 <td><input [(ngModel)]="svc.name" /></td>
                 <td><input type="number" [(ngModel)]="svc.price" /></td>
                 <td><input type="number" [(ngModel)]="svc.free_time_sec" /></td>
-                <td>
-                  <button (click)="removeService(i)">Удалить</button>
-                </td>
+                <td><button (click)="removeService(i)">✕</button></td>
               </tr>
               <tr *ngIf="!currentPs.services.length">
                 <td colspan="4" style="text-align:center; color:#94a3b8">
@@ -68,30 +83,25 @@ import { NotificationService } from '../../../../core/services/notification.serv
           </table>
 
           <button (click)="addService()">➕ Добавить услугу</button>
-          <button (click)="savePostSettings()">💾 Сохранить пост</button>
+          <button (click)="savePostSettings()">💾 Сохранить</button>
         </ng-container>
-
-        <button (click)="copyFromFirstToAll()">
-          📋 Скопировать настройки поста 1 во все посты
-        </button>
       </section>
 
-      <!-- ============ MQTT (пример другого блока) ============ -->
-      <!-- при необходимости добавьте свои разделы -->
-
-      <!-- ============ KKM ============ -->
+      <!-- ============ ОТПРАВКА КОНФИГА ============ -->
       <section class="settings-section">
-        <h3>ККМ</h3>
-        <label>
-          Включена:
-          <input type="checkbox" [(ngModel)]="settings.kkm.enabled" />
-        </label>
-        <label>
-          Модель:
-          <input [(ngModel)]="settings.kkm.model" />
-        </label>
+        <h3>📤 Отправить настройки на посты</h3>
+        <p>Опубликовать текущую конфигурацию (услуги, цены, реле и т.д.) в MQTT для всех постов.</p>
+        <button (click)="publishToAll()">📤 Отправить настройки</button>
       </section>
 
+      <!-- ============ КОПИРОВАНИЕ ============ -->
+      <section class="settings-section">
+        <h3>📋 Копировать настройки с поста 1</h3>
+        <p>Применить настройки с поста 1 на все остальные посты.</p>
+        <button (click)="copyFromFirstToAll()">📋 Копировать</button>
+      </section>
+
+      <!-- ============ СОХРАНИТЬ ВСЁ ============ -->
       <button class="save-all" (click)="saveAll()">💾 Сохранить все настройки</button>
     </div>
   `,
@@ -105,6 +115,7 @@ import { NotificationService } from '../../../../core/services/notification.serv
     .settings-section label { display: block; margin-bottom: 8px; }
     .settings-section input, .settings-section select {
       padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px;
+      min-width: 240px;
     }
     .services-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
     .services-table th, .services-table td {
@@ -115,19 +126,13 @@ import { NotificationService } from '../../../../core/services/notification.serv
   `]
 })
 export class GeneralSettingsComponent implements OnInit {
-  settings: GeneralSettings = {
-    posts: [],
-    mqtt: { host: '', port: 1883 },
-    kkm: { enabled: false, model: '' }
-  };
+  private admin = inject(AdminService);
+  private notify = inject(NotificationService);
+
+  settings: GeneralSettings = { ...emptyGeneralSettings };
 
   selectedPostId: number | null = null;
   ps: PostSettings | null = null;
-
-  constructor(
-    private admin: AdminService,
-    private notify: NotificationService
-  ) {}
 
   ngOnInit(): void {
     this.loadSettings();
@@ -140,19 +145,30 @@ export class GeneralSettingsComponent implements OnInit {
       next: (s: GeneralSettings) => {
         this.settings = {
           posts: (s.posts ?? []).map((raw: PostSettings) => ({
+            ...emptyPostSettings,
             ...raw,
-            services: raw.services ?? []   // 👈 защита от null/undefined
+            services: raw.services ?? []
           })),
-          mqtt: s.mqtt ?? { host: '', port: 1883 },
-          kkm: s.kkm ?? { enabled: false, model: '' }
+          mqtt: s.mqtt ?? { brokerUrl: '', username: '', password: '' },
+          kkm: s.kkm ?? emptyGeneralSettings.kkm,
+          numberOfPosts: s.numberOfPosts ?? (s.posts?.length ?? 0)
         };
 
         if (this.settings.posts.length > 0) {
           this.selectedPostId = this.settings.posts[0].postId;
-          this.ps = { ...this.settings.posts[0], services: [...this.settings.posts[0].services] };
+          this.ps = this.clonePs(this.settings.posts[0]);
         }
       },
       error: () => this.notify.error('Не удалось загрузить настройки')
+    });
+  }
+
+  // ================= MQTT =================
+
+  saveMqtt(): void {
+    this.admin.updateSettings(this.settings).subscribe({
+      next: () => this.notify.success('Настройки MQTT сохранены'),
+      error: () => this.notify.error('Ошибка сохранения MQTT')
     });
   }
 
@@ -160,9 +176,7 @@ export class GeneralSettingsComponent implements OnInit {
 
   onPostChange(postId: number): void {
     const found = this.settings.posts.find(p => p.postId === postId);
-    if (found) {
-      this.ps = { ...found, services: [...found.services] };
-    }
+    if (found) this.ps = this.clonePs(found);
   }
 
   // ================= SERVICES =================
@@ -182,7 +196,6 @@ export class GeneralSettingsComponent implements OnInit {
   savePostSettings(): void {
     if (!this.ps) return;
 
-    // Защита: убеждаемся, что services — массив
     const payload: PostSettings = {
       ...this.ps,
       services: this.ps.services ?? []
@@ -190,7 +203,6 @@ export class GeneralSettingsComponent implements OnInit {
 
     this.admin.updatePostSettings(payload.postId, payload).subscribe({
       next: () => {
-        // обновляем локальный массив
         const idx = this.settings.posts.findIndex(p => p.postId === payload.postId);
         if (idx >= 0) this.settings.posts[idx] = payload;
         this.notify.success('Настройки поста сохранены');
@@ -199,18 +211,7 @@ export class GeneralSettingsComponent implements OnInit {
     });
   }
 
-  copyFromFirstToAll(): void {
-    this.admin.copySettingsFromPost1ToAll().subscribe({
-      next: () => {
-        this.notify.success('Настройки скопированы во все посты');
-        this.loadSettings();
-      },
-      error: () => this.notify.error('Ошибка копирования')
-    });
-  }
-
   saveAll(): void {
-    // Приводим services к массиву на всякий случай
     const payload: GeneralSettings = {
       ...this.settings,
       posts: this.settings.posts.map(p => ({
@@ -223,5 +224,32 @@ export class GeneralSettingsComponent implements OnInit {
       next: () => this.notify.success('Настройки сохранены'),
       error: () => this.notify.error('Ошибка сохранения')
     });
+  }
+
+  // ================= COPY / PUBLISH =================
+
+  copyFromFirstToAll(): void {
+    this.admin.copySettingsFromPost1ToAll().subscribe({
+      next: () => {
+        this.notify.success('Настройки скопированы во все посты');
+        this.loadSettings();
+      },
+      error: () => this.notify.error('Ошибка копирования')
+    });
+  }
+
+  publishToAll(): void {
+    // Заглушка: реальная публикация в MQTT — через MqttService.publishConfig()
+    this.notify.info('Публикация конфига (реализация в MqttService.publishConfig)');
+  }
+
+  // ================= HELPERS =================
+
+  private clonePs(ps: PostSettings): PostSettings {
+    return {
+      ...emptyPostSettings,
+      ...ps,
+      services: [...(ps.services ?? [])].map(s => ({ ...s }))
+    };
   }
 }

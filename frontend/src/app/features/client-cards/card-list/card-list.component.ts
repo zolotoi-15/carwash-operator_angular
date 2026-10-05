@@ -1,51 +1,57 @@
-﻿import { Component, OnInit, OnDestroy, inject } from '@angular/core';
+import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
-import { ClientCardService } from '../../../services/client-card.service';
-import { ClientCard } from '../../../models/client-card.model';
-import { AuthService } from '../../../core/services/auth.service';
-import { ResourceType } from '../../../core/models/resource.enum';
-import { PermissionAction } from '../../../core/models/action.enum';
+import { ClientCardService } from '../../../core/services/client-card.service';
+import { ClientCard } from '../../../core/models/client-card.model';
 
 @Component({
   selector: 'app-card-list',
   standalone: true,
   imports: [CommonModule, FormsModule],
   template: `
-    <div class="cards">
-      <div class="header">
-        <h1>💳 Карты клиентов</h1>
-        <div class="search">
-          <input [(ngModel)]="query" (input)="onSearch()" placeholder="Поиск по номеру, ФИО, телефону" />
-        </div>
+    <div class="cards-page">
+      <h2>💳 Карты клиентов</h2>
+
+      <div class="search-row">
+        <input placeholder="Поиск по номеру карты, ФИО или телефону..." [(ngModel)]="query" />
+        <button (click)="search()">🔍 Найти</button>
+        <button>📷 Сканировать карту</button>
       </div>
 
-      <p class="readonly" *ngIf="!canDelete">
-        ℹ️ Режим просмотра — удаление карт недоступно
-      </p>
+      <div class="add-row">
+        <h3>Клиент</h3>
+        <input placeholder="Номер карты" [(ngModel)]="newCard.number" />
+        <input placeholder="ФИО (необязательно)" [(ngModel)]="newCard.name" />
+        <input placeholder="Телефон (необязательно)" [(ngModel)]="newCard.phone" />
+        <button (click)="addCard()">Добавить</button>
+      </div>
 
       <table>
         <thead>
           <tr>
-            <th>Карта</th><th>Тип</th><th>Баланс</th><th>ФИО</th><th>Телефон</th>
-            <th *ngIf="canDelete">Действия</th>
+            <th>Номер карты</th>
+            <th>ФИО</th>
+            <th>Телефон</th>
+            <th>Тип</th>
+            <th>Баланс</th>
+            <th>Пополнение</th>
+            <th>Действия</th>
           </tr>
         </thead>
         <tbody>
           <tr *ngFor="let c of cards">
-            <td><code>{{ c.card }}</code></td>
-            <td>{{ c.type }}</td>
-            <td><strong>{{ c.balance | number:'1.2-2' }} ₽</strong></td>
-            <td>{{ c.fullName || '—' }}</td>
+            <td>{{ c.number }}</td>
+            <td>{{ c.name || '—' }}</td>
             <td>{{ c.phone || '—' }}</td>
-            <td *ngIf="canDelete">
-              <button class="icon-btn" (click)="deleteCard(c.card)" title="Удалить">🗑️</button>
+            <td>{{ c.type }}</td>
+            <td>{{ c.balance | number:'1.2-2' }} ₽</td>
+            <td>
+              <input type="number" [(ngModel)]="topUpAmount[c.id]" placeholder="Сумма" />
+              <button (click)="topUp(c)">Пополнить</button>
             </td>
-          </tr>
-          <tr *ngIf="!cards.length">
-            <td [attr.colspan]="canDelete ? 6 : 5" style="text-align:center;color:#94a3b8;padding:24px">
-              Карт нет
+            <td>
+              <button>Отчёт</button>
+              <button (click)="deleteCard(c)">Удалить</button>
             </td>
           </tr>
         </tbody>
@@ -53,47 +59,58 @@ import { PermissionAction } from '../../../core/models/action.enum';
     </div>
   `,
   styles: [`
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-    h1 { color: #1e293b; margin: 0; }
-    .search input { padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 6px; width: 320px; }
-    .readonly { background: #dbeafe; color: #1e40af; padding: 10px 14px; border-radius: 6px; margin-bottom: 12px; font-size: 14px; }
-    table { width: 100%; background: #fff; border-collapse: collapse; border-radius: 8px; overflow: hidden; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e2e8f0; }
-    th { background: #f8fafc; color: #475569; }
-    code { background: #f1f5f9; padding: 2px 6px; border-radius: 4px; }
-    .icon-btn { background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px 8px; }
+    .cards-page { padding: 24px; }
+    .search-row, .add-row {
+      display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center;
+    }
+    input, button { padding: 6px 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: left; }
   `]
 })
-export class CardListComponent implements OnInit, OnDestroy {
+export class CardListComponent implements OnInit {
   private cardService = inject(ClientCardService);
-  private auth = inject(AuthService);
 
   cards: ClientCard[] = [];
   query = '';
-  private subs: Subscription[] = [];
+  newCard = { number: '', name: '', phone: '' };
+  topUpAmount: Record<number, number> = {};
 
-  get canDelete(): boolean {
-    return this.auth.hasPermission(ResourceType.ClientCards, PermissionAction.Delete);
+  ngOnInit(): void {
+    this.loadCards();
   }
 
-  ngOnInit(): void { this.load(); }
-  ngOnDestroy(): void { this.subs.forEach(s => s.unsubscribe()); }
-
-  load(): void {
-    this.subs.push(this.cardService.getCards().subscribe({
-      next: c => this.cards = c,
-      error: () => this.cards = []
-    }));
+  loadCards(): void {
+    this.cardService.getCards().subscribe((data: ClientCard[]) => this.cards = data);
   }
 
-  onSearch(): void {
-    if (!this.query.trim()) { this.load(); return; }
-    this.subs.push(this.cardService.searchCards(this.query).subscribe(c => this.cards = c));
+  search(): void {
+    if (!this.query.trim()) {
+      this.loadCards();
+      return;
+    }
+    this.cardService.searchCards(this.query).subscribe((data: ClientCard[]) => this.cards = data);
   }
 
-  deleteCard(card: string): void {
-    if (!this.canDelete) return;
-    if (!confirm(`Удалить карту ${card}?`)) return;
-    this.subs.push(this.cardService.deleteCard(card).subscribe(() => this.load()));
+  addCard(): void {
+    if (!this.newCard.number.trim()) return;
+    this.cardService.createCard(this.newCard).subscribe(() => {
+      this.newCard = { number: '', name: '', phone: '' };
+      this.loadCards();
+    });
+  }
+
+  topUp(card: ClientCard): void {
+    const amount = this.topUpAmount[card.id];
+    if (!amount || amount <= 0) return;
+    this.cardService.topUp(card.id, { amount }).subscribe(() => {
+      this.topUpAmount[card.id] = 0;
+      this.loadCards();
+    });
+  }
+
+  deleteCard(card: ClientCard): void {
+    if (!confirm(`Удалить карту ${card.number}?`)) return;
+    this.cardService.deleteCard(card.id).subscribe(() => this.loadCards());
   }
 }

@@ -13,13 +13,15 @@ export const routes: Routes = [
     loadComponent: () => import('./features/auth/logout/logout.component').then(m => m.LogoutComponent) },
 
   // ===== Основные =====
-  { path: 'dashboard', canActivate: [AuthGuard],
-    loadComponent: () => import('./features/dashboard/dashboard.component').then(m => m.DashboardComponent) },
-  { path: 'reports', canActivate: [AuthGuard],
-    loadComponent: () => import('./features/reports/report-list/report-list.component').then(m => m.ReportListComponent) },
-  { path: 'client-cards', canActivate: [AuthGuard],
-    loadComponent: () => import('./features/client-cards/card-list/card-list.component').then(m => m.CardListComponent) },
-
+ { path: 'dashboard', canActivate: [AuthGuard],
+  loadComponent: () => import('./features/dashboard/dashboard.component').then(m => m.DashboardComponent) },
+{ path: 'reports', canActivate: [AuthGuard],
+  loadComponent: () => import('./features/reports/report-list/report-list.component').then(m => m.ReportListComponent) },
+{ path: 'client-cards', canActivate: [AuthGuard],
+  loadComponent: () => import('./features/client-cards/card-list/card-list.component').then(m => m.CardListComponent) },
+{ path: 'admin/settings', canActivate: [AuthGuard, RoleGuard], data: { roles: [Role.ADMINISTRATOR, Role.DEVELOPER] },
+  loadComponent: () => import('./features/admin/settings/general-settings/general-settings.component').then(m => m.GeneralSettingsComponent) },
+  
   // ===== Админка =====
   {
     path: 'admin',

@@ -1,141 +1,124 @@
-﻿import { Component, OnInit, inject } from '@angular/core';
+// src/app/pages/dashboard/dashboard.component.ts
+import { Component, OnInit, OnDestroy, Inject, PLATFORM_ID } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { RouterLink } from '@angular/router';
-import { AuthService } from '../../core/services/auth.service';
-import { AdminService, PostSettings } from '../../core/services/admin.service';
-
-interface PostCardVm {
-  id: number;
-  isOnline: boolean;
-  services: { name: string; price: number }[];
-}
+import { FormsModule } from '@angular/forms';
+import { Subscription, interval } from 'rxjs';
+import { switchMap } from 'rxjs/operators';
+import { isPlatformBrowser } from '@angular/common';
+import { HttpClient } from '@angular/common/http';
+import { AdminService } from '../../services/admin.service';
+import { AuthService } from '../../services/auth.service';
+import { LocalPostService } from '../../services/local-post.service';
+import { PostCardComponent } from './post-card.component';
+import { KkmStatusComponent } from './kkm-status.component';
+import { TankLevelsComponent } from './tank-levels.component';
+import { ShiftTotalComponent } from './shift-total.component';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, RouterLink],
-  template: `
-    <div class="dashboard">
-      <p class="welcome" *ngIf="auth.currentUser$() as user">
-        Добро пожаловать, <strong>{{ user.fullName }}</strong>!
-      </p>
-
-      <h2 class="section-title">Посты автомойки</h2>
-
-      <div class="posts-grid">
-        <div class="post-card" *ngFor="let post of posts" [class.online]="post.isOnline">
-          <div class="post-header">
-            <span class="post-id">Пост {{ post.id }}</span>
-            <span class="post-status" [class.online]="post.isOnline">
-              {{ post.isOnline ? '● Онлайн' : '○ Оффлайн' }}
-            </span>
-          </div>
-
-          <div class="post-services">
-            <div *ngFor="let svc of post.services" class="service-row">
-              <span class="service-name">{{ svc.name }}</span>
-              <span class="service-price">{{ svc.price }} ₽</span>
-            </div>
-            <div *ngIf="!post.services.length" class="empty">
-              Нет услуг
-            </div>
-          </div>
-
-          <a class="post-link"
-             [routerLink]="['/admin/settings']"
-             [queryParams]="{ post: post.id }">
-            Настроить →
-          </a>
-        </div>
-
-        <div class="empty-state" *ngIf="!posts.length">
-          Посты ещё не настроены
-        </div>
-      </div>
-    </div>
-  `,
-  styles: [`
-    .dashboard { padding: 24px; }
-    .welcome { font-size: 18px; color: #1e293b; margin-bottom: 24px; }
-    .section-title { margin: 0 0 16px; color: #334155; }
-
-    .posts-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 16px;
-    }
-
-    .post-card {
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 16px;
-      display: flex;
-      flex-direction: column;
-      transition: box-shadow 0.15s ease;
-    }
-    .post-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-    .post-card.online { border-color: #22c55e; }
-
-    .post-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 12px;
-    }
-    .post-id { font-weight: 600; font-size: 16px; color: #0f172a; }
-    .post-status { font-size: 12px; color: #94a3b8; font-weight: 500; }
-    .post-status.online { color: #22c55e; }
-
-    .post-services { flex: 1; margin-bottom: 12px; }
-    .service-row {
-      display: flex;
-      justify-content: space-between;
-      padding: 6px 0;
-      font-size: 14px;
-      border-bottom: 1px dashed #e2e8f0;
-    }
-    .service-row:last-child { border-bottom: none; }
-    .service-name { color: #475569; }
-    .service-price { color: #0f172a; font-weight: 500; }
-    .empty { color: #94a3b8; font-style: italic; padding: 8px 0; }
-
-    .post-link {
-      display: inline-block;
-      margin-top: 8px;
-      color: #2563eb;
-      text-decoration: none;
-      font-weight: 500;
-      font-size: 14px;
-    }
-    .post-link:hover { text-decoration: underline; }
-
-    .empty-state {
-      padding: 32px;
-      text-align: center;
-      color: #94a3b8;
-      border: 1px dashed #cbd5e1;
-      border-radius: 10px;
-      grid-column: 1 / -1;
-    }
-  `]
+  imports: [
+    CommonModule,
+    FormsModule,
+    PostCardComponent,
+    KkmStatusComponent,
+    TankLevelsComponent,
+    ShiftTotalComponent
+  ],
+  templateUrl: './dashboard.component.html',
+  styleUrls: ['./dashboard.component.css']
 })
-export class DashboardComponent implements OnInit {
-  auth = inject(AuthService);
-  private admin = inject(AdminService);
+export class DashboardComponent implements OnInit, OnDestroy {
+  postIds: string[] = [];
+  isAdmin = false;
+  cameraUrls: { [key: string]: string } = {};
+  clientCards: { [key: string]: string } = {};       // NEW: номер карты клиента по постам
+  numberOfPosts = 8;
+  private subs: Subscription = new Subscription();
+  private isBrowser: boolean;
 
-  posts: PostCardVm[] = [];
+  constructor(
+    private admin: AdminService,
+    private auth: AuthService,
+    private http: HttpClient,
+    private localPost: LocalPostService,
+    @Inject(PLATFORM_ID) platformId: Object
+  ) {
+    this.isBrowser = isPlatformBrowser(platformId);
+  }
 
-  // Mock-статусы онлайна. В реальности — из MQTT/WebSocket.
-  private onlinePosts = new Set<number>([1, 2]);
+  ngOnInit() {
+    this.subs.add(this.auth.getRole().subscribe(role => this.isAdmin = role === 'admin'));
 
-  ngOnInit(): void {
-    this.admin.getSettings().subscribe(settings => {
-      this.posts = (settings.posts ?? []).map((p: PostSettings) => ({
-        id: p.postId,
-        isOnline: this.onlinePosts.has(p.postId),
-        services: (p.services ?? []).map(s => ({ name: s.name, price: s.price }))
-      }));
+    if (this.isBrowser) {
+      this.subs.add(
+        this.admin.getSettings().subscribe(settings => {
+          this.numberOfPosts = settings.numberOfPosts || 8;
+          this.postIds = Array.from({ length: this.numberOfPosts }, (_, i) => (i + 1).toString());
+          if (settings.cameras) {
+            this.cameraUrls = settings.cameras;
+          }
+        })
+      );
+      this.subs.add(
+        interval(30000).pipe(switchMap(() => this.admin.getSettings())).subscribe(settings => {
+          if (settings.cameras) this.cameraUrls = settings.cameras;
+        })
+      );
+
+      // 1. Загрузка статусов постов при старте
+      this.http.get('/api/posts').subscribe({
+        next: (posts: any) => this.applyPostsSnapshot(posts),
+        error: (err) => console.warn('⚠️ Не удалось загрузить статусы постов', err)
+      });
+
+      // 2. Периодический опрос (каждые 15 секунд)
+      this.subs.add(
+        interval(15000).pipe(
+          switchMap(() => this.http.get('/api/posts'))
+        ).subscribe({
+          next: (posts: any) => this.applyPostsSnapshot(posts),
+          error: (err) => console.warn('⚠️ Ошибка опроса статусов постов', err)
+        })
+      );
+    }
+  }
+
+  // NEW: единая обработка снимка состояния постов + clientCard
+  private applyPostsSnapshot(posts: any): void {
+    Object.keys(posts).forEach(postId => {
+      const state = posts[postId] || {};
+
+      this.localPost.syncFromMqtt(postId, {
+        busy: state.busy,
+        paused: state.paused,
+        balance: state.balance,
+        currentProgram: state.currentProgram,
+        elapsedSec: state.elapsedSec,
+        totalPaid: state.totalPaid,
+        receiptCount: state.receiptCount || 0
+      });
+
+      // Номер карты клиента, привязанной к посту (приходит с бэкенда,
+      // куда он попадает через MQTT-топик posts/{postId}/clientcard)
+      if (state.clientCard) {
+        this.clientCards[postId] = state.clientCard;
+      } else {
+        delete this.clientCards[postId];
+      }
     });
+  }
+
+  getCameraUrl(postId: string): string {
+    return this.cameraUrls[postId] || '';
+  }
+
+  // NEW: геттер для шаблона
+  getClientCard(postId: string): string {
+    return this.clientCards[postId] || '';
+  }
+
+  ngOnDestroy() {
+    this.subs.unsubscribe();
   }
 }

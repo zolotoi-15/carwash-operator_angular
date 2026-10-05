@@ -1,29 +1,33 @@
 ﻿import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { catchError, throwError } from 'rxjs';
+import { Router } from '@angular/router';
 import { AuthService } from '../services/auth.service';
 import { NotificationService } from '../services/notification.service';
-import { Router } from '@angular/router';
 
 export const errorInterceptor: HttpInterceptorFn = (req, next) => {
   const auth = inject(AuthService);
-  const notif = inject(NotificationService);
   const router = inject(Router);
+  const notify = inject(NotificationService);
 
   return next(req).pipe(
-    catchError((err: HttpErrorResponse) => {
-      // Не трогаем запросы логина — обрабатываются в компоненте
-      if (req.url.includes('/auth/login')) {
-        return throwError(() => err);
+    catchError((error: HttpErrorResponse) => {
+      let message = 'Произошла ошибка';
+
+      if (error.status === 401) {
+        auth.logout();
+        router.navigate(['/login']);
+        message = 'Сессия истекла. Войдите заново.';
+      } else if (error.status === 403) {
+        message = 'У вас нет прав для этого действия.';
+      } else if (error.status === 0) {
+        message = 'Сервер недоступен. Проверьте соединение.';
+      } else if (error.error?.message) {
+        message = error.error.message;
       }
-      if (err.status === 401) auth.logout();
-      else if (err.status === 403) {
-        notif.error('Доступ запрещён');
-        router.navigate(['/unauthorized']);
-      } else if (err.status >= 500) {
-        notif.error('Ошибка сервера');
-      }
-      return throwError(() => err);
+
+      notify.error(message);
+      return throwError(() => error);
     })
   );
 };

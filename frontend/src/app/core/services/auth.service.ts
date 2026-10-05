@@ -8,75 +8,105 @@ import { Role } from '../models/role.enum';
 import { ResourceType } from '../models/resource.enum';
 import { PermissionAction } from '../models/permission.model';
 
-interface LoginCredentials { username: string; password: string; }
-interface LoginResponse { token: string; user: User; }
+interface LoginCredentials {
+  username: string;
+  password: string;
+}
+
+interface LoginResponse {
+  token: string;
+  user: User;
+}
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private http = inject(HttpClient);
   private router = inject(Router);
 
-  // ===== STATE =====
+  // ================= STATE (Signals) =================
   private readonly currentUser = signal<User | null>(null);
   private readonly tokenSignal = signal<string | null>(null);
 
-  // ===== PUBLIC SELECTORS =====
+  // ================= PUBLIC SELECTORS =================
   readonly currentUser$ = this.currentUser.asReadonly();
+
   readonly isAuthenticated = computed(() => this.currentUser() !== null);
+
   readonly userRole = computed<Role | null>(
     () => this.currentUser()?.group?.name ?? null
   );
+
   readonly isDeveloper = computed(() => this.userRole() === Role.DEVELOPER);
+
   readonly isAdministrator = computed(() =>
     this.userRole() === Role.ADMINISTRATOR || this.userRole() === Role.DEVELOPER
   );
 
-  // ===== MOCK USERS (удалить после подключения API) =====
-  private readonly mockUsers = [
+  // ================= MOCK USERS =================
+  private readonly mockUsers: Array<{ username: string; password: string; user: User }> = [
     {
-      username: 'admin', password: 'admin',
+      username: 'admin',
+      password: 'admin',
       user: {
-        id: 1, username: 'admin', name: 'Администратор',
+        id: 1,
+        username: 'admin',
+        name: 'Администратор',
         fullName: 'Администратор Системы',
-        email: 'admin@carwash.local', groupId: 1,
+        email: 'admin@carwash.local',
+        groupId: 1,
         group: { id: 1, name: Role.ADMINISTRATOR, displayName: 'Администратор' }
-      } as User
+      }
     },
     {
-      username: 'dev', password: 'dev',
+      username: 'dev',
+      password: 'dev',
       user: {
-        id: 2, username: 'dev', name: 'Разработчик',
+        id: 2,
+        username: 'dev',
+        name: 'Разработчик',
         fullName: 'Разработчик Системы',
-        email: 'dev@carwash.local', groupId: 2,
+        email: 'dev@carwash.local',
+        groupId: 2,
         group: { id: 2, name: Role.DEVELOPER, displayName: 'Разработчик' }
-      } as User
+      }
     },
     {
-      username: 'operator', password: 'operator',
+      username: 'operator',
+      password: 'operator',
       user: {
-        id: 3, username: 'operator', name: 'Оператор',
+        id: 3,
+        username: 'operator',
+        name: 'Оператор',
         fullName: 'Оператор Смены',
-        email: 'operator@carwash.local', groupId: 3,
+        email: 'operator@carwash.local',
+        groupId: 3,
         group: { id: 3, name: Role.OPERATOR, displayName: 'Оператор' }
-      } as User
+      }
     }
   ];
+  // ================================================
 
-  // ===== PUBLIC API =====
+  // ================= PUBLIC API =================
+
   login(credentials: LoginCredentials): Observable<LoginResponse> {
     const found = this.mockUsers.find(
       m => m.username === credentials.username && m.password === credentials.password
     );
-    if (!found) return throwError(() => new Error('Неверный логин или пароль'));
+
+    if (!found) {
+      return throwError(() => new Error('Неверный логин или пароль'));
+    }
 
     const response: LoginResponse = {
       token: 'mock-token-' + found.user.id,
       user: found.user
     };
+
     return of(response).pipe(tap(res => this.setSession(res)));
 
     // REAL:
-    // return this.http.post<LoginResponse>(`${environment.apiUrl}/auth/login`, credentials)
+    // return this.http
+    //   .post<LoginResponse>(`${environment.apiUrl}/auth/login`, credentials)
     //   .pipe(tap(res => this.setSession(res)));
   }
 
@@ -88,44 +118,68 @@ export class AuthService {
   restoreSession(): void {
     const token = localStorage.getItem(environment.tokenKey);
     const userJson = localStorage.getItem(environment.tokenKey + '_user');
+
     if (!token || !userJson) return;
+
     try {
+      const user = JSON.parse(userJson) as User;
       this.tokenSignal.set(token);
-      this.currentUser.set(JSON.parse(userJson) as User);
+      this.currentUser.set(user);
     } catch {
       this.clearSession();
     }
   }
 
-  // ===== GETTERS (для гардов и интерцепторов) =====
-  get currentUserValue(): User | null { return this.currentUser(); }
-  getToken(): string | null { return this.tokenSignal(); }
-  get token(): string | null { return this.tokenSignal(); }   // на случай прямого доступа
+  // ================= GETTERS =================
 
-  // ===== ROLE HELPERS =====
-  hasRole(role: Role): boolean { return this.userRole() === role; }
+  get currentUserValue(): User | null {
+    return this.currentUser();
+  }
+
+  getToken(): string | null {
+    return this.tokenSignal();
+  }
+
+  get token(): string | null {
+    return this.tokenSignal();
+  }
+
+  // ================= ROLE HELPERS =================
+
+  hasRole(role: Role): boolean {
+    return this.userRole() === role;
+  }
 
   hasAnyRole(roles: Role[]): boolean {
     const current = this.userRole();
     return !!current && roles.includes(current);
   }
 
-  hasDeveloperAccess(): boolean { return this.hasRole(Role.DEVELOPER); }
+  hasDeveloperAccess(): boolean {
+    return this.hasRole(Role.DEVELOPER);
+  }
 
   hasAdminAccess(): boolean {
     return this.hasAnyRole([Role.ADMINISTRATOR, Role.DEVELOPER]);
   }
 
-  hasPermission(_resource: ResourceType, _action: PermissionAction): boolean {
-    // TODO: подключить PermissionService
+  // ================= PERMISSIONS =================
+
+  hasPermission(resource: ResourceType, action: PermissionAction): boolean {
     const role = this.userRole();
+
     if (role === Role.DEVELOPER) return true;
-    if (role === Role.ADMINISTRATOR) return true;
-    if (role === Role.OPERATOR) return _action === PermissionAction.Read;
+    if (role === Role.ADMINISTRATOR) {
+      return action !== PermissionAction.Delete;
+    }
+    if (role === Role.OPERATOR) {
+      return action === PermissionAction.Read;
+    }
     return false;
   }
 
-  // ===== PRIVATE =====
+  // ================= PRIVATE =================
+
   private setSession(res: LoginResponse): void {
     this.tokenSignal.set(res.token);
     this.currentUser.set(res.user);

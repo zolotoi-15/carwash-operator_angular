@@ -1,0 +1,108 @@
+.card-report {
+  padding: 16px;
+
+  &__header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+
+    h2 {
+      margin: 0;
+      font-size: 20px;
+      flex: 1 1 auto;
+    }
+
+    .back {
+      padding: 6px 10px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+    }
+
+    .filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+
+      input[type='date'] {
+        padding: 4px 6px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+      }
+
+      button {
+        padding: 6px 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        background: #f5f5f5;
+        cursor: pointer;
+
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+      }
+    }
+  }
+
+  .error {
+    color: #b00020;
+  }
+
+  .loading {
+    color: #666;
+  }
+
+  .summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 16px;
+
+    .summary-item {
+      padding: 8px 12px;
+      border: 1px solid #e0e0e0;
+      border-radius: 6px;
+      background: #fafafa;
+
+      .label {
+        color: #666;
+        margin-right: 6px;
+      }
+
+      .value {
+        font-weight: 600;
+      }
+    }
+  }
+
+  .operations {
+    width: 100%;
+    border-collapse: collapse;
+
+    th, td {
+      border: 1px solid #e0e0e0;
+      padding: 6px 10px;
+      text-align: left;
+    }
+
+    th {
+      background: #f5f5f5;
+      font-weight: 600;
+    }
+
+    .negative {
+      color: #b00020;
+    }
+  }
+
+  .empty {
+    padding: 12px;
+    color: #888;
+    text-align: center;
+  }
+}

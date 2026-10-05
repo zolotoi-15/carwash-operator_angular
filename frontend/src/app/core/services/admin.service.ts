@@ -10,22 +10,32 @@ export interface ServiceConfig {
 }
 
 export interface PostSettings {
-  postId: number;
-  services: ServiceConfig[];            // 👈 обязательно, без ?
+  postId: number;                                    // 👈 обязательно
+  services: ServiceConfig[];                         // 👈 обязательно, без ?
   relayMask: Record<string, boolean>;
   vfdFrequencies: Record<string, number>;
   dimmerMask: Record<string, boolean>;
   buttonInputs: Record<string, boolean>;
   relayDelays: Record<string, { onDelay: number; offDelay: number }>;
+  cameras?: Record<string, string>;
 }
 
 export interface GeneralSettings {
   posts: PostSettings[];
-  mqtt: { host: string; port: number };
-  kkm: { enabled: boolean; model: string };
+  mqtt: {
+    brokerUrl: string;      // 👈 вместо host/port
+    username?: string;
+    password?: string;
+  };
+  kkm: {
+    enabled: boolean;
+    model: string;
+    cashierName?: string;
+    fiscalShiftNumber?: number;
+  };
+  numberOfPosts: number;
 }
 
-// 👇 Экспорт, которого не хватало
 export const emptyPostSettings: PostSettings = {
   postId: 0,
   services: [],
@@ -33,7 +43,15 @@ export const emptyPostSettings: PostSettings = {
   vfdFrequencies: {},
   dimmerMask: {},
   buttonInputs: {},
-  relayDelays: {}
+  relayDelays: {},
+  cameras: {}
+};
+
+export const emptyGeneralSettings: GeneralSettings = {
+  posts: [],
+  mqtt: { brokerUrl: '', username: '', password: '' },
+  kkm: { enabled: false, model: '', cashierName: '', fiscalShiftNumber: 0 },
+  numberOfPosts: 0
 };
 
 @Injectable({ providedIn: 'root' })
@@ -42,10 +60,40 @@ export class AdminService {
   private apiUrl = `${environment.apiUrl}/admin`;
 
   private mockSettings: GeneralSettings = {
-    posts: [{ ...emptyPostSettings, postId: 1 }],
-    mqtt: { host: 'localhost', port: 1883 },
-    kkm: { enabled: false, model: '' }
-  };
+    posts: [
+      {
+        postId: 1,
+        services: [
+          { name: 'Вода', price: 30, free_time_sec: 0 },
+          { name: 'Пена', price: 42, free_time_sec: 0 },
+          { name: 'Воск', price: 45, free_time_sec: 0 }
+        ],
+        relayMask: {},
+        vfdFrequencies: {},
+        dimmerMask: {},
+        buttonInputs: {},
+        relayDelays: {}
+      },
+      {
+        postId: 2,
+        services: [
+          { name: 'Вода', price: 30, free_time_sec: 0 }
+        ],
+        relayMask: {},
+        vfdFrequencies: {},
+        dimmerMask: {},
+        buttonInputs: {},
+        relayDelays: {}
+      }
+    ],
+ mqtt: {
+    brokerUrl: 'wss://m2.wqtt.ru:13260',
+    username: 'u_GGENLB',
+    password: ''
+  },
+  kkm: { enabled: false, model: '', cashierName: 'Оператор', fiscalShiftNumber: 0 },
+  numberOfPosts: 8
+};
 
   getSettings(): Observable<GeneralSettings> {
     return of(this.mockSettings);
@@ -67,6 +115,7 @@ export class AdminService {
 
   copySettingsFromPost1ToAll(): Observable<void> {
     const post1 = this.mockSettings.posts[0];
+    if (!post1) return of(void 0);
     this.mockSettings.posts = this.mockSettings.posts.map(p => ({
       ...p,
       services: [...post1.services],
