@@ -1,7 +1,7 @@
 // src/app/components/camera-with-detection/camera-with-detection.component.ts
 import { Component, Input, OnInit, OnDestroy, ElementRef, ViewChild, AfterViewInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { DetectionService } from '../../core/servicesdetection.service';
+import { DetectionService } from '../../core/services/detection.service';
 import { Subscription } from 'rxjs';
 
 @Component({

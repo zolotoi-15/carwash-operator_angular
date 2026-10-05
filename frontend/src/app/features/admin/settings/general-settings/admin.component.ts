@@ -9,7 +9,7 @@ import { TanksComponent } from './components/tanks.component';
 import { KkmSettingsComponent } from './components/kkm-settings.component';
 import { CamerasComponent } from './components/cameras.component';
 import { ServicesComponent } from './components/services.component';
-import { AdminService } from '../../core/servicesadmin.service';
+import { AdminService } from '../../core/services/admin.service';
 import { MqttSettingsComponent } from './components/mqtt-settings.component';
 
 @Component({

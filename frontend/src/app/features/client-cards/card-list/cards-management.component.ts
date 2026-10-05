@@ -5,8 +5,8 @@ import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 
 import { ClientCard, ClientCardType } from '../../models/client-card.model';
-import { ClientCardService } from '../../core/servicesclient-card.service';
-import { MqttService, CardScanEvent } from '../../core/servicesmqtt.service';
+import { ClientCardService } from '../../core/services/client-card.service';
+import { MqttService, CardScanEvent } from '../../core/services/mqtt.service';
 
 interface EditableCard extends ClientCard {
   topUpAmount?: number;

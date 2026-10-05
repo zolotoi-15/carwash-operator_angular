@@ -32,6 +32,15 @@ export class ReceiptService {
     const current = this.receiptsSubject.value;
     this.receiptsSubject.next([receipt, ...current]);
   }
+  
+  getReceiptsForPeriod(from: string, to: string): ReceiptData[] {
+  const fromTs = new Date(from).getTime();
+  const toTs = new Date(to).getTime();
+  return this.receiptsSubject.value.filter(r => {
+    const ts = new Date(r.date).getTime();
+    return ts >= fromTs && ts <= toTs;
+  });
+}
 
   // ==== API ====
   getReceipts(filter?: ReceiptFilter): Observable<ReceiptData[]> {
