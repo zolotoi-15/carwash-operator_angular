@@ -12,6 +12,7 @@ const mqtt = require('mqtt');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
 require('dotenv').config();
+require('./local-mqtt-broker');
 
 // ---------- MQTT Client ----------
 let mqttClient = null;

@@ -29,6 +29,10 @@ export class MqttService {
   private username = '';
   private password = '';
   private pendingCommands: { postId: string; command: string }[] = [];
+  private readonly MAX_PENDING_COMMANDS = 50; // ограничение очереди
+  private reconnectAttempts = 0;
+  private readonly MAX_RECONNECT_ATTEMPTS = 10;
+  private reconnectTimer: any = null;
 
   private postStatusSubject = new Subject<any>();
   private systemConfigSubject = new Subject<any>();
@@ -76,27 +80,48 @@ export class MqttService {
   }
 
   connect(brokerUrl: string, username?: string, password?: string) {
-    if (this.client) { this.client.end(true); this.client = null; }
+    // Нормализация URL: mqtt:// -> ws://, mqtts:// -> wss://
+    let normalizedUrl = brokerUrl;
+    if (brokerUrl.startsWith('mqtt://')) {
+      normalizedUrl = brokerUrl.replace('mqtt://', 'ws://');
+    } else if (brokerUrl.startsWith('mqtts://')) {
+      normalizedUrl = brokerUrl.replace('mqtts://', 'wss://');
+    }
 
-    this.brokerUrl = brokerUrl;
+    if (this.client) {
+      this.client.end(true);
+      this.client = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.brokerUrl = normalizedUrl;
     this.username = username || '';
     this.password = password || '';
 
-    const options: any = {};
+    const options: any = {
+      clientId: 'carwash_' + Math.random().toString(16).substring(2, 10),
+      connectTimeout: 5000,
+      reconnectPeriod: 0, // отключаем встроенный авто-reconnect, управляем сами
+    };
     if (this.username) options.username = this.username;
     if (this.password) options.password = this.password;
 
-    this.client = mqtt.connect(brokerUrl, options);
+    console.log(`Попытка подключения к MQTT: ${this.brokerUrl}`);
+    this.client = mqtt.connect(this.brokerUrl, options);
 
     this.client.on('connect', () => {
-      console.log('MQTT connected to', brokerUrl);
+      console.log('MQTT connected to', this.brokerUrl);
+      this.reconnectAttempts = 0; // сбрасываем счётчик при успехе
 
       // === ПОДПИСКИ ===
       this.client.subscribe('posts/+/status');
       this.client.subscribe('posts/+/lwt');
       this.client.subscribe('posts/+/local_LWT');
       this.client.subscribe('posts/+/config');
-      this.client.subscribe('posts/+/clientcard');   // 👈 НОВОЕ — карта приложена к посту
+      this.client.subscribe('posts/+/clientcard');
       this.client.subscribe('system/config');
       this.client.subscribe('shift/total');
       this.client.subscribe('kkm/print');
@@ -104,9 +129,12 @@ export class MqttService {
       this.client.subscribe('cards/+/scan');
 
       localStorage.setItem('mqttSettings', JSON.stringify({
-        brokerUrl, username: this.username, password: this.password
+        brokerUrl: this.brokerUrl,
+        username: this.username,
+        password: this.password
       }));
 
+      // Отправляем накопленные команды
       if (this.pendingCommands.length) {
         const cmds = [...this.pendingCommands];
         this.pendingCommands = [];
@@ -121,7 +149,7 @@ export class MqttService {
       if (
         topic === 'card-reader/scan' ||
         (topic.startsWith('cards/') && topic.endsWith('/scan')) ||
-        (topic.startsWith('posts/') && topic.endsWith('/clientcard'))   // 👈
+        (topic.startsWith('posts/') && topic.endsWith('/clientcard'))
       ) {
         this.handleCardScan(topic, msgStr);
         return;
@@ -175,8 +203,42 @@ export class MqttService {
       }
     });
 
-    this.client.on('error', (err: any) => console.error('MQTT error:', err));
-    this.client.on('close', () => console.warn('MQTT connection closed'));
+    // Обработка ошибок
+    this.client.on('error', (err: any) => {
+      console.error('MQTT error:', err);
+    });
+
+    // Слушаем ошибки WebSocket-потока
+    if (this.client.stream) {
+      this.client.stream.on('error', (err: any) => {
+        console.error('MQTT WebSocket stream error:', err);
+      });
+    }
+
+    this.client.on('close', () => {
+      console.warn('MQTT connection closed');
+      this.scheduleReconnect();
+    });
+
+    this.client.on('offline', () => {
+      console.warn('MQTT offline');
+      this.scheduleReconnect();
+    });
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectAttempts >= this.MAX_RECONNECT_ATTEMPTS) {
+      console.error('❌ Достигнут лимит попыток подключения к MQTT. Проверьте настройки брокера.');
+      return;
+    }
+
+    this.reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000); // до 30 сек
+    console.log(`Повторное подключение к MQTT через ${delay} мс (попытка ${this.reconnectAttempts}/${this.MAX_RECONNECT_ATTEMPTS})`);
+
+    this.reconnectTimer = setTimeout(() => {
+      this.connect(this.brokerUrl, this.username, this.password);
+    }, delay);
   }
 
   // ==== Карт-ридер ====
@@ -185,7 +247,6 @@ export class MqttService {
     let cardNumber = '';
     let postId: string | undefined;
 
-    // Извлекаем postId из топика posts/<N>/clientcard
     if (topic.startsWith('posts/')) {
       const parts = topic.split('/');
       if (parts.length >= 3) postId = parts[1];
@@ -207,7 +268,6 @@ export class MqttService {
 
     if (!postId) postId = this.activePostId ?? Object.keys(this.postBalances)[0];
 
-    // Баланс поста → переносим на карту
     const balance = postId ? this.getPostBalance(postId) : 0;
     let topUpStatus: 'ok' | 'skipped' | 'error' = 'skipped';
     let topUpResult: any = null;
@@ -246,7 +306,11 @@ export class MqttService {
     if (this.client?.connected) {
       this.client.publish(`posts/${postId}/command`, JSON.stringify({ command }));
     } else {
-      console.warn(`MQTT не подключён, команда "${command}" в очередь (пост ${postId})`);
+      // Ограничиваем размер очереди
+      if (this.pendingCommands.length >= this.MAX_PENDING_COMMANDS) {
+        this.pendingCommands.shift(); // удаляем самую старую
+      }
+      console.warn(`MQTT не подключён, команда "${command}" в очередь (пост ${postId}, всего: ${this.pendingCommands.length})`);
       this.pendingCommands.push({ postId, command });
     }
   }

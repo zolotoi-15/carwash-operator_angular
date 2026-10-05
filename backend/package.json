@@ -5,11 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-	"test": "jest --runInBand --passWithNoTests",
-  "test:watch": "jest --watch",
+    "test": "jest --runInBand --passWithNoTests",
+    "test:watch": "jest --watch",
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "aedes": "^1.2.0",
     "axios": "^1.6.8",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -18,7 +19,8 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.5.1",
     "mqtt": "^5.3.6",
-    "pdfkit": "^0.15.0"
+    "pdfkit": "^0.15.0",
+    "websocket-stream": "^5.5.2"
   },
   "devDependencies": {
     "eslint": "^10.2.0",

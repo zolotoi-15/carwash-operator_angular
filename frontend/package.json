@@ -22,9 +22,11 @@
     "@angular/platform-browser-dynamic": "^20.3.33",
     "@angular/router": "^20.3.33",
     "@auth0/angular-jwt": "^5.2.0",
+    "aedes": "^1.2.0",
     "mqtt": "^5.15.1",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0",
+    "websocket-stream": "^5.5.2",
     "zone.js": "0.15.1"
   },
   "devDependencies": {
