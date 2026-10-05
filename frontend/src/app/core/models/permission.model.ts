@@ -1,23 +1,23 @@
 import { ResourceType } from './resource.enum';
-import { PermissionAction } from './action.enum';
+
+export { ResourceType };   // ← реэкспорт
+
+export enum PermissionAction {
+  View = 'view',
+  Create = 'create',
+  Update = 'update',
+  Delete = 'delete'
+}
 
 export interface Permission {
   id: number;
   groupId: number;
   resource: ResourceType;
-  actions: PermissionAction[];
+  action: PermissionAction;
 }
 
 export interface PermissionMatrix {
   [groupId: number]: {
     [resource in ResourceType]?: PermissionAction[];
   };
-}
-
-export interface UpdatePermissionsDto {
-  groupId: number;
-  permissions: Array<{
-    resource: ResourceType;
-    actions: PermissionAction[];
-  }>;
 }
