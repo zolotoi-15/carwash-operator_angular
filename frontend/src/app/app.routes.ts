@@ -34,6 +34,8 @@ export const routes: Routes = [
   loadComponent: () => import('./features/admin/settings/general-settings/general-settings.component')
     .then(m => m.GeneralSettingsComponent)
 },
+  { path: 'users', component: UsersComponent },
+
 
   // ===== НОВЫЕ RBAC-разделы (не трогают оригиналы) =====
   {
