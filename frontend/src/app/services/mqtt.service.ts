@@ -274,59 +274,26 @@ export class MqttService {
       cardNumber = msgStr.trim();
     }
 
-    if (!cardNumber) {
-      console.warn('⚠️ Пустое событие сканирования карты');
+    // Игнорируем служебные события со снятием карты
+    if (!cardNumber || cardNumber.toUpperCase() === 'NULL') {
+      console.warn('⚠️ Пустое или NULL-событие сканирования карты, пропущено');
       return;
     }
     cardNumber = cardNumber.toUpperCase();
 
-    // Если пост не указан — берём активный или первый известный
     if (!postId) {
       postId = this.activePostId ?? Object.keys(this.postBalances)[0];
     }
 
-    const balance = postId != null ? (this.postBalances[postId] ?? 0) : 0;
-
-    // Защита от дублирования
-    const now = Date.now();
-    const canTransfer = balance > 0 && now - this.lastTransferAt > 2000;
-
+    // ВАЖНО: НЕ вызываем topUpFromPost. Механизм начисления баланса
+    // карты полностью реализован на ESP32 через clientcardbalance.
+    // Angular только оповещает UI о факте сканирования.
     const event: CardScanEvent = {
       card: cardNumber,
       source: 'reader',
-      timestamp: now,
+      timestamp: Date.now(),
       postId,
     };
-
-    if (canTransfer) {
-      this.lastTransferAt = now;
-      try {
-        console.log(
-          `💳 Карта ${cardNumber} считана на посту ${postId}, ` +
-          `баланс терминала ${balance.toFixed(2)} ₽ — переносим на карту`
-        );
-
-        const result = await firstValueFrom(
-          this.clientCardService.topUpFromPost(cardNumber, postId!, balance)
-        );
-
-        this.postBalances[postId!] = 0;
-        this.sendCommand(postId!, 'reset_balance');
-
-        event.topUpAmount = balance;
-        event.topUpStatus = 'ok';
-        event.topUpResult = result;
-        console.log(`✅ Баланс ${balance.toFixed(2)} ₽ перенесён с поста ${postId} на карту ${cardNumber}`);
-      } catch (err) {
-        console.error(`❌ Ошибка переноса баланса с поста ${postId} на карту ${cardNumber}`, err);
-        event.topUpAmount = balance;
-        event.topUpStatus = 'error';
-      }
-    } else if (balance > 0) {
-      // Баланс есть, но защита от повторного переноса
-      event.topUpAmount = balance;
-      event.topUpStatus = 'skipped';
-    }
 
     this.cardScanSubject.next(event);
   }
