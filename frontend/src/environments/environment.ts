@@ -1,8 +1,8 @@
 export const environment = {
   production: false,
   apiUrl: 'http://95.31.50.55/api',
-  useMockAuth: true
   tokenKey: 'carwash_token',
+  useMockAuth: true
   userKey: 'carwash_user',
   permissionsKey: 'carwash_permissions',
   defaultLanguage: 'ru',
