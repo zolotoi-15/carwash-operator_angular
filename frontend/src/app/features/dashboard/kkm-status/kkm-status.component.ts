@@ -1,8 +1,7 @@
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
-import { MqttService } from '../../../../core/services/mqtt.service';
-import { ReceiptService } from '../../../../core/services/receipt.service';
+import { MqttService } from '../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-kkm-status',
@@ -38,7 +37,7 @@ import { ReceiptService } from '../../../../core/services/receipt.service';
 
       <div class="kkm-row">
         <span class="label">Фискальная смена №:</span>
-        <span class="value mono">{{ kkm.shiftNumber ?? '—' }}</span>
+        <span class="value mono">{{ kkm.shiftNumber }}</span>
       </div>
 
       <div class="kkm-row">
@@ -52,13 +51,7 @@ import { ReceiptService } from '../../../../core/services/receipt.service';
     </div>
   `,
   styles: [`
-    .card {
-      background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      padding: 16px;
-    }
-    .kkm-card { background: #6d28d9; color: #e9d5ff; }
+    .card { background: #6d28d9; color: #e9d5ff; border-radius: 10px; padding: 16px; }
     .card-title { margin: 0 0 12px; font-size: 15px; color: #fff; }
     .kkm-row {
       display: flex; justify-content: space-between;
@@ -80,7 +73,6 @@ import { ReceiptService } from '../../../../core/services/receipt.service';
 })
 export class KkmStatusComponent implements OnInit, OnDestroy {
   private mqtt = inject(MqttService);
-  private receipts = inject(ReceiptService);
 
   kkm = {
     ready: false,
@@ -105,12 +97,12 @@ export class KkmStatusComponent implements OnInit, OnDestroy {
       };
     });
 
-    // Mock на случай, пока MQTT не подключён
+    // Mock для демонстрации, пока MQTT не подключён
     this.kkm = {
       ready: true,
-      connected: false,
+      connected: true,
       paper: true,
-      number: '—',
+      number: '0000111118041361',
       shiftNumber: 0,
       cashier: 'Оператор'
     };

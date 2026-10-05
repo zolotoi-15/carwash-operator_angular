@@ -1,4 +1,5 @@
 .post-card {
+  position: relative;
   background: #fff;
   border: 1px solid #e2e8f0;
   border-radius: 10px;
@@ -11,6 +12,25 @@
   &:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
   &.offline { opacity: 0.65; }
   &.busy { border-color: #ef4444; }
+}
+
+.card-flash {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  animation: flashIn 0.3s ease;
+  z-index: 10;
+}
+
+@keyframes flashIn {
+  from { transform: scale(0.7); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
 }
 
 .post-header {
@@ -32,15 +52,14 @@
   &.online { color: #16a34a; background: #dcfce7; }
   &.offline { color: #dc2626; background: #fee2e2; }
 }
-
 .post-busy {
   font-size: 13px;
   font-weight: 600;
   padding: 4px 0;
+
   .free { color: #16a34a; }
   .occupied { color: #dc2626; }
 }
-
 .post-info {
   font-size: 12px;
   color: #475569;
@@ -52,7 +71,6 @@
   }
   .value { color: #0f172a; font-weight: 500; }
 }
-
 .functions {
   display: grid;
   grid-template-columns: repeat(5, 1fr);
@@ -76,7 +94,6 @@
     }
   }
 }
-
 .sum-row {
   display: flex;
   justify-content: space-between;
@@ -93,7 +110,6 @@
     color: #0f172a;
   }
 }
-
 .actions {
   display: flex;
   flex-wrap: wrap;

@@ -1,13 +1,9 @@
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
-import { MqttService } from '../../../../core/services/mqtt.service';
+import { MqttService } from '../../../core/services/mqtt.service';
 
-interface Tank {
-  key: string;
-  label: string;
-  level: number;   // 0..100
-}
+interface Tank { key: string; label: string; level: number; }
 
 @Component({
   selector: 'app-tank-levels',
@@ -16,7 +12,6 @@ interface Tank {
   template: `
     <div class="card">
       <h3 class="card-title">🛢️ Уровни воды и химии</h3>
-
       <div class="tanks">
         <div class="tank" *ngFor="let t of tanks">
           <div class="tank-bar">
@@ -29,24 +24,14 @@ interface Tank {
     </div>
   `,
   styles: [`
-    .card {
-      background: #1e293b; color: #e2e8f0;
-      border-radius: 10px; padding: 16px;
-    }
+    .card { background: #1e293b; color: #e2e8f0; border-radius: 10px; padding: 16px; }
     .card-title { margin: 0 0 16px; font-size: 15px; color: #fff; }
-    .tanks {
-      display: flex; justify-content: space-around; gap: 8px;
-      align-items: flex-end; height: 160px;
-    }
-    .tank {
-      display: flex; flex-direction: column;
-      align-items: center; flex: 1;
-    }
+    .tanks { display: flex; justify-content: space-around; gap: 8px; align-items: flex-end; height: 160px; }
+    .tank { display: flex; flex-direction: column; align-items: center; flex: 1; }
     .tank-bar {
       width: 40px; height: 110px;
       background: rgba(255,255,255,0.08);
       border-radius: 6px; overflow: hidden;
-      position: relative;
       display: flex; align-items: flex-end;
     }
     .tank-fill {
@@ -54,24 +39,19 @@ interface Tank {
       background: linear-gradient(to top, #38bdf8, #0ea5e9);
       transition: height 0.3s ease;
     }
-    .tank-percent {
-      margin-top: 6px; font-size: 12px; font-weight: 600; color: #fff;
-    }
-    .tank-label {
-      margin-top: 2px; font-size: 11px; color: #94a3b8;
-      text-align: center;
-    }
+    .tank-percent { margin-top: 6px; font-size: 12px; font-weight: 600; color: #fff; }
+    .tank-label { margin-top: 2px; font-size: 11px; color: #94a3b8; text-align: center; }
   `]
 })
 export class TankLevelsComponent implements OnInit, OnDestroy {
   private mqtt = inject(MqttService);
 
   tanks: Tank[] = [
-    { key: 'water',   label: 'Вода',    level: 0 },
-    { key: 'osmosis', label: 'Осмос',   level: 0 },
-    { key: 'foam',    label: 'Пена',    level: 0 },
-    { key: 'wax',     label: 'Воск',    level: 0 },
-    { key: 'teflon',  label: 'Тефлон',  level: 0 }
+    { key: 'water',   label: 'Вода',   level: 0 },
+    { key: 'osmosis', label: 'Осмос',  level: 0 },
+    { key: 'foam',    label: 'Пена',   level: 0 },
+    { key: 'wax',     label: 'Воск',   level: 0 },
+    { key: 'teflon',  label: 'Тефлон', level: 0 }
   ];
 
   private sub?: Subscription;
@@ -86,17 +66,15 @@ export class TankLevelsComponent implements OnInit, OnDestroy {
       }));
     });
 
-    // Mock для демонстрации
+    // Mock
     this.tanks = [
-      { key: 'water',   label: 'Вода',    level: 26 },
-      { key: 'osmosis', label: 'Осмос',   level: 20 },
-      { key: 'foam',    label: 'Пена',    level: 57 },
-      { key: 'wax',     label: 'Воск',    level: 47 },
-      { key: 'teflon',  label: 'Тефлон',  level: 72 }
+      { key: 'water',   label: 'Вода',   level: 26 },
+      { key: 'osmosis', label: 'Осмос',  level: 20 },
+      { key: 'foam',    label: 'Пена',   level: 57 },
+      { key: 'wax',     label: 'Воск',   level: 47 },
+      { key: 'teflon',  label: 'Тефлон', level: 72 }
     ];
   }
 
-  ngOnDestroy(): void {
-    this.sub?.unsubscribe();
-  }
+  ngOnDestroy(): void { this.sub?.unsubscribe(); }
 }

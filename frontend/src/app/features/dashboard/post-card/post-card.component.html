@@ -1,5 +1,9 @@
 <div class="post-card" [class.busy]="busy" [class.offline]="!online">
-  <!-- Заголовок -->
+  <!-- Flash при сканировании карты -->
+  <div class="card-flash" *ngIf="cardFlashVisible && lastCardScan">
+    💳 {{ lastCardScan.card }}
+  </div>
+
   <div class="post-header">
     <span class="post-title">🚿 Пост {{ postId }}</span>
     <span class="post-status" [class.online]="online" [class.offline]="!online">
@@ -7,14 +11,12 @@
     </span>
   </div>
 
-  <!-- Статус занятости -->
   <div class="post-busy">
     <span [class.free]="!busy" [class.occupied]="busy">
       {{ busy ? '🔴 ЗАНЯТ' : '🟢 СВОБОДЕН' }}
     </span>
   </div>
 
-  <!-- Баланс и активная функция -->
   <div class="post-info">
     <div class="info-row">
       <span>💰 Баланс:</span>
@@ -26,7 +28,6 @@
     </div>
   </div>
 
-  <!-- Кнопки функций -->
   <div class="functions">
     <button *ngFor="let fn of functions"
             class="fn-btn"
@@ -36,18 +37,16 @@
     </button>
   </div>
 
-  <!-- Сумма -->
   <div class="sum-row">
     <span>Сумма</span>
     <span class="sum-value">{{ sum | number:'1.2-2' }} ₽</span>
   </div>
 
-  <!-- Действия -->
   <div class="actions">
-    <button class="act-btn topup"   (click)="topUp()">➕ Пополнить</button>
-    <button class="act-btn stop"    (click)="stop()">⏹️ Остановить</button>
-    <button class="act-btn pause"   (click)="pause()">⏸️ Пауза</button>
-    <button class="act-btn reset"   (click)="reset()">🔄 Сброс</button>
-    <button class="act-btn print"   (click)="printReceipt()">🧾 Печать чека</button>
+    <button class="act-btn topup" (click)="topUp()">➕ Пополнить</button>
+    <button class="act-btn stop"  (click)="stop()">⏹️ Остановить</button>
+    <button class="act-btn pause" (click)="pause()">⏸️ Пауза</button>
+    <button class="act-btn reset" (click)="reset()">🔄 Сброс</button>
+    <button class="act-btn print" (click)="printReceipt()">🧾 Печать чека</button>
   </div>
 </div>

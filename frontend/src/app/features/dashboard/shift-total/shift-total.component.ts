@@ -1,7 +1,7 @@
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
-import { MqttService } from '../../../../core/services/mqtt.service';
+import { MqttService } from '../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-shift-total',
@@ -20,16 +20,9 @@ import { MqttService } from '../../../../core/services/mqtt.service';
       color: #fff; border-radius: 10px; padding: 20px;
       display: flex; flex-direction: column; justify-content: center;
     }
-    .card-title {
-      margin: 0 0 12px; font-size: 15px; color: #dbeafe;
-    }
-    .amount {
-      font-size: 36px; font-weight: 700; color: #fff;
-      margin-bottom: 8px; line-height: 1;
-    }
-    .receipts-count {
-      font-size: 13px; color: #dbeafe;
-    }
+    .card-title { margin: 0 0 12px; font-size: 15px; color: #dbeafe; }
+    .amount { font-size: 36px; font-weight: 700; color: #fff; margin-bottom: 8px; line-height: 1; }
+    .receipts-count { font-size: 13px; color: #dbeafe; }
   `]
 })
 export class ShiftTotalComponent implements OnInit, OnDestroy {
@@ -46,12 +39,10 @@ export class ShiftTotalComponent implements OnInit, OnDestroy {
       this.count = Number(data?.receiptCount ?? data?.count ?? 0);
     });
 
-    // Mock для демонстрации
+    // Mock
     this.total = 10863.10;
     this.count = 42;
   }
 
-  ngOnDestroy(): void {
-    this.sub?.unsubscribe();
-  }
+  ngOnDestroy(): void { this.sub?.unsubscribe(); }
 }

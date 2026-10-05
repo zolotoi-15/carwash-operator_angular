@@ -1,14 +1,11 @@
 <div class="cards-page">
   <h2>💳 Карты клиентов</h2>
 
-  <!-- ===== Поиск ===== -->
   <div class="search-row">
-    <input
-      class="search-input"
-      placeholder="Поиск по номеру карты, ФИО или телефону..."
-      [(ngModel)]="query"
-      (keyup.enter)="search()"
-    />
+    <input class="search-input"
+           placeholder="Поиск по номеру карты, ФИО или телефону..."
+           [(ngModel)]="query"
+           (keyup.enter)="search()" />
     <button class="btn btn-primary" (click)="search()">🔍 Найти</button>
     <button class="btn btn-secondary" *ngIf="query" (click)="clearSearch()">✕ Сбросить</button>
     <button class="btn btn-scan" (click)="scanCard()" [disabled]="waitingScan">
@@ -16,7 +13,6 @@
     </button>
   </div>
 
-  <!-- ===== Добавление карты ===== -->
   <div class="add-row">
     <h3>Клиент</h3>
     <div class="add-form">
@@ -27,7 +23,6 @@
     </div>
   </div>
 
-  <!-- ===== Таблица ===== -->
   <div class="table-wrap">
     <table class="cards-table">
       <thead>
@@ -46,20 +41,13 @@
           <td class="mono">{{ c.number }}</td>
           <td>{{ c.name || '—' }}</td>
           <td>{{ c.phone || '—' }}</td>
-          <td>
-            <span class="badge" [class]="'badge-' + c.type">{{ c.type }}</span>
-          </td>
+          <td><span class="badge" [class]="'badge-' + c.type">{{ c.type }}</span></td>
           <td class="balance">{{ formatBalance(c.balance) }} ₽</td>
           <td>
             <div class="topup-cell">
-              <input
-                type="number"
-                min="0"
-                step="1"
-                placeholder="Сумма"
-                [(ngModel)]="topUpAmount[c.id]"
-                (keyup.enter)="topUp(c)"
-              />
+              <input type="number" min="0" step="1" placeholder="Сумма"
+                     [(ngModel)]="topUpAmount[c.id]"
+                     (keyup.enter)="topUp(c)" />
               <button class="btn btn-success btn-sm" (click)="topUp(c)">Пополнить</button>
             </div>
           </td>
@@ -81,7 +69,6 @@
   </div>
 </div>
 
-<!-- ===== Модалка отчёта ===== -->
 <div class="modal-backdrop" *ngIf="reportModalOpen" (click)="closeReport()"></div>
 <div class="modal" *ngIf="reportModalOpen && reportCard">
   <div class="modal-header">
@@ -100,12 +87,7 @@
 
     <table class="report-table" *ngIf="!reportLoading && reportOperations.length">
       <thead>
-        <tr>
-          <th>Дата</th>
-          <th>Тип</th>
-          <th>Сумма</th>
-          <th>Описание</th>
-        </tr>
+        <tr><th>Дата</th><th>Тип</th><th>Сумма</th><th>Описание</th></tr>
       </thead>
       <tbody>
         <tr *ngFor="let op of reportOperations">
@@ -123,9 +105,7 @@
       </tbody>
     </table>
 
-    <div *ngIf="!reportLoading && !reportOperations.length" class="empty">
-      Операций по карте нет
-    </div>
+    <div *ngIf="!reportLoading && !reportOperations.length" class="empty">Операций нет</div>
   </div>
   <div class="modal-footer">
     <button class="btn btn-secondary" (click)="closeReport()">Закрыть</button>

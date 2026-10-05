@@ -8,7 +8,7 @@ h2 {
   color: #0f172a;
 }
 
-// ===== Поиск =====
+// ===== Строка поиска =====
 .search-row {
   display: flex;
   gap: 8px;
@@ -23,15 +23,20 @@ h2 {
   border: 1px solid #cbd5e1;
   border-radius: 6px;
   font-size: 14px;
+  background: #fff;
 
   &:focus {
     outline: none;
     border-color: #3b82f6;
     box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
   }
+
+  &::placeholder {
+    color: #94a3b8;
+  }
 }
 
-// ===== Добавление =====
+// ===== Блок добавления =====
 .add-row {
   background: #fff;
   border: 1px solid #e2e8f0;
@@ -56,10 +61,12 @@ h2 {
       border-radius: 6px;
       font-size: 13px;
       min-width: 180px;
+      background: #fff;
 
       &:focus {
         outline: none;
         border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
       }
     }
   }
@@ -91,14 +98,18 @@ h2 {
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    white-space: nowrap;
   }
 
-  tbody tr:hover {
-    background: #f8fafc;
+  tbody tr {
+    transition: background 0.1s ease;
+
+    &:hover { background: #f8fafc; }
+    &:last-child td { border-bottom: none; }
   }
 
   .mono {
-    font-family: ui-monospace, "Cascadia Mono", monospace;
+    font-family: ui-monospace, "Cascadia Mono", "Segoe UI Mono", monospace;
     font-size: 12px;
     color: #0f172a;
     font-weight: 500;
@@ -118,7 +129,7 @@ h2 {
   }
 }
 
-// ===== Пополнение inline =====
+// ===== Инлайн-пополнение =====
 .topup-cell {
   display: flex;
   gap: 6px;
@@ -130,10 +141,12 @@ h2 {
     border: 1px solid #cbd5e1;
     border-radius: 4px;
     font-size: 12px;
+    background: #fff;
 
     &:focus {
       outline: none;
       border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
     }
   }
 }
@@ -152,7 +165,7 @@ h2 {
   font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.15s ease;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 
   &:disabled {
     opacity: 0.5;
@@ -164,10 +177,31 @@ h2 {
     font-size: 12px;
   }
 
-  &.btn-primary { background: #3b82f6; color: #fff; &:hover:not(:disabled) { background: #2563eb; } }
-  &.btn-secondary { background: #f1f5f9; color: #334155; border: 1px solid #cbd5e1; &:hover:not(:disabled) { background: #e2e8f0; } }
-  &.btn-success { background: #16a34a; color: #fff; &:hover:not(:disabled) { background: #15803d; } }
-  &.btn-danger { background: #dc2626; color: #fff; &:hover:not(:disabled) { background: #b91c1c; } }
+  &.btn-primary {
+    background: #3b82f6;
+    color: #fff;
+    &:hover:not(:disabled) { background: #2563eb; }
+  }
+
+  &.btn-secondary {
+    background: #f1f5f9;
+    color: #334155;
+    border: 1px solid #cbd5e1;
+    &:hover:not(:disabled) { background: #e2e8f0; }
+  }
+
+  &.btn-success {
+    background: #16a34a;
+    color: #fff;
+    &:hover:not(:disabled) { background: #15803d; }
+  }
+
+  &.btn-danger {
+    background: #dc2626;
+    color: #fff;
+    &:hover:not(:disabled) { background: #b91c1c; }
+  }
+
   &.btn-scan {
     background: #8b5cf6;
     color: #fff;
@@ -185,20 +219,22 @@ h2 {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 
-  &.badge-client { background: #dbeafe; color: #1e40af; }
-  &.badge-admin { background: #fce7f3; color: #9d174d; }
+  &.badge-client  { background: #dbeafe; color: #1e40af; }
+  &.badge-admin   { background: #fce7f3; color: #9d174d; }
   &.badge-service { background: #fef3c7; color: #92400e; }
-  &.badge-topup { background: #dcfce7; color: #166534; }
-  &.badge-charge { background: #fee2e2; color: #991b1b; }
-  &.badge-refund { background: #fef3c7; color: #92400e; }
+
+  &.badge-topup   { background: #dcfce7; color: #166534; }
+  &.badge-charge  { background: #fee2e2; color: #991b1b; }
+  &.badge-refund  { background: #fef3c7; color: #92400e; }
 }
 
-// ===== Модалка =====
+// ===== Модальное окно отчёта =====
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(15, 23, 42, 0.5);
   z-index: 1000;
+  animation: fadeIn 0.15s ease;
 }
 
 .modal {
@@ -215,6 +251,7 @@ h2 {
   flex-direction: column;
   z-index: 1001;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  animation: slideUp 0.2s ease;
 }
 
 .modal-header {
@@ -224,17 +261,28 @@ h2 {
   padding: 16px 20px;
   border-bottom: 1px solid #e2e8f0;
 
-  h3 { margin: 0; font-size: 16px; color: #0f172a; }
+  h3 {
+    margin: 0;
+    font-size: 16px;
+    color: #0f172a;
+  }
 }
 
 .modal-close {
   background: none;
   border: none;
   font-size: 20px;
+  line-height: 1;
   cursor: pointer;
   color: #94a3b8;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
 
-  &:hover { color: #0f172a; }
+  &:hover {
+    color: #0f172a;
+    background: #f1f5f9;
+  }
 }
 
 .modal-body {
@@ -248,21 +296,27 @@ h2 {
   border-top: 1px solid #e2e8f0;
   display: flex;
   justify-content: flex-end;
+  gap: 8px;
 }
 
+// ===== Сводка по карте в отчёте =====
 .report-summary {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
-  padding: 12px;
+  gap: 8px 20px;
+  padding: 12px 16px;
   background: #f8fafc;
   border-radius: 6px;
   margin-bottom: 16px;
   font-size: 13px;
 
-  strong { color: #334155; }
+  strong {
+    color: #334155;
+    font-weight: 600;
+  }
 }
 
+// ===== Таблица операций в отчёте =====
 .report-table {
   width: 100%;
   border-collapse: collapse;
@@ -279,5 +333,81 @@ h2 {
     font-weight: 600;
     color: #475569;
     font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .balance {
+    font-weight: 600;
+    color: #0f172a;
+    white-space: nowrap;
+  }
+
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+// ===== Анимации =====
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translate(-50%, -45%); opacity: 0; }
+  to   { transform: translate(-50%, -50%); opacity: 1; }
+}
+
+// ===== Адаптив =====
+@media (max-width: 900px) {
+  .modal {
+    min-width: 0;
+    width: 92vw;
+    max-width: 92vw;
+  }
+
+  .report-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .cards-table {
+    th, td {
+      padding: 8px 6px;
+      font-size: 12px;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .cards-page { padding: 12px; }
+
+  .search-row {
+    flex-direction: column;
+
+    .search-input { min-width: 0; }
+  }
+
+  .add-row .add-form {
+    flex-direction: column;
+
+    input { min-width: 0; }
+  }
+
+  .cards-table {
+    font-size: 11px;
+
+    th, td { padding: 6px 4px; }
+  }
+
+  .topup-cell {
+    flex-direction: column;
+    align-items: stretch;
+
+    input { width: 100%; }
+  }
+
+  .actions-cell {
+    flex-direction: column;
   }
 }
