@@ -1,0 +1,30 @@
+{
+  "groups": {
+    "administrator": "Администратор",
+    "developer": "Разработчик",
+    "operator": "Оператор"
+  },
+  "resources": {
+    "dashboard": "Дашборд",
+    "reports": "Отчёты",
+    "client-cards": "Карты клиентов",
+    "users": "Пользователи",
+    "groups": "Группы",
+    "permissions": "Права доступа",
+    "database": "База данных",
+    "kkm": "ККМ",
+    "system-settings": "Системные настройки"
+  },
+  "actions": {
+    "read": "Чтение",
+    "write": "Запись",
+    "update": "Изменение",
+    "delete": "Удаление"
+  },
+  "messages": {
+    "accessDenied": "Доступ запрещён",
+    "confirmDelete": "Вы уверены, что хотите удалить?",
+    "saved": "Изменения сохранены",
+    "error": "Произошла ошибка"
+  }
+}

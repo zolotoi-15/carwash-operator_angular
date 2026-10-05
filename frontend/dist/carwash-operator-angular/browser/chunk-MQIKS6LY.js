@@ -1,0 +1,1 @@
+var a=(function(t){return t.Dashboard="dashboard",t.Reports="reports",t.ClientCards="client-cards",t.Users="users",t.Groups="groups",t.Permissions="permissions",t.Database="database",t.KKM="kkm",t.SystemSettings="system-settings",t})(a||{});var r=(function(t){return t.Read="read",t.Write="write",t.Update="update",t.Delete="delete",t})(r||{});export{a,r as b};

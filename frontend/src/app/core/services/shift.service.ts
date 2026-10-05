@@ -1,148 +1,74 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, Observable, of } from 'rxjs';
+import { Observable, BehaviorSubject } from 'rxjs';
+import { tap } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
-import { CashShift, ShiftStatus } from '../models/shift.model';
+
+// ✅ CashShift определён в shift.model.ts
+import { CashShift } from '../models/shift.model';
+
+export interface ShiftTotal {
+  total: number;
+  count: number;
+}
 
 @Injectable({ providedIn: 'root' })
 export class ShiftService {
   private http = inject(HttpClient);
-  private apiUrl = `${environment.apiUrl}/shifts`;
+  private apiUrl = `${environment.apiUrl}`;
 
+  private shiftTotalSubject = new BehaviorSubject<ShiftTotal>({ total: 0, count: 0 });
   private currentShiftSubject = new BehaviorSubject<CashShift | null>(null);
-  readonly currentShift$ = this.currentShiftSubject.asObservable();
 
-  private shiftsSubject = new BehaviorSubject<CashShift[]>([]);
-  readonly shifts$ = this.shiftsSubject.asObservable();
+  readonly currentShift$: Observable<CashShift | null> =
+    this.currentShiftSubject.asObservable();
 
-  // MOCK
-  private mockShifts: CashShift[] = [
-    {
-      id: 1,
-      status: 'open',
-      openedAt: new Date().toISOString(),
-      openedBy: 'Оператор',
-      totalCash: 10863.10,
-      receiptCount: 42
-    }
-  ];
+  readonly shiftTotal$: Observable<ShiftTotal> =
+    this.shiftTotalSubject.asObservable();
 
-  constructor() {
-    this.loadShifts();
+  // ============================================================
+  // Смена
+  // ============================================================
+  getCurrentShift(): Observable<CashShift> {
+    return this.http.get<CashShift>(`${this.apiUrl}/kkm/current-shift`)
+      .pipe(tap(s => this.currentShiftSubject.next(s)));
   }
 
-  // ================= READ =================
-
-  getShifts(): Observable<CashShift[]> {
-    return of(this.mockShifts);
-    // return this.http.get<CashShift[]>(this.apiUrl);
+  getShiftTotal(): Observable<ShiftTotal> {
+    return this.http.get<ShiftTotal>(`${this.apiUrl}/shift-total`)
+      .pipe(tap(t => this.shiftTotalSubject.next(t)));
   }
 
-  getCurrentShift(): Observable<CashShift | null> {
-    const current = this.mockShifts.find(s => s.status === 'open') ?? null;
-    this.currentShiftSubject.next(current);
-    return of(current);
-    // return this.http.get<CashShift>(`${this.apiUrl}/current`);
+  openShift(): Observable<CashShift> {
+    return this.http.post<CashShift>(`${this.apiUrl}/kkm/open-shift`, {})
+      .pipe(tap(s => this.currentShiftSubject.next(s)));
   }
 
-  getShift(id: number): Observable<CashShift> {
-    const found = this.mockShifts.find(s => s.id === id);
-    if (!found) throw new Error(`Смена с id=${id} не найдена`);
-    return of(found);
-    // return this.http.get<CashShift>(`${this.apiUrl}/${id}`);
+  closeShift(): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/kkm/close-shift`, {});
   }
 
-  // ================= OPEN / CLOSE =================
-
-  openShift(openedBy: string): Observable<CashShift> {
-    const newShift: CashShift = {
-      id: Math.max(0, ...this.mockShifts.map(s => s.id)) + 1,
-      status: 'open',
-      openedAt: new Date().toISOString(),
-      openedBy,
-      totalCash: 0,
-      receiptCount: 0
-    };
-    this.mockShifts.push(newShift);
-    this.shiftsSubject.next([...this.mockShifts]);
-    this.currentShiftSubject.next(newShift);
-    return of(newShift);
-    // return this.http.post<CashShift>(`${this.apiUrl}/open`, { openedBy });
+  xReport(): Observable<any> {
+    return this.http.get<any>(`${this.apiUrl}/kkm/x-report`);
   }
 
-  closeShift(id: number, closedBy: string): Observable<CashShift> {
-    const idx = this.mockShifts.findIndex(s => s.id === id);
-    if (idx < 0) throw new Error(`Смена с id=${id} не найдена`);
-
-    const closed: CashShift = {
-      ...this.mockShifts[idx],
-      status: 'closed',
-      closedAt: new Date().toISOString(),
-      closedBy
-    };
-    this.mockShifts[idx] = closed;
-    this.shiftsSubject.next([...this.mockShifts]);
-    if (this.currentShiftSubject.value?.id === id) {
-      this.currentShiftSubject.next(null);
-    }
-    return of(closed);
-    // return this.http.post<CashShift>(`${this.apiUrl}/${id}/close`, { closedBy });
+  zReport(): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/kkm/z-report`, {});
   }
 
-  // ================= AUTO-CLOSE (внутренний) =================
-
-  /**
-   * Автоматически закрывает смену и открывает новую.
-   * Используется, когда предыдущая смена не была закрыта вручную.
-   */
-  private autoCloseAndReopen(id: number): void {
-    const shift = this.mockShifts.find(s => s.id === id);
-    if (!shift || shift.status === 'closed') return;
-
-    shift.status = 'closed';
-    shift.closedAt = new Date().toISOString();
-    shift.closedBy = 'system (auto)';
-
-    const newShift: CashShift = {
-      id: Math.max(0, ...this.mockShifts.map(s => s.id)) + 1,
-      status: 'open',
-      openedAt: new Date().toISOString(),
-      openedBy: 'system (auto)',
-      totalCash: 0,
-      receiptCount: 0
-    };
-    this.mockShifts.push(newShift);
-    this.shiftsSubject.next([...this.mockShifts]);
-    this.currentShiftSubject.next(newShift);
+  toggleShift(): Observable<CashShift> {
+    return this.http.post<CashShift>(`${this.apiUrl}/kkm/toggle-shift`, {})
+      .pipe(tap(s => this.currentShiftSubject.next(s)));
   }
 
-  // ================= LOAD =================
-
-  private loadShifts(): void {
-    this.shiftsSubject.next([...this.mockShifts]);
-    const current = this.mockShifts.find(s => s.status === 'open') ?? null;
-    this.currentShiftSubject.next(current);
-
-    // Автоматически закрываем «зависшие» смены (старше 24 часов)
-    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
-    this.mockShifts
-      .filter(s => s.status === 'open' && new Date(s.openedAt).getTime() < dayAgo)
-      .forEach(s => this.autoCloseAndReopen(s.id));
+  // ============================================================
+  // Внешняя синхронизация (MQTT)
+  // ============================================================
+  setShiftTotal(total: number, count: number): void {
+    this.shiftTotalSubject.next({ total, count });
   }
 
-  // ================= HELPERS =================
-
-  /** Обновить итоги текущей смены (используется при приёме чека из MQTT) */
-  addReceiptToCurrentShift(total: number): void {
-    const current = this.currentShiftSubject.value;
-    if (!current) return;
-    current.totalCash = Math.round((current.totalCash + total) * 100) / 100;
-    current.receiptCount += 1;
-    this.currentShiftSubject.next({ ...current });
-  }
-
-  /** Снимок текущей смены */
-  getCurrentShiftSnapshot(): CashShift | null {
-    return this.currentShiftSubject.value;
+  setCurrentShift(shift: CashShift | null): void {
+    this.currentShiftSubject.next(shift);
   }
 }

@@ -1,5 +1,5 @@
 ﻿// backend/local-mqtt-broker.js
-// Local MQTT broker (Aedes 1.x) + bridge to remote broker.
+// Local MQTT broker (Aedes 1.x) + bridge to remote WQTT.
 
 const { Aedes } = require('aedes');
 const http = require('http');
@@ -8,54 +8,35 @@ const websocketStream = require('websocket-stream');
 const mqtt = require('mqtt');
 const mongoose = require('mongoose');
 
-const MONGO_URL = process.env.MONGO_URL || 'mongodb://0.0.0.0:27017/carwash';
+const MONGO_URL = process.env.MONGO_URL || process.env.MONGO_URI || 'mongodb://0.0.0.0:27017/carwash';
 
 const SUBSCRIBE_TOPICS = [
-  'posts/+/status',
-  'posts/+/lwt',
-  'posts/+/local_LWT',
-  'posts/+/config',
-  'posts/+/clientcard',
-  'system/config',
-  'shift/total',
+  'posts/+/status', 'posts/+/lwt', 'posts/+/local_LWT',
+  'posts/+/config', 'posts/+/clientcard', 'system/config', 'shift/total',
 ];
 
-const FORWARD_UP_TOPICS = [
-  /\/command$/,
-  /^kkm\/print$/,
-  /^card-reader\/command$/,
-];
+const FORWARD_UP_TOPICS = [/\/command$/, /^kkm\/print$/, /^card-reader\/command$/];
 
 const DEFAULTS = {
-  localHost: '0.0.0.0',
-  localPortTcp: 1883,
-  localPortWs: 8083,
-  localPath: '/mqtt',
-  localUsername: 'admin',
-  localPassword: 'Zavulon56',
-  remoteHost: 'm2.wqtt.ru',
-  remotePortTls: 13258,
-  remoteUsername: 'u_GGENLB',
-  remotePassword: 'LTHNW22D',
+  localHost: '0.0.0.0', localPortTcp: 1883, localPortWs: 8083,
+  localPath: '/mqtt', localUsername: 'admin', localPassword: 'Zavulon56',
+  remoteHost: 'm2.wqtt.ru', remotePortTls: 13258,
+  remoteUsername: 'u_GGENLB', remotePassword: 'LTHNW22D',
 };
 
 async function loadSettings() {
   try {
     await mongoose.connect(MONGO_URL);
     console.log('[SETTINGS] connected to MongoDB');
-    // server.js хранит настройки в коллекции settings как { key: 'main', value: {...} }
-    const doc = await mongoose.connection.db
-      .collection('settings')
-      .findOne({ key: 'main' });
+    const doc = await mongoose.connection.db.collection('settings').findOne({ key: 'main' });
     await mongoose.disconnect();
 
     const mqttCfg = (doc && doc.value && doc.value.mqtt) || (doc && doc.mqtt) || null;
     if (!mqttCfg) {
-      console.warn('[SETTINGS] mqtt не найден в БД, используются значения по умолчанию');
+      console.warn('[SETTINGS] mqtt не найден, дефолты');
       return DEFAULTS;
     }
 
-    // Новый формат { local, remote }
     if (mqttCfg.local || mqttCfg.remote) {
       const local = mqttCfg.local || {};
       const remote = mqttCfg.remote || {};
@@ -71,11 +52,10 @@ async function loadSettings() {
         remoteUsername: remote.username ?? DEFAULTS.remoteUsername,
         remotePassword: remote.password ?? DEFAULTS.remotePassword,
       };
-      console.log('[SETTINGS] loaded from DB (new format)');
+      console.log(`[SETTINGS] loaded, remote = ${cfg.remoteHost}:${cfg.remotePortTls}`);
       return cfg;
     }
 
-    // Legacy формат { brokerUrl, username, password } — используем для удалённого
     if (mqttCfg.brokerUrl) {
       try {
         const u = new URL(mqttCfg.brokerUrl);
@@ -86,11 +66,9 @@ async function loadSettings() {
           remoteUsername: mqttCfg.username || DEFAULTS.remoteUsername,
           remotePassword: mqttCfg.password || DEFAULTS.remotePassword,
         };
-        console.log('[SETTINGS] loaded from DB (legacy format), remote =', mqttCfg.brokerUrl);
+        console.log(`[SETTINGS] legacy format, remote = ${mqttCfg.brokerUrl}`);
         return cfg;
-      } catch (e) {
-        console.warn('[SETTINGS] некорректный brokerUrl:', mqttCfg.brokerUrl);
-      }
+      } catch {}
     }
 
     return DEFAULTS;
@@ -102,21 +80,18 @@ async function loadSettings() {
 
 (async () => {
   const cfg = await loadSettings();
-
   const aedes = await Aedes.createBroker();
 
-  aedes.authenticate = (client, username, password, callback) => {
+  aedes.authenticate = (client, username, password, cb) => {
     const pass = password ? password.toString() : '';
-    const ok = (username === cfg.localUsername) && (pass === cfg.localPassword);
-    if (ok) return callback(null, true);
-    const err = new Error('Auth error');
-    err.returnCode = 4;
-    return callback(err, false);
+    if (username === cfg.localUsername && pass === cfg.localPassword) return cb(null, true);
+    const err = new Error('Auth error'); err.returnCode = 4;
+    return cb(err, false);
   };
 
   const tcpServer = net.createServer((socket) => aedes.handle(socket));
   tcpServer.listen(cfg.localPortTcp, cfg.localHost, () => {
-    console.log(`Local MQTT (TCP) listening on mqtt://${cfg.localHost}:${cfg.localPortTcp}`);
+    console.log(`Local MQTT (TCP) on mqtt://${cfg.localHost}:${cfg.localPortTcp}`);
   });
 
   const httpServer = http.createServer((req, res) => {
@@ -128,11 +103,11 @@ async function loadSettings() {
     (stream, req) => aedes.handle(stream, req)
   );
   httpServer.listen(cfg.localPortWs, cfg.localHost, () => {
-    console.log(`Local MQTT (WS)  listening on ws://${cfg.localHost}:${cfg.localPortWs}${cfg.localPath}`);
+    console.log(`Local MQTT (WS) on ws://${cfg.localHost}:${cfg.localPortWs}${cfg.localPath}`);
   });
 
   const remoteUrl = `mqtts://${cfg.remoteHost}:${cfg.remotePortTls}`;
-  console.log(`[BRIDGE] Connecting to remote ${remoteUrl} as ${cfg.remoteUsername}...`);
+  console.log(`[BRIDGE] Connecting to ${remoteUrl} as ${cfg.remoteUsername}...`);
 
   const remote = mqtt.connect(remoteUrl, {
     username: cfg.remoteUsername,
@@ -144,21 +119,23 @@ async function loadSettings() {
   });
 
   remote.on('connect', () => {
-    console.log('[BRIDGE] connected to remote broker');
+    console.log('[BRIDGE] connected to remote');
     remote.subscribe(SUBSCRIBE_TOPICS, { qos: 1 }, (err, granted) => {
       if (err) console.error('[BRIDGE] subscribe error:', err);
       else console.log('[BRIDGE] subscribed:', granted.map(g => g.topic).join(', '));
     });
   });
-  remote.on('reconnect', () => console.log('[BRIDGE] reconnecting to remote...'));
-  remote.on('close',     () => console.warn('[BRIDGE] remote connection closed'));
+  remote.on('reconnect', () => console.log('[BRIDGE] reconnecting...'));
+  remote.on('close',     () => console.warn('[BRIDGE] remote closed'));
   remote.on('offline',   () => console.warn('[BRIDGE] remote offline'));
   remote.on('error',     (err) => console.error('[BRIDGE] remote error:', err.message));
 
+  // remote -> local
   remote.on('message', (topic, payload) => {
     aedes.publish({ topic, payload, qos: 0, retain: false }, () => {});
   });
 
+  // local -> remote
   aedes.on('publish', (packet, client) => {
     if (!client) return;
     if (!FORWARD_UP_TOPICS.some(re => re.test(packet.topic))) return;
@@ -173,7 +150,7 @@ async function loadSettings() {
   });
 
   process.on('SIGINT', () => {
-    console.log('Stopping local MQTT broker...');
+    console.log('Stopping broker...');
     try { remote.end(true); } catch (e) {}
     aedes.close(() => {
       tcpServer.close();
