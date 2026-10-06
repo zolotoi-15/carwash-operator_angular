@@ -1,0 +1,58 @@
+<div class="user-form-page">
+  <h2>{{ isEdit ? '✏️ Редактирование пользователя' : '➕ Новый пользователь' }}</h2>
+
+  <form class="user-form" (ngSubmit)="save()">
+    <label>
+      Логин *
+      <input
+        [(ngModel)]="m.login"
+        name="login"
+        [disabled]="isEdit"
+        placeholder="login"
+        autocomplete="off"
+        required
+      />
+    </label>
+
+    <label>
+      Пароль {{ isEdit ? '(оставьте пустым, чтобы не менять)' : '*' }}
+      <input
+        type="password"
+        [(ngModel)]="m.password"
+        name="password"
+        placeholder="••••••••"
+        autocomplete="new-password"
+        [required]="!isEdit"
+      />
+    </label>
+
+    <label>
+      ФИО
+      <input [(ngModel)]="m.fullName" name="fullName" placeholder="Иванов Иван" />
+    </label>
+
+    <label>
+      Email
+      <input type="email" [(ngModel)]="m.email" name="email" placeholder="user@carwash.local" />
+    </label>
+
+    <label>
+      Роль
+      <select [(ngModel)]="m.role" name="role">
+        <option *ngFor="let r of roles" [ngValue]="r.value">{{ r.label }}</option>
+      </select>
+    </label>
+
+    <label class="checkbox">
+      <input type="checkbox" [(ngModel)]="m.isActive" name="isActive" />
+      Активен
+    </label>
+
+    <div class="form-actions">
+      <button type="button" class="btn btn-secondary" (click)="cancel()">Отмена</button>
+      <button type="submit" class="btn btn-success">
+        {{ isEdit ? 'Сохранить' : 'Создать' }}
+      </button>
+    </div>
+  </form>
+</div>

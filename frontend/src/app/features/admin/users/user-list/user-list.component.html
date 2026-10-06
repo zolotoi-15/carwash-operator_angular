@@ -1,58 +1,90 @@
-<div class="user-form-page">
-  <h2>{{ isEdit ? '✏️ Редактирование пользователя' : '➕ Новый пользователь' }}</h2>
-
-  <form class="user-form" (ngSubmit)="save()">
-    <label>
-      Логин *
-      <input
-        [(ngModel)]="m.login"
-        name="login"
-        [disabled]="isEdit"
-        placeholder="login"
-        autocomplete="off"
-        required
-      />
-    </label>
-
-    <label>
-      Пароль {{ isEdit ? '(оставьте пустым, чтобы не менять)' : '*' }}
-      <input
-        type="password"
-        [(ngModel)]="m.password"
-        name="password"
-        placeholder="••••••••"
-        autocomplete="new-password"
-        [required]="!isEdit"
-      />
-    </label>
-
-    <label>
-      ФИО
-      <input [(ngModel)]="m.fullName" name="fullName" placeholder="Иванов Иван" />
-    </label>
-
-    <label>
-      Email
-      <input type="email" [(ngModel)]="m.email" name="email" placeholder="user@carwash.local" />
-    </label>
-
-    <label>
-      Роль
-      <select [(ngModel)]="m.role" name="role">
-        <option *ngFor="let r of roles" [ngValue]="r.value">{{ r.label }}</option>
-      </select>
-    </label>
-
-    <label class="checkbox">
-      <input type="checkbox" [(ngModel)]="m.isActive" name="isActive" />
-      Активен
-    </label>
-
-    <div class="form-actions">
-      <button type="button" class="btn btn-secondary" (click)="cancel()">Отмена</button>
-      <button type="submit" class="btn btn-success">
-        {{ isEdit ? 'Сохранить' : 'Создать' }}
+<div class="user-list-page">
+  <div class="header">
+    <h2>👥 Пользователи</h2>
+    <div class="header-actions">
+      <button class="btn btn-secondary" (click)="loadUsers()" [disabled]="loading">
+        🔄 Обновить
+      </button>
+      <button class="btn btn-primary" (click)="toggleCreateForm()">
+        {{ showCreateForm ? '✕ Отмена' : '+ Добавить пользователя' }}
       </button>
     </div>
-  </form>
+  </div>
+
+  <!-- Форма создания -->
+  <div class="create-form" *ngIf="showCreateForm">
+    <input placeholder="Логин" [(ngModel)]="newUser.login" autocomplete="off" />
+    <input placeholder="Пароль" type="password" [(ngModel)]="newUser.password" autocomplete="new-password" />
+    <input placeholder="ФИО" [(ngModel)]="newUser.fullName" />
+    <input placeholder="Email" [(ngModel)]="newUser.email" />
+    <select [(ngModel)]="newUser.role">
+      <option *ngFor="let r of roles" [ngValue]="r.value">{{ r.label }}</option>
+    </select>
+    <button class="btn btn-success" (click)="createUser()">Создать</button>
+    <button class="btn btn-secondary" (click)="toggleCreateForm()">Отмена</button>
+  </div>
+
+  <!-- Загрузка -->
+  <div *ngIf="loading" class="empty">Загрузка...</div>
+
+  <!-- Таблица -->
+  <table class="users-table" *ngIf="!loading && users.length">
+    <thead>
+      <tr>
+        <th>Логин</th>
+        <th>ФИО</th>
+        <th>Email</th>
+        <th>Группа</th>
+        <th>Активен</th>
+        <th>Действия</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr *ngFor="let u of users; trackBy: trackById">
+        <td class="mono">{{ u.login }}</td>
+        <td>{{ u.fullName || '—' }}</td>
+        <td>{{ u.email || '—' }}</td>
+        <td>
+          <span class="badge" [class]="'badge-' + u.role">{{ roleLabel(u.role) }}</span>
+        </td>
+        <td>{{ u.isActive ? '✅' : '❌' }}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-secondary" (click)="startEdit(u)" title="Редактировать">✏️</button>
+          <button class="btn btn-sm btn-danger" (click)="removeUser(u)" title="Удалить">🗑️</button>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div *ngIf="!loading && !users.length" class="empty">Пользователей нет</div>
+
+  <!-- Модалка редактирования -->
+  <div class="modal-backdrop" *ngIf="editingUser" (click)="cancelEdit()"></div>
+  <div class="modal" *ngIf="editingUser">
+    <div class="modal-header">
+      <h3>Редактирование: {{ editingUser.login }}</h3>
+      <button class="modal-close" (click)="cancelEdit()">✕</button>
+    </div>
+    <div class="modal-body">
+      <label>ФИО:
+        <input [(ngModel)]="editingUser.fullName" />
+      </label>
+      <label>Email:
+        <input [(ngModel)]="editingUser.email" />
+      </label>
+      <label>Роль:
+        <select [(ngModel)]="editingUser.role">
+          <option *ngFor="let r of roles" [ngValue]="r.value">{{ r.label }}</option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" [(ngModel)]="editingUser.isActive" />
+        Активен
+      </label>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" (click)="cancelEdit()">Отмена</button>
+      <button class="btn btn-success" (click)="saveEdit()">Сохранить</button>
+    </div>
+  </div>
 </div>
