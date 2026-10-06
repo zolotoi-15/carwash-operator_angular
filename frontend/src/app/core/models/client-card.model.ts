@@ -17,6 +17,8 @@ export interface ClientCard {
   updatedAt?: string;
 }
 
+
+
 /**
  * DTO для создания карты.
  * Использует 'number', а не 'card' — так шлёт фронт,

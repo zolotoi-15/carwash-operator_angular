@@ -89,6 +89,8 @@ export class ClientCardService {
     );
   }
 
+
+
   // ==== Удаление ====
 
   /** Удалить карту: DELETE /api/cards/:card */
