@@ -3,8 +3,6 @@ const express = require('express');
 const router = express.Router();
 const ClientCard = require('../models/ClientCard');
 const CardOperation = require('../models/CardOperation');
-const ctrl = require('../controllers/cardsController');
-
 
 const notifyPosts = (req, card) => {
   if (req.app.locals.publishCardBalanceToPosts) {
@@ -71,7 +69,7 @@ router.post('/by-number/:number/topup', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ---------- TOPUP FROM POST ----------
+// ---------- TOPUP FROM POST (mqtt.service.ts) ----------
 router.post('/:card/topup-from-post', async (req, res) => {
   const { postId, amount } = req.body || {};
   const num = Number(amount);
@@ -168,15 +166,5 @@ router.delete('/:card', async (req, res) => {
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
-
-router.get('/', ctrl.list);
-router.get('/search', ctrl.search);
-router.post('/', ctrl.create);
-router.post('/by-number/:number/topup', ctrl.topUp);       // можно вынести отдельно
-router.post('/:card/topup-from-post', ctrl.topUpFromPost);
-router.post('/:card/topup', ctrl.topUp);
-router.get('/:card/report', ctrl.report);
-router.get('/:card', ctrl.getByCard);
-router.delete('/:card', ctrl.remove);
 
 module.exports = router;

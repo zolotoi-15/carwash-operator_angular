@@ -1,6 +1,7 @@
 <div class="cards-page">
   <h2>💳 Карты клиентов</h2>
 
+  <!-- ===== Поиск ===== -->
   <div class="search-row">
     <input
       class="search-input"
@@ -15,6 +16,7 @@
     </button>
   </div>
 
+  <!-- ===== Добавление карты ===== -->
   <div class="add-row">
     <h3>Клиент</h3>
     <div class="add-form">
@@ -25,6 +27,7 @@
     </div>
   </div>
 
+  <!-- ===== Таблица карт ===== -->
   <div class="table-wrap">
     <table class="cards-table">
       <thead>
@@ -43,7 +46,9 @@
           <td class="mono">{{ c.card }}</td>
           <td>{{ c.fullName || '—' }}</td>
           <td>{{ c.phone || '—' }}</td>
-          <td><span class="badge" [class]="'badge-' + c.type">{{ c.type }}</span></td>
+          <td>
+            <span class="badge" [class]="'badge-' + c.type">{{ c.type }}</span>
+          </td>
           <td class="balance">{{ formatBalance(c.balance) }} ₽</td>
           <td>
             <div class="topup-cell">
@@ -76,6 +81,7 @@
   </div>
 </div>
 
+<!-- ===== Модалка отчёта ===== -->
 <div class="modal-backdrop" *ngIf="reportModalOpen" (click)="closeReport()"></div>
 <div class="modal" *ngIf="reportModalOpen && reportCard">
   <div class="modal-header">
@@ -94,7 +100,12 @@
 
     <table class="report-table" *ngIf="!reportLoading && reportOperations.length">
       <thead>
-        <tr><th>Дата</th><th>Тип</th><th>Сумма</th><th>Описание</th></tr>
+        <tr>
+          <th>Дата</th>
+          <th>Тип</th>
+          <th>Сумма</th>
+          <th>Описание</th>
+        </tr>
       </thead>
       <tbody>
         <tr *ngFor="let op of reportOperations">
