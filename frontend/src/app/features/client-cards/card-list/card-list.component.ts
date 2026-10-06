@@ -1,3 +1,4 @@
+// card-list.component.ts
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -8,8 +9,8 @@ import { MqttService, CardScanEvent } from '../../../core/services/mqtt.service'
 import { NotificationService } from '../../../core/services/notification.service';
 import {
   ClientCard,
-  CreateClientCardDto,
   CardOperation,
+  CreateClientCardDto,
 } from '../../../core/models/client-card.model';
 
 @Component({
@@ -30,13 +31,13 @@ export class CardListComponent implements OnInit, OnDestroy {
   loading = false;
 
   newCard: CreateClientCardDto = {
-    number: '',
-    name: '',
-    phone: '',
+    card: '',
     type: 'client',
+    fullName: '',
+    phone: '',
   };
 
-  /** ✅ Ключ — string (Mongo ObjectId), а не number */
+  /** ключ — номер карты */
   topUpAmount: Record<string, number> = {};
 
   reportModalOpen = false;
@@ -52,6 +53,7 @@ export class CardListComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.loadCards();
 
+    // Событие скана карты (с ридера)
     this.subs.add(
       this.mqtt.getCardScanUpdates().subscribe((event: CardScanEvent) => {
         this.lastScan = event;
@@ -60,7 +62,20 @@ export class CardListComponent implements OnInit, OnDestroy {
         this.search();
         const where = event.postId ? ` (пост ${event.postId})` : '';
         this.notify.success(`💳 Карта ${event.card}${where} считана`);
-      })
+      }),
+    );
+
+    // 🔥 Обновление баланса карты, пришедшее из MQTT
+    this.subs.add(
+      this.mqtt.getCardBalanceUpdates().subscribe(({ card, balance }) => {
+        const idx = this.cards.findIndex((c) => c.card === card);
+        if (idx >= 0) {
+          this.cards[idx] = { ...this.cards[idx], balance };
+        } else {
+          // карты ещё нет в текущем списке — подтянем
+          this.search();
+        }
+      }),
     );
   }
 
@@ -114,7 +129,7 @@ export class CardListComponent implements OnInit, OnDestroy {
   // Создание карты
   // ============================================================
   addCard(): void {
-    const num = (this.newCard.number || '').trim().toUpperCase();
+    const num = (this.newCard.card || '').trim().toUpperCase();
     if (!num) {
       this.notify.warning('Введите номер карты');
       return;
@@ -126,15 +141,15 @@ export class CardListComponent implements OnInit, OnDestroy {
 
     this.cardService
       .createCard({
-        number: num,
-        name: this.newCard.name?.trim() || undefined,
+        card: num,
+        type: this.newCard.type,
+        fullName: this.newCard.fullName?.trim() || undefined,
         phone: this.newCard.phone?.trim() || undefined,
-        type: this.newCard.type ?? 'client',
       })
       .subscribe({
         next: () => {
           this.notify.success(`Карта ${num} добавлена`);
-          this.newCard = { number: '', name: '', phone: '', type: 'client' };
+          this.newCard = { card: '', type: 'client', fullName: '', phone: '' };
           this.loadCards();
         },
         error: (err) => {
@@ -148,16 +163,16 @@ export class CardListComponent implements OnInit, OnDestroy {
   // Пополнение
   // ============================================================
   topUp(card: ClientCard): void {
-    const amount = this.topUpAmount[card.id];
+    const amount = this.topUpAmount[card.card];
     if (!amount || amount <= 0) {
       this.notify.warning('Введите сумму');
       return;
     }
-    this.cardService.topUp(card.id, { amount }).subscribe({
+    this.cardService.topUp(card.card, amount).subscribe({
       next: (updated: ClientCard) => {
-        this.notify.success(`Карта ${card.number} пополнена на ${amount} ₽`);
-        this.topUpAmount[card.id] = 0;
-        const idx = this.cards.findIndex(c => c.id === card.id);
+        this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
+        this.topUpAmount[card.card] = 0;
+        const idx = this.cards.findIndex((c) => c.card === card.card);
         if (idx >= 0) this.cards[idx] = { ...updated };
       },
       error: () => this.notify.error('Ошибка пополнения'),
@@ -168,11 +183,11 @@ export class CardListComponent implements OnInit, OnDestroy {
   // Удаление
   // ============================================================
   deleteCard(card: ClientCard): void {
-    if (!confirm(`Удалить карту ${card.number}?`)) return;
-    this.cardService.deleteCard(card.id).subscribe({
+    if (!confirm(`Удалить карту ${card.card}?`)) return;
+    this.cardService.deleteCard(card.card).subscribe({
       next: () => {
-        this.notify.success(`Карта ${card.number} удалена`);
-        this.cards = this.cards.filter(c => c.id !== card.id);
+        this.notify.success(`Карта ${card.card} удалена`);
+        this.cards = this.cards.filter((c) => c.card !== card.card);
       },
       error: () => this.notify.error('Ошибка удаления'),
     });
@@ -186,9 +201,9 @@ export class CardListComponent implements OnInit, OnDestroy {
     this.reportModalOpen = true;
     this.reportLoading = true;
     this.reportOperations = [];
-    this.cardService.getCardOperations(card.id).subscribe({
-      next: (ops: CardOperation[]) => {
-        this.reportOperations = ops;
+    this.cardService.getCardReport(card.card).subscribe({
+      next: (resp) => {
+        this.reportOperations = resp.operations;
         this.reportLoading = false;
       },
       error: () => {
@@ -226,12 +241,11 @@ export class CardListComponent implements OnInit, OnDestroy {
     return (value ?? 0).toFixed(2);
   }
 
-  /** ✅ Возвращает string (Mongo ObjectId), а не number */
-  trackById(_i: number, item: ClientCard): string {
-    return item.id;
+  trackByCard(_i: number, item: ClientCard): string {
+    return item.card;
   }
 
   goToReportPage(card: ClientCard): void {
-    this.router.navigate(['/client-cards', card.id, 'report']);
+    this.router.navigate(['/client-cards', card.card, 'report']);
   }
 }

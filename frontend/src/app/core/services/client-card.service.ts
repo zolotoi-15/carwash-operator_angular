@@ -1,121 +1,119 @@
-import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable, BehaviorSubject } from 'rxjs';
-import { tap } from 'rxjs/operators';
-import { environment } from '../../../environments/environment';
-
-// ✅ Используем существующие модели — не дублируем типы
+// src/app/core/services/client-card.service.ts
+import { Injectable } from '@angular/core';
+import { HttpClient, HttpParams } from '@angular/common/http';
+import { Observable } from 'rxjs';
 import {
   ClientCard,
-  CardOperation,
+  ClientCardType,
+  CardReportResponse,
 } from '../models/client-card.model';
-
-export interface TopUpPayload {
-  amount: number;
-  comment?: string;
-}
 
 @Injectable({ providedIn: 'root' })
 export class ClientCardService {
-  private http = inject(HttpClient);
-  private apiUrl = `${environment.apiUrl}/cards`;
+  private readonly apiUrl = '/api/cards';
 
-  private cardsSubject = new BehaviorSubject<ClientCard[]>([]);
+  constructor(private http: HttpClient) {}
 
-  // ============================================================
-  // Список / поиск
-  // ============================================================
+  // ==== Чтение ====
+
+  /** Получить все карты */
   getCards(): Observable<ClientCard[]> {
-    return this.http.get<ClientCard[]>(this.apiUrl)
-      .pipe(tap(list => this.cardsSubject.next(list)));
+    return this.http.get<ClientCard[]>(this.apiUrl);
   }
 
+  /** Поиск карт по номеру, ФИО или телефону: GET /api/cards/search?q=... */
   searchCards(query: string): Observable<ClientCard[]> {
-    return this.http.get<ClientCard[]>(this.apiUrl, {
-      params: { q: query || '' }
-    });
+    const params = new HttpParams().set('q', query);
+    return this.http.get<ClientCard[]>(`${this.apiUrl}/search`, { params });
   }
 
-  getAll(): Observable<ClientCard[]> {
-    return this.getCards();
-  }
-
-  getByNumber(cardNumber: string): Observable<ClientCard> {
-    return this.http.get<ClientCard>(`${this.apiUrl}/by-number/${encodeURIComponent(cardNumber)}`);
-  }
-
-  getById(id: number | string): Observable<ClientCard> {
-    return this.http.get<ClientCard>(`${this.apiUrl}/${id}`);
-  }
-
-  // ============================================================
-  // CRUD — принимают Partial<ClientCard> (в т.ч. { number, name, ... })
-  // ============================================================
-  createCard(data: Partial<ClientCard>): Observable<ClientCard> {
-    return this.http.post<ClientCard>(this.apiUrl, data);
-  }
-
-  create(data: Partial<ClientCard>): Observable<ClientCard> {
-    return this.createCard(data);
-  }
-
-  update(id: number | string, data: Partial<ClientCard>): Observable<ClientCard> {
-    return this.http.put<ClientCard>(`${this.apiUrl}/${id}`, data);
-  }
-
-  deleteCard(id: number | string): Observable<any> {
-    return this.http.delete<any>(`${this.apiUrl}/${id}`);
-  }
-
-  remove(id: number | string): Observable<any> {
-    return this.deleteCard(id);
-  }
-
-  // ============================================================
-  // Баланс / операции — id это Mongo _id (number из модели)
-  // ============================================================
-  topUp(id: number | string, payload: TopUpPayload): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl}/${id}/topup`, payload);
-  }
-
-  /** По номеру карты — используется в mqtt.service.ts */
-  topUpByNumber(cardNumber: string, payload: TopUpPayload): Observable<any> {
-    return this.http.post<any>(
-      `${this.apiUrl}/by-number/${encodeURIComponent(cardNumber)}/topup`,
-      payload
+  /** Получить карту по номеру */
+  getCard(card: string): Observable<ClientCard> {
+    return this.http.get<ClientCard>(
+      `${this.apiUrl}/${encodeURIComponent(card)}`,
     );
   }
 
-  debit(id: number | string, payload: { amount: number; postId?: number; comment?: string }): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl}/${id}/debit`, payload);
+  // ==== Создание и обновление ====
+
+  /** Старый метод (для cards-management) — только card + type */
+  addCard(card: string, type: ClientCardType): Observable<ClientCard> {
+    return this.http.post<ClientCard>(this.apiUrl, { card, type });
   }
 
-  getOperations(id: number | string, limit = 100): Observable<CardOperation[]> {
-    return this.http.get<CardOperation[]>(
-      `${this.apiUrl}/${id}/operations`,
-      { params: { limit: String(limit) } }
+  /** Новый метод — сразу с ФИО и телефоном (для card-list) */
+  createCard(dto: {
+    card: string;
+    type: ClientCardType;
+    fullName?: string;
+    phone?: string;
+  }): Observable<ClientCard> {
+    return this.http.post<ClientCard>(this.apiUrl, dto);
+  }
+
+  /** Обновить ФИО / телефон: PATCH /api/cards/:card */
+  updateCardInfo(
+    card: string,
+    data: { fullName?: string; phone?: string },
+  ): Observable<ClientCard> {
+    return this.http.patch<ClientCard>(
+      `${this.apiUrl}/${encodeURIComponent(card)}`,
+      data,
     );
   }
 
-  /** Алиас, используется в card-list.component.ts */
-  getCardOperations(id: number | string, limit = 100): Observable<CardOperation[]> {
-    return this.getOperations(id, limit);
-  }
+  // ==== Операции с балансом ====
 
-  // ============================================================
-  // Освобождение карты
-  // ============================================================
-  releaseCard(cardNumber: string): Observable<{ ok: boolean; released: boolean }> {
-    return this.http.post<{ ok: boolean; released: boolean }>(
-      `${this.apiUrl}/by-number/${encodeURIComponent(cardNumber)}/release`,
-      {}
+  /** Ручное пополнение оператором: POST /api/cards/:card/topup */
+  topUp(card: string, amount: number): Observable<ClientCard> {
+    return this.http.post<ClientCard>(
+      `${this.apiUrl}/${encodeURIComponent(card)}/topup`,
+      { amount },
     );
   }
 
-  // ============================================================
-  // Потоки
-  // ============================================================
-  getCardsUpdates(): Observable<ClientCard[]> {
-    return this.cardsSubject.asObservable();
+  /**
+   * Перенос баланса с терминала поста на карту.
+   * Вызывается из MqttService.handleCardScan при сканировании карты,
+   * если на посту накоплен положительный баланс.
+   * Бэкенд: POST /api/cards/:card/topup-from-post
+   */
+  topUpFromPost(
+    card: string,
+    postId: string,
+    amount: number,
+  ): Observable<ClientCard> {
+    return this.http.post<ClientCard>(
+      `${this.apiUrl}/${encodeURIComponent(card)}/topup-from-post`,
+      { postId, amount },
+    );
+  }
+
+
+
+  // ==== Удаление ====
+
+  /** Удалить карту: DELETE /api/cards/:card */
+  deleteCard(card: string): Observable<void> {
+    return this.http.delete<void>(
+      `${this.apiUrl}/${encodeURIComponent(card)}`,
+    );
+  }
+
+  // ==== Отчётность ====
+
+  /** Детальный отчёт по карте: GET /api/cards/:card/report?from=...&to=... */
+  getCardReport(
+    card: string,
+    from?: string,
+    to?: string,
+  ): Observable<CardReportResponse> {
+    let params = new HttpParams();
+    if (from) params = params.set('from', from);
+    if (to) params = params.set('to', to);
+    return this.http.get<CardReportResponse>(
+      `${this.apiUrl}/${encodeURIComponent(card)}/report`,
+      { params },
+    );
   }
 }
