@@ -53,7 +53,8 @@ export interface RemoteMqttSettings {
 export interface MqttSettings {
   local: LocalMqttSettings;
   remote: RemoteMqttSettings;
-  brokerUrl?: string;// Прямой URL брокера (для совместимости со старой конфигурацией). 
+  /** Прямой URL брокера (для совместимости со старой конфигурацией). */
+  brokerUrl?: string;
 }
 
 export interface GeneralSettings {
@@ -75,7 +76,7 @@ export const emptyPostSettings: PostSettings = {
   dimmerMask: {},
   buttonInputs: {},
   relayDelays: {},
-  cameras: {}
+  cameras: {},
 };
 
 export const DEFAULT_MQTT: MqttSettings = {
@@ -111,7 +112,7 @@ export class AdminService {
   private http = inject(HttpClient);
   private apiUrl = `${environment.apiUrl}`;
 
-  // ------- Трансформация posts: объект (server) <-> массив (UI) -------
+  // ------- server → UI -------
 
   private fromServer(data: any): GeneralSettings {
     const postsObj = data?.posts || {};
@@ -123,11 +124,14 @@ export class AdminService {
       const prices = pd.prices || {};
       const services: ServiceConfig[] = (pd.services || []).map((svc: any) => ({
         name: svc.name,
-        price: typeof svc.price === 'number'
-          ? svc.price
-          : (typeof prices[svc.name] === 'number' ? prices[svc.name] : 0),
+        price:
+          typeof svc.price === 'number'
+            ? svc.price
+            : typeof prices[svc.name] === 'number'
+            ? prices[svc.name]
+            : 0,
         free_time_sec: svc.free_time_sec ?? 0,
-        enabled: svc.enabled !== undefined ? svc.enabled : (svc.enable !== false),
+        enabled: svc.enabled !== undefined ? svc.enabled : svc.enable !== false,
       }));
 
       posts.push({
@@ -144,25 +148,29 @@ export class AdminService {
 
     posts.sort((a, b) => a.postId - b.postId);
 
-    // MQTT — нормализуем (поддержка старого формата)
+    // MQTT — нормализуем
     const mqttRaw = data?.mqtt || {};
     let mqtt: MqttSettings;
     if (mqttRaw.local || mqttRaw.remote) {
       mqtt = {
         local: { ...DEFAULT_MQTT.local, ...(mqttRaw.local || {}) },
         remote: { ...DEFAULT_MQTT.remote, ...(mqttRaw.remote || {}) },
+        brokerUrl: mqttRaw.brokerUrl,
       };
     } else if (mqttRaw.brokerUrl) {
+      // legacy плоский формат
       mqtt = {
         local: { ...DEFAULT_MQTT.local },
         remote: { ...DEFAULT_MQTT.remote },
+        brokerUrl: mqttRaw.brokerUrl,
       };
       try {
         const u = new URL(mqttRaw.brokerUrl);
-        mqtt.remote.host = u.hostname;
-        mqtt.remote.portTls = Number(u.port) || mqtt.remote.portTls;
-        if (mqttRaw.username) mqtt.remote.username = mqttRaw.username;
-        if (mqttRaw.password) mqtt.remote.password = mqttRaw.password;
+        mqtt.local.host = u.hostname;
+        mqtt.local.portWs = Number(u.port) || mqtt.local.portWs;
+        mqtt.local.path = u.pathname || mqtt.local.path;
+        if (mqttRaw.username) mqtt.local.username = mqttRaw.username;
+        if (mqttRaw.password) mqtt.local.password = mqttRaw.password;
       } catch {}
     } else {
       mqtt = { ...DEFAULT_MQTT };
@@ -177,11 +185,16 @@ export class AdminService {
     };
   }
 
+  // ------- UI → server -------
+
   private toServer(settings: GeneralSettings): any {
+    // 1) posts: массив → объект-словарь
     const postsObj: any = {};
     settings.posts.forEach(p => {
       const prices: any = {};
-      p.services.forEach(svc => { prices[svc.name] = svc.price; });
+      p.services.forEach(svc => {
+        prices[svc.name] = svc.price;
+      });
       postsObj[p.postId] = {
         prices,
         relayMask: p.relayMask,
@@ -198,19 +211,46 @@ export class AdminService {
         })),
       };
     });
-    return { ...settings, posts: postsObj };
+
+    // 2) mqtt: { local, remote } → server принимает И { local, remote } (новый формат),
+    //    И { brokerUrl } (legacy). Отправляем новый формат — server.js его уже понимает.
+    const mqtt = {
+      local: settings.mqtt?.local ?? DEFAULT_MQTT.local,
+      remote: settings.mqtt?.remote ?? DEFAULT_MQTT.remote,
+    };
+
+    // 3) kkm: server.js ждёт { enabled, mockReceipt, provider, ... }.
+    //    Приводим UI-поля к серверным и не шлём лишних, чтобы не сломать Mixed-схему.
+    const kkmFromUi = settings.kkm || {};
+    const kkm = {
+      enabled: !!kkmFromUi.enabled,
+      mockReceipt: !!kkmFromUi.simulate,
+      provider: kkmFromUi.model || 'mock',
+      manual: {
+        kkNumber: '',
+        fiscalShiftNumber: kkmFromUi.fiscalShiftNumber ?? null,
+        cashierName: kkmFromUi.cashierName ?? '',
+      },
+    };
+
+    return {
+      ...settings,
+      posts: postsObj,
+      mqtt,
+      kkm,
+    };
   }
 
   // ================= API =================
 
   getSettings(): Observable<GeneralSettings> {
-    return this.http.get<any>(`${this.apiUrl}/settings`)
-      .pipe(map(data => this.fromServer(data)));
+    return this.http.get<any>(`${this.apiUrl}/settings`).pipe(map(data => this.fromServer(data)));
   }
 
   updateSettings(settings: GeneralSettings): Observable<GeneralSettings> {
     const body = this.toServer(settings);
-    return this.http.put<any>(`${this.apiUrl}/settings`, body)
+    return this.http
+      .put<any>(`${this.apiUrl}/settings`, body)
       .pipe(map(data => this.fromServer(data)));
   }
 
@@ -226,7 +266,6 @@ export class AdminService {
 /**
  * Строит WebSocket-URL MQTT из настроек.
  * Приоритет: brokerUrl → local (host + portWs + path).
- * Возвращает '' если собрать не удалось.
  */
 export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
   if (!mqtt) return '';
@@ -237,11 +276,10 @@ export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
 
   const local = mqtt.local;
   if (local && local.host) {
-    const scheme = 'ws';
     const port = local.portWs || 8083;
     let path = local.path || '/mqtt';
     if (!path.startsWith('/')) path = '/' + path;
-    return `${scheme}://${local.host}:${port}${path}`;
+    return `ws://${local.host}:${port}${path}`;
   }
 
   return '';
