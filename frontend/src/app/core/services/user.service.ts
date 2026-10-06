@@ -1,7 +1,8 @@
-// frontend/src/app/core/services/user.service.ts
+// src/app/core/services/user.service.ts
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+import { Observable, throwError } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 
 export type UserRole = 'admin' | 'developer' | 'operator';
@@ -38,17 +39,19 @@ export class UserService {
   private http = inject(HttpClient);
   private apiUrl = `${environment.apiUrl}/users`;
 
-  /** GET /api/users — список пользователей */
+  // ==================== Основной API ====================
+
+  /** GET /api/users */
   list(): Observable<AppUser[]> {
     return this.http.get<AppUser[]>(this.apiUrl);
   }
 
-  /** POST /api/users — создать пользователя */
+  /** POST /api/users */
   create(dto: CreateUserDto): Observable<AppUser> {
     return this.http.post<AppUser>(this.apiUrl, dto);
   }
 
-  /** PATCH /api/users/:id — обновить */
+  /** PATCH /api/users/:id */
   update(id: string, dto: UpdateUserDto): Observable<AppUser> {
     return this.http.patch<AppUser>(`${this.apiUrl}/${id}`, dto);
   }
@@ -56,5 +59,34 @@ export class UserService {
   /** DELETE /api/users/:id */
   remove(id: string): Observable<void> {
     return this.http.delete<void>(`${this.apiUrl}/${id}`);
+  }
+
+  // ==================== Legacy-алиасы ====================
+  // Нужны, чтобы старые компоненты (user-form.component.ts) компилировались
+  // без изменений. Со временем их лучше удалить, а компоненты переписать
+  // на list/create/update/remove.
+
+  /** Legacy: получить пользователя по id (через list + filter). */
+  getUser(id: number | string): Observable<AppUser> {
+    const idStr = String(id);
+    return this.list().pipe(
+      map((users) => {
+        const found = users.find((u) => u._id === idStr);
+        if (!found) {
+          throw new Error(`Пользователь ${idStr} не найден`);
+        }
+        return found;
+      }),
+    );
+  }
+
+  /** Legacy: создать пользователя. */
+  createUser(dto: CreateUserDto): Observable<AppUser> {
+    return this.create(dto);
+  }
+
+  /** Legacy: обновить пользователя. */
+  updateUser(id: number | string, dto: UpdateUserDto): Observable<AppUser> {
+    return this.update(String(id), dto);
   }
 }

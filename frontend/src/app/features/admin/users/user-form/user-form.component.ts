@@ -1,48 +1,128 @@
-﻿import { Component, OnInit, inject } from '@angular/core';
+﻿// src/app/features/admin/users/user-form/user-form.component.ts
+import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { UserService } from '../../../../core/services/user.service';
-import { GroupService } from '../../../../core/services/group.service';
-import { Group } from '../../../../core/models/group.model';
+import { UserService, AppUser, CreateUserDto, UpdateUserDto, UserRole } from '../../../../core/services/user.service';
+import { NotificationService } from '../../../../core/services/notification.service';
+
+interface UserFormModel {
+  login: string;
+  password: string;
+  fullName: string;
+  email: string;
+  role: UserRole;
+  isActive: boolean;
+}
+
 @Component({
-  selector: 'app-user-form', standalone: true, imports: [CommonModule, FormsModule, RouterModule],
-  template: `<div>
-    <h1>{{isEdit ? 'Редактирование' : 'Новый пользователь'}}</h1>
-    <form (ngSubmit)="onSubmit()" style="background:#fff;padding:24px;border-radius:8px;max-width:600px">
-      <div style="margin-bottom:16px"><label>Логин</label><input [(ngModel)]="m.username" name="u" required style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px"/></div>
-      <div style="margin-bottom:16px"><label>Email</label><input [(ngModel)]="m.email" name="e" type="email" required style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px"/></div>
-      <div style="margin-bottom:16px"><label>ФИО</label><input [(ngModel)]="m.fullName" name="f" required style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px"/></div>
-      <div style="margin-bottom:16px"><label>Пароль</label><input [(ngModel)]="m.password" name="p" type="password" [required]="!isEdit" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px"/></div>
-      <div style="margin-bottom:16px"><label>Группа</label>
-        <select [(ngModel)]="m.groupId" name="g" required style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px">
-          <option *ngFor="let g of groups" [ngValue]="g.id">{{g.displayName}}</option>
-        </select>
-      </div>
-      <div style="margin-bottom:16px"><label><input type="checkbox" [(ngModel)]="m.isActive" name="a"/> Активен</label></div>
-      <button type="submit" style="background:#0ea5e9;color:#fff;padding:10px 20px;border:none;border-radius:6px;cursor:pointer">Сохранить</button>
-      <a routerLink="/admin/users" style="margin-left:12px">Отмена</a>
-    </form>
-  </div>`
+  selector: 'app-user-form',
+  standalone: true,
+  imports: [CommonModule, FormsModule, RouterModule],
+  templateUrl: './user-form.component.html',
+  styleUrls: ['./user-form.component.scss'],
 })
 export class UserFormComponent implements OnInit {
   private us = inject(UserService);
-  private gs = inject(GroupService);
   private route = inject(ActivatedRoute);
   private router = inject(Router);
-  groups: Group[] = []; isEdit = false; userId?: number;
-  m = { username: '', email: '', fullName: '', password: '', groupId: 0, isActive: true };
+  private notify = inject(NotificationService);
+
+  /** id пользователя, если редактируем; null — если создаём */
+  userId: number | null = null;
+  isEdit = false;
+
+  /** Модель формы */
+  m: UserFormModel = {
+    login: '',
+    password: '',
+    fullName: '',
+    email: '',
+    role: 'operator',
+    isActive: true,
+  };
+
+  readonly roles: { value: UserRole; label: string }[] = [
+    { value: 'admin', label: 'Администратор' },
+    { value: 'developer', label: 'Разработчик' },
+    { value: 'operator', label: 'Оператор' },
+  ];
+
   ngOnInit(): void {
-    this.gs.getGroups().subscribe(g => this.groups = g);
     const id = this.route.snapshot.paramMap.get('id');
-    if (id) { this.isEdit = true; this.userId = +id; this.us.getUser(this.userId).subscribe(u => this.m = { ...u, password: '' } as any); }
-  }
-  onSubmit(): void {
-    if (this.isEdit && this.userId) {
-      const dto: any = { ...this.m }; if (!dto.password) delete dto.password;
-      this.us.updateUser(this.userId, dto).subscribe(() => this.router.navigate(['/admin/users']));
-    } else {
-      this.us.createUser(this.m as any).subscribe(() => this.router.navigate(['/admin/users']));
+    if (id && id !== 'new') {
+      this.isEdit = true;
+      this.userId = +id;
+      this.loadUser(this.userId);
     }
+  }
+
+  private loadUser(id: number): void {
+    this.us.getUser(id).subscribe({
+      next: (u: AppUser) => {
+        this.m = {
+          login: u.login,
+          password: '',
+          fullName: u.fullName,
+          email: u.email,
+          role: u.role,
+          isActive: u.isActive,
+        };
+      },
+      error: (err) => {
+        console.error('[user-form] load failed:', err);
+        this.notify.error('Не удалось загрузить пользователя');
+      },
+    });
+  }
+
+  save(): void {
+    if (!this.m.login || (!this.isEdit && !this.m.password)) {
+      this.notify.warning('Заполните логин и пароль');
+      return;
+    }
+
+    if (this.isEdit && this.userId != null) {
+      const dto: UpdateUserDto = {
+        fullName: this.m.fullName,
+        email: this.m.email,
+        role: this.m.role,
+        isActive: this.m.isActive,
+      };
+      if (this.m.password) dto.password = this.m.password;
+
+      this.us.updateUser(this.userId, dto).subscribe({
+        next: () => {
+          this.notify.success('Пользователь обновлён');
+          this.router.navigate(['/admin/users']);
+        },
+        error: (err) => {
+          console.error('[user-form] update failed:', err);
+          this.notify.error(err?.error?.error || 'Ошибка обновления');
+        },
+      });
+    } else {
+      const dto: CreateUserDto = {
+        login: this.m.login,
+        password: this.m.password,
+        fullName: this.m.fullName,
+        email: this.m.email,
+        role: this.m.role,
+      };
+      this.us.createUser(dto).subscribe({
+        next: () => {
+          this.notify.success('Пользователь создан');
+          this.router.navigate(['/admin/users']);
+        },
+        error: (err) => {
+          console.error('[user-form] create failed:', err);
+          this.notify.error(err?.error?.error || 'Ошибка создания');
+        },
+      });
+    }
+  }
+
+  cancel(): void {
+    this.router.navigate(['/admin/users']);
   }
 }
