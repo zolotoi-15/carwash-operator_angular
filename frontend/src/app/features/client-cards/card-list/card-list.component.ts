@@ -116,18 +116,22 @@ export class CardListComponent implements OnInit, OnDestroy {
   }
 
   topUp(card: ClientCard): void {
-    const amount = this.topUpAmount[card.card];
-    if (!amount || amount <= 0) { this.notify.warning('Введите сумму'); return; }
-    this.cardService.topUp(card.card, amount).subscribe({
-      next: (updated) => {
-        this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
-        this.topUpAmount[card.card] = 0;
-        const idx = this.cards.findIndex((c) => c.card === card.card);
-        if (idx >= 0) this.cards[idx] = updated;
-      },
-      error: () => this.notify.error('Ошибка пополнения'),
-    });
-  }
+  const amount = this.topUpAmount[card.card];
+  if (!amount || amount <= 0) { this.notify.warning('Введите сумму'); return; }
+  this.cardService.topUp(card.card, amount).subscribe({
+    next: (updated) => {
+      this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
+      this.topUpAmount[card.card] = 0;
+      const idx = this.cards.findIndex(c => c.card === card.card);
+      if (idx >= 0) this.cards[idx] = updated;
+    },
+    error: (err) => {
+      // err.status 404 → "Карта не найдена"
+      const msg = err?.error?.error || err?.message || 'Ошибка пополнения';
+      this.notify.error(msg);
+    },
+  });
+}
 
   deleteCard(card: ClientCard): void {
     if (!confirm(`Удалить карту ${card.card}?`)) return;
