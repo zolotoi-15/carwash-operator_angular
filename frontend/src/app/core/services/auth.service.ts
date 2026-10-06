@@ -34,6 +34,10 @@ export class AuthService {
   private http = inject(HttpClient);
   private router = inject(Router);
 
+  /** Ключи localStorage — деталь реализации, не конфиг окружения */
+  private readonly TOKEN_KEY = 'carwash_auth_token';
+  private readonly USER_KEY = 'carwash_auth_user';
+
   private readonly currentUser = signal<User | null>(null);
   private readonly tokenSignal = signal<string | null>(null);
 
@@ -93,8 +97,8 @@ export class AuthService {
   }
 
   restoreSession(): void {
-    const token = localStorage.getItem(environment.tokenKey);
-    const userJson = localStorage.getItem(environment.tokenKey + '_user');
+    const token = localStorage.getItem(this.TOKEN_KEY);
+    const userJson = localStorage.getItem(this.USER_KEY);
     if (!token || !userJson) return;
     try {
       this.tokenSignal.set(token);
@@ -147,15 +151,15 @@ export class AuthService {
   private setSession(session: AuthSession): void {
     this.tokenSignal.set(session.token);
     this.currentUser.set(session.user);
-    localStorage.setItem(environment.tokenKey, session.token);
-    localStorage.setItem(environment.tokenKey + '_user', JSON.stringify(session.user));
+    localStorage.setItem(this.TOKEN_KEY, session.token);
+    localStorage.setItem(this.USER_KEY, JSON.stringify(session.user));
   }
 
   private clearSession(): void {
     this.tokenSignal.set(null);
     this.currentUser.set(null);
-    localStorage.removeItem(environment.tokenKey);
-    localStorage.removeItem(environment.tokenKey + '_user');
+    localStorage.removeItem(this.TOKEN_KEY);
+    localStorage.removeItem(this.USER_KEY);
   }
 
   /** backend шлёт 'admin' | 'operator' | 'developer' — приводим к enum Role */
