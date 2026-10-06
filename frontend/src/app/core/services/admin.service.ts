@@ -101,7 +101,13 @@ export const DEFAULT_MQTT: MqttSettings = {
 export const emptyGeneralSettings: GeneralSettings = {
   posts: [],
   mqtt: DEFAULT_MQTT,
-  kkm: { enabled: false, simulate: false, model: '', fiscalShiftNumber: 0, cashierName: '' },
+  kkm: {
+    enabled: false,
+    simulate: false,
+    model: '',
+    fiscalShiftNumber: 0,
+    cashierName: '',
+  },
   numberOfPosts: 8,
 };
 
@@ -148,7 +154,7 @@ export class AdminService {
 
     posts.sort((a, b) => a.postId - b.postId);
 
-    // MQTT — нормализуем
+    // MQTT — нормализуем (новый формат { local, remote }, старый { brokerUrl })
     const mqttRaw = data?.mqtt || {};
     let mqtt: MqttSettings;
     if (mqttRaw.local || mqttRaw.remote) {
@@ -158,7 +164,6 @@ export class AdminService {
         brokerUrl: mqttRaw.brokerUrl,
       };
     } else if (mqttRaw.brokerUrl) {
-      // legacy плоский формат
       mqtt = {
         local: { ...DEFAULT_MQTT.local },
         remote: { ...DEFAULT_MQTT.remote },
@@ -212,15 +217,13 @@ export class AdminService {
       };
     });
 
-    // 2) mqtt: { local, remote } → server принимает И { local, remote } (новый формат),
-    //    И { brokerUrl } (legacy). Отправляем новый формат — server.js его уже понимает.
+    // 2) mqtt: отправляем { local, remote } — server.js это понимает
     const mqtt = {
       local: settings.mqtt?.local ?? DEFAULT_MQTT.local,
       remote: settings.mqtt?.remote ?? DEFAULT_MQTT.remote,
     };
 
-    // 3) kkm: server.js ждёт { enabled, mockReceipt, provider, ... }.
-    //    Приводим UI-поля к серверным и не шлём лишних, чтобы не сломать Mixed-схему.
+    // 3) kkm: приводим UI-поля к серверным
     const kkmFromUi = settings.kkm || {};
     const kkm = {
       enabled: !!kkmFromUi.enabled,
@@ -244,7 +247,9 @@ export class AdminService {
   // ================= API =================
 
   getSettings(): Observable<GeneralSettings> {
-    return this.http.get<any>(`${this.apiUrl}/settings`).pipe(map(data => this.fromServer(data)));
+    return this.http
+      .get<any>(`${this.apiUrl}/settings`)
+      .pipe(map(data => this.fromServer(data)));
   }
 
   updateSettings(settings: GeneralSettings): Observable<GeneralSettings> {
@@ -252,6 +257,11 @@ export class AdminService {
     return this.http
       .put<any>(`${this.apiUrl}/settings`, body)
       .pipe(map(data => this.fromServer(data)));
+  }
+
+  /** Публикация текущего конфига во все посты через MQTT (POST /api/publish-config) */
+  publishConfig(): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/publish-config`, {});
   }
 
   updatePostSettings(postId: number, ps: PostSettings): Observable<PostSettings> {
@@ -266,6 +276,7 @@ export class AdminService {
 /**
  * Строит WebSocket-URL MQTT из настроек.
  * Приоритет: brokerUrl → local (host + portWs + path).
+ * Возвращает '' если собрать не удалось.
  */
 export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
   if (!mqtt) return '';
