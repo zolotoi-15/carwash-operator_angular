@@ -3,7 +3,13 @@ import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
-import { UserService, AppUser, CreateUserDto, UpdateUserDto, UserRole } from '../../../../core/services/user.service';
+import {
+  UserService,
+  AppUser,
+  CreateUserDto,
+  UpdateUserDto,
+  UserRole,
+} from '../../../../core/services/user.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 
 interface UserFormModel {
@@ -29,7 +35,7 @@ export class UserFormComponent implements OnInit {
   private notify = inject(NotificationService);
 
   /** id пользователя, если редактируем; null — если создаём */
-  userId: number | null = null;
+  userId: string | null = null;
   isEdit = false;
 
   /** Модель формы */
@@ -52,12 +58,12 @@ export class UserFormComponent implements OnInit {
     const id = this.route.snapshot.paramMap.get('id');
     if (id && id !== 'new') {
       this.isEdit = true;
-      this.userId = +id;
-      this.loadUser(this.userId);
+      this.userId = id;
+      this.loadUser(id);
     }
   }
 
-  private loadUser(id: number): void {
+  private loadUser(id: string): void {
     this.us.getUser(id).subscribe({
       next: (u: AppUser) => {
         this.m = {
