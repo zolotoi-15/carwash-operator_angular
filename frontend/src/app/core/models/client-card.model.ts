@@ -1,44 +1,51 @@
-export type ClientCardType = 'client' | 'operator' | 'service';
+// frontend/src/app/core/models/client-card.model.ts
 
+/**
+ * Карта клиента / оператора / сервисная.
+ *
+ * ВАЖНО: id — строка (Mongo ObjectId приходит с бэкенда как строка).
+ * Раньше было number — это вызывало ошибки типов при сравнении.
+ */
 export interface ClientCard {
-  _id?: string;
-  card: string;         // "8C8ADC80"
-  type: ClientCardType;
-  balance: number;
-  fullName?: string;
+  id: string;
+  number: string;               // на бэке — поле 'card', но toDto переименовывает в 'number'
+  name?: string;
   phone?: string;
+  type: 'client' | 'operator' | 'service';
+  balance: number;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * DTO для создания карты.
+ * Использует 'number', а не 'card' — так шлёт фронт,
+ * а бэкенд принимает оба варианта (см. routes/cards.js).
+ */
 export interface CreateClientCardDto {
-  card: string;
-  type: ClientCardType;
-  fullName?: string;
+  number: string;
+  name?: string;
   phone?: string;
+  type?: 'client' | 'operator' | 'service';
 }
 
-export interface CardOperation {
-  _id?: string;
-  card: string;
-  type: 'topup' | 'charge' | 'topup_from_post' | 'refund' | 'adjustment';
+/**
+ * DTO для пополнения баланса.
+ */
+export interface TopUpDto {
   amount: number;
-  balanceAfter: number;
-  createdAt: string;
-  postId?: string | null;
-  receiptNumber?: string | null;
-  operatorName?: string | null;
-  comment?: string | null;
+  comment?: string;
 }
 
-export interface CardReportSummary {
-  balance: number;
-  totalTopUps: number;
-  totalCharges: number;
-  operationsCount: number;
-}
-
-export interface CardReportResponse {
-  summary: CardReportSummary;
-  operations: CardOperation[];
+/**
+ * Операция по карте (пополнение/списание/возврат).
+ * Соответствует тому, что возвращает GET /api/cards/:card/operations
+ */
+export interface CardOperation {
+  id: string;
+  cardId: string;               // на бэке — card (номер карты) или cardId
+  type: 'topup' | 'charge' | 'refund';
+  amount: number;
+  date: string;                 // ISO
+  description?: string;
 }
