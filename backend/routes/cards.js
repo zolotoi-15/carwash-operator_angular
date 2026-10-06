@@ -2,6 +2,15 @@
 const express = require('express');
 const router = express.Router();
 const ClientCard = require('../models/ClientCard');
+const { topUpById, topUpByNumber } = require('../controllers/cardsController');
+
+
+// ⚠️ Специфичные роуты — ВЫШЕ общих "/:id"
+router.post('/by-number/:number/topup', topUpByNumber);
+router.post('/:id/topup', topUpById);
+
+router.get('/:id', getCardById);
+router.get('/', listCards);
 
 // GET /api/cards/:card — одна карта
 router.get('/:card', async (req, res) => {
