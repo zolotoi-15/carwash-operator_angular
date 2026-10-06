@@ -53,6 +53,7 @@ export interface RemoteMqttSettings {
 export interface MqttSettings {
   local: LocalMqttSettings;
   remote: RemoteMqttSettings;
+  brokerUrl?: string;// Прямой URL брокера (для совместимости со старой конфигурацией). 
 }
 
 export interface GeneralSettings {
@@ -220,4 +221,28 @@ export class AdminService {
   copySettingsFromPost1ToAll(): Observable<void> {
     return of(void 0);
   }
+}
+
+/**
+ * Строит WebSocket-URL MQTT из настроек.
+ * Приоритет: brokerUrl → local (host + portWs + path).
+ * Возвращает '' если собрать не удалось.
+ */
+export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
+  if (!mqtt) return '';
+
+  if (mqtt.brokerUrl && mqtt.brokerUrl.trim()) {
+    return mqtt.brokerUrl.trim();
+  }
+
+  const local = mqtt.local;
+  if (local && local.host) {
+    const scheme = 'ws';
+    const port = local.portWs || 8083;
+    let path = local.path || '/mqtt';
+    if (!path.startsWith('/')) path = '/' + path;
+    return `${scheme}://${local.host}:${port}${path}`;
+  }
+
+  return '';
 }

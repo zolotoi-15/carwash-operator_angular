@@ -4,7 +4,7 @@ import mqtt from 'mqtt';
 import { Subject, firstValueFrom } from 'rxjs';
 import { ReceiptData } from '../models/receipt.model';
 import { ReceiptService } from './receipt.service';
-import { AdminService } from './admin.service';
+import { AdminService, MqttSettings, buildBrokerUrl } from './admin.service';
 import { ClientCardService } from './client-card.service';
 
 export interface ServiceConfig {
@@ -80,36 +80,41 @@ export class MqttService {
   }
 
   private async initMqttSettings() {
+  // 1) Пытаемся получить настройки с бэкенда
+  try {
+    const settings = await firstValueFrom(this.admin.getSettings());
+    const url = buildBrokerUrl(settings.mqtt);
+    if (url) {
+      this.connect(
+        url,
+        settings.mqtt?.local?.username,
+        settings.mqtt?.local?.password,
+      );
+      return;
+    }
+  } catch (e) {
+    console.warn('Не удалось загрузить настройки MQTT с бэкенда', e);
+  }
+
+  // 2) Фолбэк — localStorage
+  const saved = localStorage.getItem('mqttSettings');
+  if (saved) {
     try {
-      const settings = await firstValueFrom(this.admin.getSettings());
-      const mqttCfg = settings.mqtt as
-        | { brokerUrl?: string; username?: string; password?: string }
-        | undefined;
-      if (mqttCfg && mqttCfg.brokerUrl) {
-        this.connect(mqttCfg.brokerUrl, mqttCfg.username, mqttCfg.password);
+      const settings = JSON.parse(saved);
+      if (settings.brokerUrl) {
+        this.connect(settings.brokerUrl, settings.username, settings.password);
         return;
       }
     } catch (e) {
-      console.warn('Не удалось загрузить настройки MQTT с бэкенда', e);
+      console.warn('Ошибка парсинга сохранённых MQTT-настроек', e);
     }
-
-    const saved = localStorage.getItem('mqttSettings');
-    if (saved) {
-      try {
-        const settings = JSON.parse(saved);
-        if (settings.brokerUrl) {
-          this.connect(settings.brokerUrl, settings.username, settings.password);
-          return;
-        }
-      } catch (e) {
-        console.warn('Ошибка парсинга сохранённых MQTT-настроек', e);
-      }
-    }
-
-    const defaultUrl = `ws://${window.location.hostname}:8083`;
-    console.warn('Используем настройки MQTT по умолчанию:', defaultUrl);
-    this.connect(defaultUrl);
   }
+
+  // 3) Совсем крайний случай — по hostname
+  const defaultUrl = `ws://${window.location.hostname}:8083/mqtt`;
+  console.warn('Используем настройки MQTT по умолчанию:', defaultUrl);
+  this.connect(defaultUrl);
+}
 
   connect(brokerUrl: string, username?: string, password?: string) {
     if (this.client) {
@@ -373,15 +378,14 @@ export class MqttService {
   }
 
   /** 🔥 Переподключение из объекта настроек (для general-settings.component). */
-  reconnectFromSettings(
-    settings?: { brokerUrl?: string; username?: string; password?: string } | null,
-  ): void {
-    if (!settings || !settings.brokerUrl) {
-      console.warn('reconnectFromSettings: пустые настройки, пропускаем');
-      return;
-    }
-    this.connect(settings.brokerUrl, settings.username, settings.password);
+  reconnectFromSettings(settings?: MqttSettings | null): void {
+  const url = buildBrokerUrl(settings);
+  if (!url) {
+    console.warn('reconnectFromSettings: пустые настройки, пропускаем');
+    return;
   }
+  this.connect(url, settings?.local?.username, settings?.local?.password);
+}
 
   sendCommand(postId: string, command: string) {
     if (this.client && this.client.connected) {

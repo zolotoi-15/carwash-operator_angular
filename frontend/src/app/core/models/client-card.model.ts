@@ -1,53 +1,45 @@
-// frontend/src/app/core/models/client-card.model.ts
+// src/app/core/models/client-card.model.ts
+export type ClientCardType = 'client' | 'operator' | 'service';
 
-/**
- * Карта клиента / оператора / сервисная.
- *
- * ВАЖНО: id — строка (Mongo ObjectId приходит с бэкенда как строка).
- * Раньше было number — это вызывало ошибки типов при сравнении.
- */
 export interface ClientCard {
-  id: string;
-  number: string;               // на бэке — поле 'card', но toDto переименовывает в 'number'
-  name?: string;
-  phone?: string;
-  type: 'client' | 'operator' | 'service';
+  _id?: string;
+  card: string;                 // "8C8ADC80"
+  type: ClientCardType;
   balance: number;
+  fullName?: string;
+  phone?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
-
-
-/**
- * DTO для создания карты.
- * Использует 'number', а не 'card' — так шлёт фронт,
- * а бэкенд принимает оба варианта (см. routes/cards.js).
- */
 export interface CreateClientCardDto {
-  number: string;
-  name?: string;
+  card: string;
+  type: ClientCardType;
+  fullName?: string;
   phone?: string;
-  type?: 'client' | 'operator' | 'service';
 }
 
-/**
- * DTO для пополнения баланса.
- */
-export interface TopUpDto {
-  amount: number;
-  comment?: string;
-}
-
-/**
- * Операция по карте (пополнение/списание/возврат).
- * Соответствует тому, что возвращает GET /api/cards/:card/operations
- */
 export interface CardOperation {
-  id: string;
-  cardId: string;               // на бэке — card (номер карты) или cardId
-  type: 'topup' | 'charge' | 'refund';
+  _id?: string;
+  card: string;
+  type: 'topup' | 'charge' | 'topup_from_post' | 'refund' | 'adjustment';
   amount: number;
-  date: string;                 // ISO
-  description?: string;
+  balanceAfter: number;
+  createdAt: string;
+  postId?: string | null;
+  receiptNumber?: string | null;
+  operatorName?: string | null;
+  comment?: string | null;
+}
+
+export interface CardReportSummary {
+  balance: number;
+  totalTopUps: number;
+  totalCharges: number;
+  operationsCount: number;
+}
+
+export interface CardReportResponse {
+  summary: CardReportSummary;
+  operations: CardOperation[];
 }

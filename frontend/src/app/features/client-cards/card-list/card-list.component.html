@@ -2,10 +2,12 @@
   <h2>💳 Карты клиентов</h2>
 
   <div class="search-row">
-    <input class="search-input"
-           placeholder="Поиск по номеру карты, ФИО или телефону..."
-           [(ngModel)]="query"
-           (keyup.enter)="search()" />
+    <input
+      class="search-input"
+      placeholder="Поиск по номеру карты, ФИО или телефону..."
+      [(ngModel)]="query"
+      (keyup.enter)="search()"
+    />
     <button class="btn btn-primary" (click)="search()">🔍 Найти</button>
     <button class="btn btn-secondary" *ngIf="query" (click)="clearSearch()">✕ Сбросить</button>
     <button class="btn btn-scan" (click)="scanCard()" [disabled]="waitingScan">
@@ -16,8 +18,8 @@
   <div class="add-row">
     <h3>Клиент</h3>
     <div class="add-form">
-      <input placeholder="Номер карты" [(ngModel)]="newCard.number" />
-      <input placeholder="ФИО (необязательно)" [(ngModel)]="newCard.name" />
+      <input placeholder="Номер карты" [(ngModel)]="newCard.card" />
+      <input placeholder="ФИО (необязательно)" [(ngModel)]="newCard.fullName" />
       <input placeholder="Телефон (необязательно)" [(ngModel)]="newCard.phone" />
       <button class="btn btn-primary" (click)="addCard()">Добавить</button>
     </div>
@@ -37,17 +39,22 @@
         </tr>
       </thead>
       <tbody>
-        <tr *ngFor="let c of cards; trackBy: trackById">
-          <td class="mono">{{ c.number }}</td>
-          <td>{{ c.name || '—' }}</td>
+        <tr *ngFor="let c of cards; trackBy: trackByCard">
+          <td class="mono">{{ c.card }}</td>
+          <td>{{ c.fullName || '—' }}</td>
           <td>{{ c.phone || '—' }}</td>
           <td><span class="badge" [class]="'badge-' + c.type">{{ c.type }}</span></td>
           <td class="balance">{{ formatBalance(c.balance) }} ₽</td>
           <td>
             <div class="topup-cell">
-              <input type="number" min="0" step="1" placeholder="Сумма"
-                     [(ngModel)]="topUpAmount[c.id]"
-                     (keyup.enter)="topUp(c)" />
+              <input
+                type="number"
+                min="0"
+                step="1"
+                placeholder="Сумма"
+                [(ngModel)]="topUpAmount[c.card]"
+                (keyup.enter)="topUp(c)"
+              />
               <button class="btn btn-success btn-sm" (click)="topUp(c)">Пополнить</button>
             </div>
           </td>
@@ -72,12 +79,12 @@
 <div class="modal-backdrop" *ngIf="reportModalOpen" (click)="closeReport()"></div>
 <div class="modal" *ngIf="reportModalOpen && reportCard">
   <div class="modal-header">
-    <h3>Отчёт по карте {{ reportCard.number }}</h3>
+    <h3>Отчёт по карте {{ reportCard.card }}</h3>
     <button class="modal-close" (click)="closeReport()">✕</button>
   </div>
   <div class="modal-body">
     <div class="report-summary">
-      <div><strong>ФИО:</strong> {{ reportCard.name || '—' }}</div>
+      <div><strong>ФИО:</strong> {{ reportCard.fullName || '—' }}</div>
       <div><strong>Телефон:</strong> {{ reportCard.phone || '—' }}</div>
       <div><strong>Тип:</strong> {{ reportCard.type }}</div>
       <div><strong>Текущий баланс:</strong> {{ formatBalance(reportCard.balance) }} ₽</div>
@@ -91,21 +98,30 @@
       </thead>
       <tbody>
         <tr *ngFor="let op of reportOperations">
-          <td>{{ op.date | date:'dd.MM.yy HH:mm' }}</td>
+          <td>{{ op.createdAt | date:'dd.MM.yy HH:mm' }}</td>
           <td>
-            <span class="badge" [class.badge-topup]="op.type === 'topup'"
-                              [class.badge-charge]="op.type === 'charge'"
-                              [class.badge-refund]="op.type === 'refund'">
-              {{ op.type === 'topup' ? 'Пополнение' : op.type === 'charge' ? 'Списание' : 'Возврат' }}
+            <span class="badge"
+                  [class.badge-topup]="op.type === 'topup' || op.type === 'topup_from_post'"
+                  [class.badge-charge]="op.type === 'charge'"
+                  [class.badge-refund]="op.type === 'refund'">
+              {{
+                op.type === 'topup' ? 'Пополнение'
+                : op.type === 'topup_from_post' ? 'С поста'
+                : op.type === 'charge' ? 'Списание'
+                : op.type === 'refund' ? 'Возврат'
+                : op.type
+              }}
             </span>
           </td>
           <td class="balance">{{ op.amount.toFixed(2) }} ₽</td>
-          <td>{{ op.description || '—' }}</td>
+          <td>{{ op.comment || '—' }}</td>
         </tr>
       </tbody>
     </table>
 
-    <div *ngIf="!reportLoading && !reportOperations.length" class="empty">Операций нет</div>
+    <div *ngIf="!reportLoading && !reportOperations.length" class="empty">
+      Операций по карте нет
+    </div>
   </div>
   <div class="modal-footer">
     <button class="btn btn-secondary" (click)="closeReport()">Закрыть</button>
