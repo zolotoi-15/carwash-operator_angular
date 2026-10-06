@@ -15,7 +15,15 @@ const SUBSCRIBE_TOPICS = [
   'posts/+/config', 'posts/+/clientcard', 'system/config', 'shift/total',
 ];
 
-const FORWARD_UP_TOPICS = [/\/command$/, /^kkm\/print$/, /^card-reader\/command$/];
+const FORWARD_UP_TOPICS = [
+  /\/command$/,              // posts/N/command — управление постом
+  /^kkm\/print$/,            // печать чека
+  /^card-reader\/command$/,  // команда сканеру
+  /\/clientcardbalance$/,    // ← NEW: баланс карты для терминала
+  /\/message$/,              // ← NEW: сообщение на экран поста
+  /\/status_relay$/,         // ← NEW: состояние реле
+  /^system\/config$/         // ← NEW: общая конфигурация
+];
 
 const DEFAULTS = {
   localHost: '0.0.0.0', localPortTcp: 1883, localPortWs: 8083,
