@@ -4,9 +4,5 @@
     "secure": false,
     "changeOrigin": true,
     "logLevel": "debug"
-  },
-  "/mqtt": {
-    "target": "ws://localhost:3000",
-    "ws": true
   }
 }
