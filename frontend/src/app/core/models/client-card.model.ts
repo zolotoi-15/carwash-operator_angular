@@ -1,9 +1,8 @@
-// src/app/core/models/client-card.model.ts
 export type ClientCardType = 'client' | 'operator' | 'service';
 
 export interface ClientCard {
   _id?: string;
-  card: string;                 // "8C8ADC80"
+  card: string;
   type: ClientCardType;
   balance: number;
   fullName?: string;
