@@ -2,17 +2,20 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Копируем файлы зависимостей
+# Прод-зависимости
 COPY package*.json ./
+RUN npm ci --omit=dev
 
-# Устанавливаем только production-зависимости
-RUN npm install --omit=dev
-
-# Копируем исходный код
+# Исходники
 COPY . .
 
-# Открываем порт (должен совпадать с PORT в .env)
+# Папки, которые server.js пытается писать/читать
+RUN mkdir -p /app/fonts
+
 EXPOSE 3000
 
-# Запускаем сервер
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOST=0.0.0.0
+
 CMD ["node", "server.js"]

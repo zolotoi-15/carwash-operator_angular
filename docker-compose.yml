@@ -1,55 +1,40 @@
-version: '3.8'
-
 services:
-  # MongoDB
+  # ---------- MONGODB ----------
   mongo:
     image: mongo:7
     container_name: carwash-mongo
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     volumes:
-      - mongo-data:/data/db
-    networks:
-      - carwash-net
-
-  # MQTT-брокер (Mosquitto)
-  mosquitto:
-    image: eclipse-mosquitto:2
-    container_name: carwash-mosquitto
-    restart: unless-stopped
+      - mongo_data:/data/db
     ports:
-      - "1883:1883"   # MQTT
-      - "9001:9001"   # WebSocket
-    volumes:
-      - ./mosquitto/config:/mosquitto/config
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
+      - "27017:27017"          # опционально, для отладки; в проде убери
     networks:
-      - carwash-net
+      - carwash
 
-  # Backend (Node.js)
+  # ---------- BACKEND (Node + Express + MQTT + Mongoose) ----------
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: carwash-backend
     restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://mongo:27017/carwash
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      JWT_SECRET: change-me-in-prod
+      # MQTT брокер — внешний. Укажи реальный адрес:
+      MQTT_BROKER_URL: ws://192.168.31.211:8083/mqtt
+      KKM_ENABLED: "false"
+      KKM_MOCK_RECEIPT: "true"
     depends_on:
       - mongo
-      - mosquitto
-    environment:
-      - NODE_ENV=production
-      - PORT=3000
-      - MONGO_URI=mongodb://mongo:27017/carwash
-      - MQTT_BROKER_URL=mqtt://mosquitto:1883
-      - JWT_SECRET=change-me-in-production
     ports:
-      - "3000:3000"
+      - "3000:3000"            # чтобы можно было дергать API напрямую (для отладки)
     networks:
-      - carwash-net
+      - carwash
 
-  # Frontend (Angular + Nginx)
+  # ---------- FRONTEND (Angular + nginx) ----------
   frontend:
     build:
       context: ./frontend
@@ -59,13 +44,13 @@ services:
     depends_on:
       - backend
     ports:
-      - "8080:80"  # Открываем на хосте порт 8080
+      - "8080:80"              # http://localhost:8080
     networks:
-      - carwash-net
+      - carwash
 
 volumes:
-  mongo-data:
+  mongo_data:
 
 networks:
-  carwash-net:
+  carwash:
     driver: bridge
