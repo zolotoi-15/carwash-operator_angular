@@ -1,3 +1,4 @@
+// backend/server.js
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -31,7 +32,6 @@ function writeMqttConfigFile(settings) {
 
     let mqttConfig;
     if (local.host) {
-      // Новый формат: локальный брокер
       const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
       const port = local.portTcp ?? 1883;
       mqttConfig = {
@@ -40,7 +40,6 @@ function writeMqttConfigFile(settings) {
         password: local.password || ''
       };
     } else {
-      // Legacy: плоский brokerUrl
       mqttConfig = {
         brokerUrl: mqtt.brokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
         username: mqtt.username || '',
@@ -61,7 +60,6 @@ function connectMqtt(settings) {
     mqttClient = null;
   }
 
-  // settings — это объект mqtt (либо { brokerUrl }, либо { local, remote })
   const mqtt = settings || {};
   const local = mqtt.local || {};
 
@@ -99,7 +97,7 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/config');
     mqttClient.subscribe('posts/+/clientcard');
     mqttClient.subscribe('posts/+/receipt');
-    mqttClient.subscribe('posts/+/lwt');         // NEW: LWT постов для освобождения карты
+    mqttClient.subscribe('posts/+/lwt');
 
     if (settings.posts) {
       publishConfigToAllPosts();
@@ -109,7 +107,7 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    // ---------- Обработка чеков: kkm/print И posts/{id}/receipt ----------
+    // ---------- Чеки ----------
     if (topic === 'kkm/print' || /^posts\/[^/]+\/receipt$/.test(topic)) {
       try {
         const receiptData = JSON.parse(payload);
@@ -201,7 +199,7 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Статусы постов + расчёт дебета карты ----------
+    // ---------- Статусы постов + дебет карты ----------
     if (topic.startsWith('posts/') && topic.endsWith('/status')) {
       const postId = topic.split('/')[1];
       try {
@@ -249,9 +247,7 @@ function connectMqtt(settings) {
       }
     }
 
-    // ============================================================
-    // LWT постов — освобождаем карту, если пост ушёл offline
-    // ============================================================
+    // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
       const postId = topic.split('/')[1];
       const status = (payload || '').trim().toLowerCase();
@@ -259,9 +255,7 @@ function connectMqtt(settings) {
       if (status === 'offline') {
         const state = postsState[postId];
         if (state && state.clientCard) {
-          console.log(
-            `📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`
-          );
+          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
           delete state.clientCard;
           delete state.clientCardBalance;
           delete state.clientCardType;
@@ -282,7 +276,7 @@ function connectMqtt(settings) {
         if (!postsState[postId]) postsState[postId] = {};
         const state = postsState[postId];
 
-        // ---------- Снятие карты (NULL) ----------
+        // Снятие карты (NULL)
         if (!cardNumber || cardNumber === 'NULL') {
           console.log(`ℹ️ Пост ${postId}: карта снята (NULL)`);
           const hadCard = !!state.clientCard;
@@ -313,7 +307,6 @@ function connectMqtt(settings) {
             console.log(`🔄 [${postId}] Баланс поста сброшен вместе с картой`);
           }
 
-          // Сбросить экран сообщений на этом посту
           mqttClient.publish(
             `posts/${postId}/message`,
             JSON.stringify({ "": "" }),
@@ -322,9 +315,7 @@ function connectMqtt(settings) {
           return;
         }
 
-        // ============================================================
-        // Проверяем, не занята ли карта на другом посту
-        // ============================================================
+        // Карта уже занята другим постом?
         const busyPostId = findPostWithCard(cardNumber, postId);
         if (busyPostId) {
           console.warn(
@@ -344,9 +335,7 @@ function connectMqtt(settings) {
           );
           return;
         }
-        // ============================================================
 
-        // ---------- Привязка карты ----------
         const prevCard = state.clientCard;
         state.clientCard = cardNumber;
 
@@ -389,7 +378,6 @@ function connectMqtt(settings) {
         );
         console.log(`📤 [${postId}] clientcardbalance → ${JSON.stringify(balancePayload)}`);
 
-        // На всякий случай очищаем экран сообщений
         mqttClient.publish(
           `posts/${postId}/message`,
           JSON.stringify({ "": "" }),
@@ -421,7 +409,7 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Запросы отчётов ----------
+    // ---------- Отчёты ----------
     if (topic === 'reports/request') {
       try {
         const request = JSON.parse(payload);
@@ -572,24 +560,24 @@ let settings = {
   },
   pausePrice: 10,
   pauseFreeTimeSec: 120,
-mqtt: {
-  local: {
-    host: '192.168.31.211',
-    portTcp: 1883,
-    portWs: 8083,
-    path: '/mqtt',
-    username: 'admin',
-    password: 'Zavulon56'
-  },
-  remote: {
-    host: 'm2.wqtt.ru',
-    portTcp: 13257,
-    portTls: 13258,
-    portWss: 13260,
-    username: 'u_GGENLB',
-    password: 'LTHNW22D'
+  mqtt: {
+    local: {
+      host: '192.168.31.211',
+      portTcp: 1883,
+      portWs: 8083,
+      path: '/mqtt',
+      username: 'admin',
+      password: 'Zavulon56'
+    },
+    remote: {
+      host: 'm2.wqtt.ru',
+      portTcp: 13257,
+      portTls: 13258,
+      portWss: 13260,
+      username: 'u_GGENLB',
+      password: 'LTHNW22D'
+    }
   }
-}
 };
 
 // ---------- Конфиг постов ----------
@@ -763,9 +751,6 @@ function getPostState(postId) {
   return postsState[postId];
 }
 
-// ============================================================
-// NEW: поиск поста, на котором сейчас активна карта
-// ============================================================
 function findPostWithCard(cardNumber, excludePostId = null) {
   if (!cardNumber) return null;
   const target = String(cardNumber).toUpperCase();
@@ -807,9 +792,6 @@ function publishRelayStatus(postId) {
   mqttClient.publish(`posts/${postId}/status_relay`, JSON.stringify({ busy: state.busy, relayMask }), { qos: 0 });
 }
 
-// ============================================================
-// Списание с баланса карты в БД
-// ============================================================
 async function debitCardForPost(postId, amountRub) {
   const state = postsState[postId];
   if (!state || !state.clientCard) return;
@@ -839,7 +821,6 @@ async function debitCardForPost(postId, amountRub) {
   );
 }
 
-// ---------- Таймер (серверный) ----------
 function startTimer(postId) {
   const state = getPostState(postId);
   if (state.timer) clearInterval(state.timer);
@@ -1098,7 +1079,7 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
 // ---------- Роутер карт ----------
 app.use('/api/cards', cardsRouter);
 
-// Инициализация администратора
+// ---------- Инициализация администратора ----------
 const initAdmin = async () => {
   try {
     const adminExists = await User.findOne({ username: 'admin' });
@@ -1137,6 +1118,7 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// ---------- MQTT settings API ----------
 app.get('/api/mqtt/settings', auth, adminOnly, (req, res) => {
   res.json(settings.mqtt || {
     local: { host: '192.168.31.211', portTcp: 1883, portWs: 8083, path: '/mqtt', username: 'admin', password: 'Zavulon56' },
@@ -1148,7 +1130,6 @@ app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   try {
     const { local, remote, brokerUrl, username, password } = req.body;
 
-    // Поддерживаем оба формата: новый { local, remote } и старый { brokerUrl }
     let newMqtt;
     if (local || remote) {
       newMqtt = {
@@ -1196,6 +1177,7 @@ app.post('/api/publish-config', auth, adminOnly, async (req, res) => {
   }
 });
 
+// ---------- Login ----------
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   const user = await findUser(username);
@@ -1211,6 +1193,7 @@ app.post('/api/login', async (req, res) => {
   res.json({ token, role: user.role });
 });
 
+// ---------- Posts ----------
 app.get('/api/posts', auth, (req, res) => {
   try {
     const numberOfPosts = (typeof settings.numberOfPosts === 'number' && settings.numberOfPosts > 0)
@@ -1237,6 +1220,7 @@ app.get('/api/posts', auth, (req, res) => {
   }
 });
 
+// ---------- Settings ----------
 app.get('/api/settings', (req, res) => {
   res.json(settings);
 });
@@ -1291,17 +1275,20 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
     mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
     res.json(settings);
   } catch (err) {
-    console.error('Ошибка сохранения настроек:', err);
-    res.status(500).json({ error: 'Ошибка сохранения настроек' });
+    console.error('❌ PUT /api/settings error:', err.message);
+    console.error(err.stack);
+    res.status(500).json({ error: err.message });
   }
 });
 
+// ---------- Posts command ----------
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   const { command } = req.body;
   mqttClient.publish(`posts/${req.params.postId}/command`, JSON.stringify({ command }), { qos: 1 });
   res.json({ ok: true });
 });
 
+// ---------- Relays / VFDs / Tank levels ----------
 app.get('/api/relays', auth, (req, res) => res.json(relaysState));
 app.get('/api/vfds', auth, (req, res) => res.json(vfdsState));
 app.post('/api/tank-levels', auth, adminOnly, (req, res) => {
@@ -1315,6 +1302,7 @@ app.post('/api/tank-levels', auth, adminOnly, (req, res) => {
   }
 });
 
+// ---------- KKM ----------
 app.get('/api/kkm/status', auth, adminOnly, async (req, res) => {
   try {
     const response = await axios.get('http://0.0.0.0:5001/api/kkm/status', { timeout: 2000 });
@@ -1465,6 +1453,7 @@ app.post('/api/kkm/fiscal/z-report', auth, adminOnly, async (req, res) => {
   res.json({ message: 'Z-отчёт (заглушка)' });
 });
 
+// ---------- PDF-отчёт ----------
 async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 30, size: 'A4' });
@@ -1697,10 +1686,7 @@ app.post('/api/receipts', async (req, res) => {
   }
 });
 
-// ============================================================
-// NEW: принудительное освобождение карты оператором
-// POST /api/cards/:card/release
-// ============================================================
+// ---------- Release card ----------
 app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
   const cardNumber = req.params.card.toUpperCase();
   let released = false;
@@ -1717,6 +1703,7 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
   res.json({ ok: true, released });
 });
 
+// ---------- Start ----------
 mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
