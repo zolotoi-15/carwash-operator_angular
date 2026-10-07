@@ -33,8 +33,11 @@ export class RealtimeService implements OnDestroy {
   }
 
   private connect(): void {
-    const url = environment.wsUrl || `ws://${window.location.hostname}:3000/ws`;
-    console.log('[Realtime] connecting to', url);
+  const explicit = (environment.wsUrl || '').trim();
+  const url = explicit
+    ? explicit
+    : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+  console.log('[Realtime] connecting to', url);
 
     try {
       this.ws = new WebSocket(url);
