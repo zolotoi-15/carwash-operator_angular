@@ -5,6 +5,7 @@ import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ClientCardService } from '../../../core/services/client-card.service';
 import { MqttService, CardScanEvent } from '../../../core/services/mqtt.service';
+import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import {
   ClientCard,
@@ -22,6 +23,7 @@ import {
 export class CardListComponent implements OnInit, OnDestroy {
   private cardService = inject(ClientCardService);
   private mqtt = inject(MqttService);
+  private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
   private router = inject(Router);
 
@@ -43,35 +45,112 @@ export class CardListComponent implements OnInit, OnDestroy {
   waitingScan = false;
   lastScan: CardScanEvent | null = null;
 
+  /** id последнего поста, откуда пришёл скан (для подсветки) */
+  lastScanPostId: string | null = null;
+
   private subs = new Subscription();
 
   ngOnInit(): void {
     this.loadCards();
 
+    // MQTT — оставляем для совместимости (сканы, инициированные из UI)
     this.subs.add(
       this.mqtt.getCardScanUpdates().subscribe((event: CardScanEvent) => {
         this.lastScan = event;
         this.waitingScan = false;
+        this.lastScanPostId = event.postId ?? null;
         this.query = event.card;
         this.search();
         this.notify.success(`💳 Карта ${event.card} считана`);
       }),
     );
 
+    // MQTT — баланс (локальные обновления)
     this.subs.add(
       this.mqtt.getCardBalanceUpdates().subscribe(({ card, balance }) => {
-        const idx = this.cards.findIndex((c) => c.card === card);
-        if (idx >= 0) {
-          this.cards[idx] = { ...this.cards[idx], balance };
-        } else {
-          this.search();
-        }
+        this.applyCardBalance(card, balance);
       }),
+    );
+
+    // 🔥 WebSocket — трансляция с backend (все клиенты получают одинаковые данные)
+    this.subs.add(
+      this.realtime.messages$.subscribe((msg) => this.handleRealtime(msg)),
     );
   }
 
   ngOnDestroy(): void { this.subs.unsubscribe(); }
 
+  // ============================================================
+  // WebSocket-события от backend
+  // ============================================================
+  private handleRealtime(msg: RealtimeMessage): void {
+    switch (msg.type) {
+      case 'card-scan':
+        this.onCardScan(msg);
+        break;
+
+      case 'card-balance':
+        this.applyCardBalance(msg.card || '', Number(msg.balance || 0));
+        break;
+
+      case 'card-created':
+        if (msg.card) {
+          // Автосозданная карта (если ты включил автосоздание на бэкенде)
+          this.loadCards();
+        }
+        break;
+
+      case 'snapshot':
+        // Первичное состояние после подключения.
+        // Можно при желании применить msg.posts.
+        break;
+
+      case 'mqtt':
+        // Трансляция всех MQTT-сообщений. Пока не обрабатываем.
+        break;
+    }
+  }
+
+  /**
+   * Событие сканирования карты с терминала.
+   * Если карта уже в списке — обновить баланс.
+   * Если не известна — показать оператору, что карта не найдена.
+   */
+  private onCardScan(msg: RealtimeMessage): void {
+    const card = (msg.card || '').toUpperCase();
+    const balance = Number(msg.balance || 0);
+    const postId = msg.postId ?? '—';
+    this.lastScanPostId = msg.postId ?? null;
+
+    const idx = this.cards.findIndex(c => c.card === card);
+    if (idx >= 0) {
+      // Карта есть — обновляем баланс
+      this.cards[idx] = { ...this.cards[idx], balance };
+      this.notify.info(`💳 Карта ${card} (пост ${postId}): баланс ${balance.toFixed(2)} ₽`);
+      return;
+    }
+
+    // Карты нет в текущем списке
+    if (msg.known === false) {
+      // На бэкенде карта не найдена в БД
+      this.notify.warning(`Неизвестная карта ${card} (пост ${postId})`);
+    } else {
+      // Карта есть в БД, но её нет в отображаемом списке — подтянуть
+      this.loadCards();
+    }
+  }
+
+  private applyCardBalance(card: string, balance: number): void {
+    if (!card) return;
+    const idx = this.cards.findIndex(c => c.card === card);
+    if (idx >= 0) {
+      this.cards[idx] = { ...this.cards[idx], balance };
+    }
+  }
+
+  // ============================================================
+  // REST
+  // ============================================================
   loadCards(): void {
     this.loading = true;
     this.cardService.getCards().subscribe({
@@ -116,22 +195,21 @@ export class CardListComponent implements OnInit, OnDestroy {
   }
 
   topUp(card: ClientCard): void {
-  const amount = this.topUpAmount[card.card];
-  if (!amount || amount <= 0) { this.notify.warning('Введите сумму'); return; }
-  this.cardService.topUp(card.card, amount).subscribe({
-    next: (updated) => {
-      this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
-      this.topUpAmount[card.card] = 0;
-      const idx = this.cards.findIndex(c => c.card === card.card);
-      if (idx >= 0) this.cards[idx] = updated;
-    },
-    error: (err) => {
-      // err.status 404 → "Карта не найдена"
-      const msg = err?.error?.error || err?.message || 'Ошибка пополнения';
-      this.notify.error(msg);
-    },
-  });
-}
+    const amount = this.topUpAmount[card.card];
+    if (!amount || amount <= 0) { this.notify.warning('Введите сумму'); return; }
+    this.cardService.topUp(card.card, amount).subscribe({
+      next: (updated) => {
+        this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
+        this.topUpAmount[card.card] = 0;
+        const idx = this.cards.findIndex(c => c.card === card.card);
+        if (idx >= 0) this.cards[idx] = updated;
+      },
+      error: (err) => {
+        const msg = err?.error?.error || err?.message || 'Ошибка пополнения';
+        this.notify.error(msg);
+      },
+    });
+  }
 
   deleteCard(card: ClientCard): void {
     if (!confirm(`Удалить карту ${card.card}?`)) return;

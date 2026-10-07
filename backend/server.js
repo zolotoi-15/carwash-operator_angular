@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const mqtt = require('mqtt');
+const WebSocket = require('ws');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
 require('dotenv').config();
@@ -103,7 +104,16 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    // ----- Чеки -----
+    // ============ ТРАНСЛЯЦИЯ MQTT → WEBSOCKET ============
+    // Любое сообщение из MQTT сразу летит всем WS-клиентам.
+    broadcast({
+      type: 'mqtt',
+      topic,
+      payload,
+      timestamp: Date.now(),
+    });
+
+    // ---------- Чеки ----------
     if (topic === 'kkm/print' || /^posts\/[^/]+\/receipt$/.test(topic)) {
       try {
         const receiptData = JSON.parse(payload);
@@ -141,26 +151,24 @@ function connectMqtt(settings) {
           fiscalSent: false
         });
         await newReceipt.save();
-        console.log(`✅ Чек №${receiptNumber} сохранён (payment=${newReceipt.paymentMethod || '—'})`);
+        console.log(`✅ Чек №${receiptNumber} сохранён`);
 
         const currentShift = await Shift.findOne({ shiftOpen: true });
         if (currentShift) {
           const shiftReceipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
           const total = shiftReceipts.reduce((sum, r) => sum + (r.totalCost || 0), 0);
-          const count = shiftReceipts.length;
-          mqttClient.publish('shift/total', JSON.stringify({ total, count }), { qos: 0 });
+          mqttClient.publish('shift/total', JSON.stringify({ total, count: shiftReceipts.length }), { qos: 0 });
         }
       } catch (err) {
         console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
       }
     }
 
-    // ----- Команды постов -----
+    // ---------- Команды постов ----------
     if (topic.startsWith('posts/') && topic.endsWith('/command')) {
       const postId = topic.split('/')[1];
       try {
-        const commandObj = JSON.parse(payload);
-        const command = commandObj.command;
+        const { command } = JSON.parse(payload);
         console.log(`📨 Пост ${postId}: ${command}`);
         if (command.startsWith('program ')) {
           handleProgram(postId, command.substring(8).trim());
@@ -183,7 +191,7 @@ function connectMqtt(settings) {
       }
     }
 
-    // ----- Статусы постов -----
+    // ---------- Статусы постов ----------
     if (topic.startsWith('posts/') && topic.endsWith('/status')) {
       const postId = topic.split('/')[1];
       try {
@@ -196,14 +204,11 @@ function connectMqtt(settings) {
         const newEspBalance = typeof data.balance === 'number' ? data.balance : null;
         const lastEspBalance = typeof state._lastEspBalance === 'number' ? state._lastEspBalance : null;
 
-        if (cc && newEspBalance !== null) {
-          if (lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
-            const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
-            const cardBal = typeof ccb === 'number' ? ccb : 0;
-            if (delta > 0.001 && delta <= cardBal + 0.01) {
-              debitCardForPost(postId, delta).catch((e) =>
-                console.warn(`[Post ${postId}] debitCardForPost error: ${e.message}`));
-            }
+        if (cc && newEspBalance !== null && lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
+          const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
+          const cardBal = typeof ccb === 'number' ? ccb : 0;
+          if (delta > 0.001 && delta <= cardBal + 0.01) {
+            debitCardForPost(postId, delta).catch(e => console.warn(`[Post ${postId}] debit: ${e.message}`));
           }
         }
         Object.assign(state, data, { lastSeen: Date.now() });
@@ -212,10 +217,10 @@ function connectMqtt(settings) {
         state.clientCardType = cct;
         state._lastEspBalance = newEspBalance;
         if (cc) state.balance = typeof ccb === 'number' ? ccb : 0;
-      } catch (e) { /* не-JSON */ }
+      } catch { /* не-JSON */ }
     }
 
-    // ----- LWT -----
+    // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
       const postId = topic.split('/')[1];
       const status = (payload || '').trim().toLowerCase();
@@ -233,7 +238,7 @@ function connectMqtt(settings) {
       }
     }
 
-    // ----- Карта клиента -----
+    // ---------- Карта клиента ----------
     if (/^posts\/[^/]+\/clientcard$/.test(topic)) {
       const postId = topic.split('/')[1];
       try {
@@ -242,6 +247,7 @@ function connectMqtt(settings) {
         if (!postsState[postId]) postsState[postId] = {};
         const state = postsState[postId];
 
+        // Снятие карты (NULL)
         if (!cardNumber || cardNumber === 'NULL') {
           const hadCard = !!state.clientCard;
           delete state.clientCard;
@@ -266,6 +272,7 @@ function connectMqtt(settings) {
           return;
         }
 
+        // Занята другим постом?
         const busyPostId = findPostWithCard(cardNumber, postId);
         if (busyPostId) {
           delete state.clientCard;
@@ -274,6 +281,17 @@ function connectMqtt(settings) {
           state._lastEspBalance = null;
           mqttClient.publish(`posts/${postId}/message`,
             JSON.stringify({ ERR: `КАРТА УЖЕ ИСПОЛЬЗУЕТСЯ НА ПОСТУ ${busyPostId}` }), { qos: 1 });
+
+          broadcast({
+            type: 'card-scan',
+            postId,
+            card: cardNumber,
+            balance: 0,
+            cardType: 'busy',
+            known: false,
+            error: `Карта уже используется на посту ${busyPostId}`,
+            timestamp: Date.now(),
+          });
           return;
         }
 
@@ -286,6 +304,16 @@ function connectMqtt(settings) {
           delete state.clientCardBalance;
           delete state.clientCardType;
           state._lastEspBalance = null;
+
+          broadcast({
+            type: 'card-scan',
+            postId,
+            card: cardNumber,
+            balance: 0,
+            cardType: 'unknown',
+            known: false,
+            timestamp: Date.now(),
+          });
           return;
         }
 
@@ -306,12 +334,23 @@ function connectMqtt(settings) {
           { qos: 1 });
         mqttClient.publish(`posts/${postId}/message`, JSON.stringify({ "": "" }), { qos: 0 });
         publishStatus(postId);
+
+        // 🔔 Сообщаем всем WS-клиентам, что карта считана
+        broadcast({
+          type: 'card-scan',
+          postId,
+          card: clientCard.card,
+          balance: clientCard.balance,
+          cardType: clientCard.type,
+          known: true,
+          timestamp: Date.now(),
+        });
       } catch (err) {
         console.error(`Ошибка обработки posts/${postId}/clientcard:`, err.message);
       }
     }
 
-    // ----- Уровни баков -----
+    // ---------- Уровни баков ----------
     if (topic === 'tank/levels') {
       try {
         const { tank, level } = JSON.parse(payload);
@@ -323,10 +362,10 @@ function connectMqtt(settings) {
             saveSettings(settings).catch(() => {});
           }
         }
-      } catch (e) { /* ignore */ }
+      } catch { /* ignore */ }
     }
 
-    // ----- Отчёты -----
+    // ---------- Отчёты ----------
     if (topic === 'reports/request') {
       try {
         const { from, to, responseTopic } = JSON.parse(payload);
@@ -361,18 +400,14 @@ function reconnectMqtt(newSettings) {
 // ============================================================
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://0.0.0.0:27017/carwash';
 
-// ---------- Схемы ----------
-const userSchema = new mongoose.Schema(
-  {
-    username: { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-    fullName: { type: String, default: '' },
-    email: { type: String, default: '' },
-    role: { type: String, enum: ['admin', 'developer', 'operator'], default: 'operator' },
-    isActive: { type: Boolean, default: true }
-  },
-  { timestamps: true }
-);
+const userSchema = new mongoose.Schema({
+  username: { type: String, required: true, unique: true },
+  password: { type: String, required: true },
+  fullName: { type: String, default: '' },
+  email: { type: String, default: '' },
+  role: { type: String, enum: ['admin', 'developer', 'operator'], default: 'operator' },
+  isActive: { type: Boolean, default: true }
+}, { timestamps: true });
 
 const receiptSchema = new mongoose.Schema({
   postId: Number,
@@ -445,74 +480,67 @@ let settings = {
     mockReceipt: process.env.KKM_MOCK_RECEIPT === 'true',
     provider: process.env.KKM_PROVIDER || 'mock',
     atol: {
-      login: process.env.ATOL_LOGIN || '',
-      password: process.env.ATOL_PASSWORD || '',
-      groupCode: process.env.ATOL_GROUP_CODE || '',
-      inn: process.env.ATOL_INN || '000000000000',
+      login: process.env.ATOL_LOGIN || '', password: process.env.ATOL_PASSWORD || '',
+      groupCode: process.env.ATOL_GROUP_CODE || '', inn: process.env.ATOL_INN || '000000000000',
       sno: process.env.ATOL_SNO || 'osn',
       paymentAddress: process.env.ATOL_PAYMENT_ADDRESS || 'https://carwash.ru',
       companyEmail: process.env.ATOL_COMPANY_EMAIL || 'company@carwash.ru',
       clientEmail: process.env.ATOL_CLIENT_EMAIL || 'client@carwash.ru'
     },
-    shtrihLocal: {
-      baseUrl: process.env.SHTRIH_LOCAL_URL || 'http://0.0.0.0:5001/api/kkm'
-    }
+    shtrihLocal: { baseUrl: process.env.SHTRIH_LOCAL_URL || 'http://0.0.0.0:5001/api/kkm' }
   },
   kkmManual: { kkNumber: '', fiscalShiftNumber: null, cashierName: '' },
   pausePrice: 10,
   pauseFreeTimeSec: 120,
   mqtt: {
-    local: {
-      host: '192.168.31.211', portTcp: 1883, portWs: 8083, path: '/mqtt',
-      username: 'admin', password: 'Zavulon56'
-    },
-    remote: {
-      host: 'm2.wqtt.ru', portTcp: 13257, portTls: 13258, portWss: 13260,
-      username: 'u_GGENLB', password: 'LTHNW22D'
-    }
+    local: { host: '192.168.31.211', portTcp: 1883, portWs: 8083, path: '/mqtt', username: 'admin', password: 'Zavulon56' },
+    remote: { host: 'm2.wqtt.ru', portTcp: 13257, portTls: 13258, portWss: 13260, username: 'u_GGENLB', password: 'LTHNW22D' }
   }
 };
 
-// ---------- Конфиг постов ----------
+// ---------- Хелперы ----------
 function buildServicesPayloadForPost(postId) {
-  const postSettings = settings.posts?.[postId] || {};
-  const services = postSettings.services || [];
-  const prices = postSettings.prices || {};
-  const relayMask = postSettings.relayMask || {};
-  const vfdFrequencies = postSettings.vfdFrequencies || {};
-  const dimmerMask = postSettings.dimmerMask || {};
-  const buttonInputs = postSettings.buttonInputs || {};
-  const relayDelays = postSettings.relayDelays || {};
-
-  return services.map(svc => {
-    const name = svc.name;
-    return {
-      name,
-      price: prices[name] ?? svc.price ?? 0,
-      free_time_sec: svc.free_time_sec ?? 0,
-      relayMask: relayMask[name] ?? 0,
-      dimmerMask: dimmerMask[name] ?? 0,
-      vfdFrequency: vfdFrequencies[name] ?? 40,
-      onDelay: relayDelays[name]?.onDelay ?? 100,
-      offDelay: relayDelays[name]?.offDelay ?? 200,
-      buttonInput: buttonInputs[name] ?? 0,
-      enabled: svc.enabled !== undefined ? svc.enabled : true
-    };
-  });
+  const p = settings.posts?.[postId] || {};
+  const services = p.services || [];
+  const prices = p.prices || {};
+  const relayMask = p.relayMask || {};
+  const vfd = p.vfdFrequencies || {};
+  const dimmer = p.dimmerMask || {};
+  const buttons = p.buttonInputs || {};
+  const delays = p.relayDelays || {};
+  return services.map(svc => ({
+    name: svc.name,
+    price: prices[svc.name] ?? svc.price ?? 0,
+    free_time_sec: svc.free_time_sec ?? 0,
+    relayMask: relayMask[svc.name] ?? 0,
+    dimmerMask: dimmer[svc.name] ?? 0,
+    vfdFrequency: vfd[svc.name] ?? 40,
+    onDelay: delays[svc.name]?.onDelay ?? 100,
+    offDelay: delays[svc.name]?.offDelay ?? 200,
+    buttonInput: buttons[svc.name] ?? 0,
+    enabled: svc.enabled !== undefined ? svc.enabled : true
+  }));
 }
 
 function publishConfigToAllPosts() {
   if (!mqttClient) return;
-  const numberOfPosts = settings.numberOfPosts || 8;
-  for (let i = 1; i <= numberOfPosts; i++) {
-    const servicesArray = buildServicesPayloadForPost(i);
+  const n = settings.numberOfPosts || 8;
+  for (let i = 1; i <= n; i++) {
     mqttClient.publish(`posts/${i}/config`,
-      JSON.stringify({ services: servicesArray }), { qos: 1, retain: true });
+      JSON.stringify({ services: buildServicesPayloadForPost(i) }), { qos: 1, retain: true });
   }
-  console.log(`📤 Конфиг опубликован в posts/*/config (${numberOfPosts} постов)`);
+  console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
 
-// ---------- Загрузка настроек ----------
+async function saveSettings(newSettings) {
+  try {
+    await Setting.findOneAndUpdate({ key: 'main' }, { $set: { value: newSettings } }, { upsert: true });
+    writeMqttConfigFile(newSettings);
+  } catch (err) {
+    console.error('Ошибка сохранения настроек:', err.message);
+  }
+}
+
 async function loadSettings() {
   try {
     let doc = await Setting.findOne({ key: 'main' });
@@ -530,30 +558,27 @@ async function loadSettings() {
       { name: 'Пылесос', price: 80, free_time_sec: 0, enabled: true },
       { name: 'Пауза', price: 10, free_time_sec: 120, enabled: true }
     ];
-
     if (!doc) {
       const posts = {};
-      const numberOfPosts = settings.numberOfPosts || 8;
-      for (let i = 1; i <= numberOfPosts; i++) {
+      const n = settings.numberOfPosts || 8;
+      for (let i = 1; i <= n; i++) {
         posts[i] = {
-          prices: {}, relayMask: {}, vfdFrequencies: {},
-          dimmerMask: {}, buttonInputs: {}, relayDelays: {},
+          prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+          buttonInputs: {}, relayDelays: {},
           services: defaultServices.map(s => ({ ...s }))
         };
       }
       settings.posts = posts;
-      settings.services = defaultServices;
       doc = new Setting({ key: 'main', value: settings });
       await doc.save();
-      console.log('Настройки созданы в БД с индивидуальными постами');
+      console.log('Настройки созданы в БД');
     } else {
       settings = doc.value;
       if (!settings.posts) {
-        // миграция старого формата
-        const numberOfPosts = settings.numberOfPosts || 8;
+        const n = settings.numberOfPosts || 8;
         const posts = {};
         const services = settings.services || defaultServices;
-        for (let i = 1; i <= numberOfPosts; i++) {
+        for (let i = 1; i <= n; i++) {
           posts[i] = {
             prices: settings.prices ? { ...settings.prices } : {},
             relayMask: settings.relayMask ? { ...settings.relayMask } : {},
@@ -565,32 +590,24 @@ async function loadSettings() {
           };
         }
         settings.posts = posts;
-        delete settings.prices;
-        delete settings.relayMask;
-        delete settings.vfdFrequencies;
-        delete settings.dimmerMask;
-        delete settings.buttonInputs;
-        delete settings.relayDelays;
+        delete settings.prices; delete settings.relayMask; delete settings.vfdFrequencies;
+        delete settings.dimmerMask; delete settings.buttonInputs; delete settings.relayDelays;
         delete settings.services;
         await saveSettings(settings);
-        console.log('Настройки мигрированы в формат posts');
       } else {
-        // гарантировать количество постов
-        const numberOfPosts = settings.numberOfPosts || 8;
+        const n = settings.numberOfPosts || 8;
         const defaultServices2 = settings.posts[1]?.services || defaultServices;
-        for (let i = 1; i <= numberOfPosts; i++) {
+        for (let i = 1; i <= n; i++) {
           if (!settings.posts[i]) {
             settings.posts[i] = {
-              prices: {}, relayMask: {}, vfdFrequencies: {},
-              dimmerMask: {}, buttonInputs: {}, relayDelays: {},
-              services: defaultServices2.map(s => ({ ...s }))
+              prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+              buttonInputs: {}, relayDelays: {}, services: defaultServices2.map(s => ({ ...s }))
             };
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
           settings.posts[i].services = settings.posts[i].services.map(s => ({
-            ...s,
-            enabled: s.enable !== undefined ? s.enable : true
+            ...s, enabled: s.enable !== undefined ? s.enable : true
           }));
         }
         await saveSettings(settings);
@@ -607,20 +624,6 @@ async function loadSettings() {
     publishConfigToAllPosts();
   } catch (err) {
     console.warn('Не удалось загрузить настройки из БД:', err.message);
-  }
-}
-
-async function saveSettings(newSettings) {
-  try {
-    await Setting.findOneAndUpdate(
-      { key: 'main' },
-      { $set: { value: newSettings } },
-      { upsert: true }
-    );
-    console.log('Настройки сохранены в БД');
-    writeMqttConfigFile(newSettings);
-  } catch (err) {
-    console.error('Ошибка сохранения настроек в БД:', err.message);
   }
 }
 
@@ -648,9 +651,9 @@ function findPostWithCard(cardNumber, excludePostId = null) {
 }
 
 function findService(postId, name) {
-  const postSettings = settings.posts?.[postId];
-  if (postSettings && postSettings.services) {
-    return postSettings.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
+  const p = settings.posts?.[postId];
+  if (p && p.services) {
+    return p.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
   }
   if (settings.services) {
     return settings.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
@@ -690,20 +693,19 @@ async function debitCardForPost(postId, amountRub) {
   await card.save();
   state.clientCardBalance = card.balance;
   state.balance = card.balance;
-  console.log(`💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с карты ${card.card} → остаток ${card.balance.toFixed(2)} ₽`);
+  console.log(`💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с ${card.card} → остаток ${card.balance.toFixed(2)} ₽`);
 }
 
 function startTimer(postId) {
   const state = getPostState(postId);
   if (state.timer) clearInterval(state.timer);
-  const TICK_INTERVAL_MS = 1000;
   state.timer = setInterval(() => {
     if (!state.busy || state.paused) return;
     if (state.clientCard) return;
     const service = findService(postId, state.currentProgram);
     if (!service) { stopPost(postId, true, false); return; }
     const pricePerSec = service.price / 60;
-    const deltaSec = TICK_INTERVAL_MS / 1000;
+    const deltaSec = 1;
     const cost = pricePerSec * deltaSec;
     if (state.balance >= cost) {
       state.balance -= cost;
@@ -722,11 +724,10 @@ function startTimer(postId) {
         if (!state.servicesUsage[service.name]) state.servicesUsage[service.name] = { seconds: 0, cost: 0 };
         state.servicesUsage[service.name].seconds += fractionSec;
         state.servicesUsage[service.name].cost += remaining;
-        state.servicesUsage[service.name].cost = Math.round(state.servicesUsage[service.name].cost * 100) / 100;
       }
       stopPost(postId, true, true);
     }
-  }, TICK_INTERVAL_MS);
+  }, 1000);
 }
 
 function handleProgram(postId, programName) {
@@ -737,14 +738,10 @@ function handleProgram(postId, programName) {
   const pricePerSec = service.price / 60;
   if (state.balance < pricePerSec && state.balance < 0.01) return;
   if (state.timer) clearInterval(state.timer);
-  state.busy = true;
-  state.paused = false;
-  state.currentProgram = service.name;
-  state.elapsedSec = 0;
-  state.servicesUsage = {};
+  state.busy = true; state.paused = false; state.currentProgram = service.name;
+  state.elapsedSec = 0; state.servicesUsage = {};
   startTimer(postId);
-  publishStatus(postId);
-  publishRelayStatus(postId);
+  publishStatus(postId); publishRelayStatus(postId);
 }
 
 function stopPost(postId, publish = true, printReceiptFlag = false) {
@@ -752,11 +749,8 @@ function stopPost(postId, publish = true, printReceiptFlag = false) {
   if (!state.busy && !printReceiptFlag) return;
   if (printReceiptFlag && Object.keys(state.servicesUsage).length > 0) printReceipt(postId);
   if (state.timer) clearInterval(state.timer);
-  state.timer = null;
-  state.busy = false;
-  state.paused = false;
-  state.currentProgram = null;
-  state.elapsedSec = 0;
+  state.timer = null; state.busy = false; state.paused = false;
+  state.currentProgram = null; state.elapsedSec = 0;
   if (publish) { publishStatus(postId); publishRelayStatus(postId); }
 }
 
@@ -784,14 +778,12 @@ function resetPost(postId) {
     busy: false, paused: false, balance: 0, currentProgram: null,
     elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null
   };
-  publishStatus(postId);
-  publishRelayStatus(postId);
+  publishStatus(postId); publishRelayStatus(postId);
 }
 
 function printReceipt(postId) {
   const state = getPostState(postId);
-  const items = [];
-  let totalCost = 0;
+  const items = []; let totalCost = 0;
   for (const [name, usage] of Object.entries(state.servicesUsage)) {
     if (usage.seconds > 0.001) {
       items.push({
@@ -812,7 +804,6 @@ function printReceipt(postId) {
   publishStatus(postId);
 }
 
-// ---------- Вспомогательные ----------
 const programNamesRu = {
   water: 'Вода', foam: 'Пена', wax: 'Воск', teflon: 'Тефлон',
   osmosis: 'Осмос', hotWater: 'Горячая вода',
@@ -830,14 +821,12 @@ function translateReceiptItems(items) {
 }
 
 async function getNextReceiptNumber() {
-  const c = await Counter.findOneAndUpdate(
-    { _id: 'receiptNumber' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
+  const c = await Counter.findOneAndUpdate({ _id: 'receiptNumber' }, { $inc: { seq: 1 } }, { upsert: true, new: true });
   return c.seq;
 }
 
 async function getNextShiftNumber() {
-  const c = await Counter.findByIdAndUpdate(
-    'shiftNumber', { $inc: { seq: 1 } }, { new: true, upsert: true });
+  const c = await Counter.findByIdAndUpdate('shiftNumber', { $inc: { seq: 1 } }, { new: true, upsert: true });
   return c.seq;
 }
 
@@ -848,8 +837,6 @@ async function initShift() {
     const nextNumber = await getNextShiftNumber();
     await new Shift({ shiftNumber: nextNumber, shiftOpen: true, cashier: 'system' }).save();
     console.log(`✅ Смена №${nextNumber} создана`);
-  } else {
-    console.log(`✅ Смена №${currentShift.shiftNumber} открыта`);
   }
 }
 
@@ -859,6 +846,45 @@ async function initShift() {
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// ============================================================
+// WebSocket — трансляция всем клиентам
+// ============================================================
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server, path: '/ws' });
+
+function broadcast(payload) {
+  if (!wss) return;
+  const data = JSON.stringify(payload);
+  for (const ws of wss.clients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(data); } catch { /* ignore */ }
+    }
+  }
+}
+
+wss.on('connection', (ws) => {
+  console.log(`🔌 WebSocket: клиент подключён (всего: ${wss.clients.size})`);
+
+  try {
+    ws.send(JSON.stringify({
+      type: 'snapshot',
+      posts: postsState,
+      settings: {
+        tankLevels: settings.tankLevels,
+        numberOfPosts: settings.numberOfPosts,
+      },
+      timestamp: Date.now(),
+    }));
+  } catch (e) {
+    console.warn('WebSocket snapshot error:', e.message);
+  }
+
+  ws.on('close', () => {
+    console.log(`🔌 WebSocket: клиент отключился (всего: ${wss.clients.size})`);
+  });
+  ws.on('error', (err) => console.warn('WebSocket error:', err.message));
+});
 
 // ---------- Хук: баланс карты во все посты ----------
 app.locals.publishCardBalanceToPosts = async function (cardNumber) {
@@ -885,26 +911,31 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
     for (const postId of postsWithCard) {
       mqttClient.publish(`posts/${postId}/clientcardbalance`, payload, { qos: 1 });
       publishStatus(postId);
+
+      broadcast({
+        type: 'card-balance',
+        postId,
+        card: clientCard.card,
+        balance: clientCard.balance,
+        cardType: clientCard.type,
+        timestamp: Date.now(),
+      });
     }
   } catch (err) {
     console.error('publishCardBalanceToPosts error:', err.message);
   }
 };
 
-// ---------- Cards router ----------
 app.use('/api/cards', cardsRouter);
 
-// ---------- Auth helpers ----------
+// ---------- Auth ----------
 function auth(req, res, next) {
   const token = req.headers.authorization?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token' });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secretkey');
-    req.user = decoded;
+    req.user = jwt.verify(token, process.env.JWT_SECRET || 'secretkey');
     next();
-  } catch {
-    res.status(401).json({ error: 'Invalid token' });
-  }
+  } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin' && req.user.role !== 'developer') {
@@ -913,8 +944,8 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// ---------- Init admin / dev / operator ----------
-const initDefaultUsers = async () => {
+// ---------- Init users ----------
+(async () => {
   try {
     const defaults = [
       { username: 'admin', password: 'admin123', role: 'admin', fullName: 'Администратор Системы', email: 'admin@carwash.local' },
@@ -922,27 +953,16 @@ const initDefaultUsers = async () => {
       { username: 'operator', password: 'operator123', role: 'operator', fullName: 'Оператор Смены', email: 'operator@carwash.local' }
     ];
     for (const u of defaults) {
-      const exists = await User.findOne({ username: u.username });
-      if (!exists) {
-        const hashed = await bcrypt.hash(u.password, 10);
-        await User.create({
-          username: u.username,
-          password: hashed,
-          role: u.role,
-          fullName: u.fullName,
-          email: u.email,
-          isActive: true
-        });
+      if (!(await User.findOne({ username: u.username }))) {
+        await User.create({ ...u, password: await bcrypt.hash(u.password, 10), isActive: true });
         console.log(`✅ Пользователь создан: ${u.username}/${u.password} (${u.role})`);
       }
     }
   } catch (err) {
-    console.log('MongoDB не доступна – пользователи в памяти', err.message);
+    console.warn('MongoDB не доступна — пользователи в памяти:', err.message);
   }
-};
-initDefaultUsers();
+})();
 
-// Fallback на случай, если MongoDB недоступна
 const memoryUsers = [
   { username: 'admin', passwordHash: bcrypt.hashSync('admin123', 10), role: 'admin', fullName: 'Администратор Системы', email: 'admin@carwash.local' },
   { username: 'dev', passwordHash: bcrypt.hashSync('dev123', 10), role: 'developer', fullName: 'Разработчик Системы', email: 'dev@carwash.local' },
@@ -958,55 +978,39 @@ async function findUser(username) {
   }
 }
 
-// ============================================================
-// USERS API
-// ============================================================
+// ---------- Users API ----------
 app.get('/api/users', auth, adminOnly, async (_req, res) => {
   try {
     const users = await User.find({}, { password: 0 }).lean();
     res.json(users.map(u => ({
-      _id: u._id,
-      login: u.username,
+      _id: u._id, login: u.username,
       fullName: u.fullName || u.username,
       email: u.email || `${u.username}@carwash.local`,
       role: u.role,
       group: u.role === 'admin' ? 'Администратор'
            : u.role === 'developer' ? 'Разработчик'
-           : u.role === 'operator' ? 'Оператор'
-           : 'Пользователь',
+           : u.role === 'operator' ? 'Оператор' : 'Пользователь',
       isActive: u.isActive !== false,
       createdAt: u.createdAt
     })));
-  } catch (err) {
-    console.error('❌ GET /api/users:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/users', auth, adminOnly, async (req, res) => {
   const { login, password, fullName, email, role } = req.body || {};
   if (!login || !password) return res.status(400).json({ error: 'login и password обязательны' });
-  if (!['admin', 'developer', 'operator'].includes(role)) {
-    return res.status(400).json({ error: 'Недопустимая роль' });
-  }
+  if (!['admin', 'developer', 'operator'].includes(role)) return res.status(400).json({ error: 'Недопустимая роль' });
   try {
-    if (await User.findOne({ username: login })) {
-      return res.status(409).json({ error: 'Пользователь уже существует' });
-    }
-    const hashed = await bcrypt.hash(password, 10);
+    if (await User.findOne({ username: login })) return res.status(409).json({ error: 'Пользователь уже существует' });
     const created = await User.create({
-      username: login, password: hashed,
-      fullName: fullName || login, email: email || '',
-      role, isActive: true
+      username: login, password: await bcrypt.hash(password, 10),
+      fullName: fullName || login, email: email || '', role, isActive: true
     });
     res.status(201).json({
       _id: created._id, login: created.username, fullName: created.fullName,
       email: created.email, role: created.role, isActive: created.isActive
     });
-  } catch (err) {
-    console.error('❌ POST /api/users:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/api/users/:id', auth, adminOnly, async (req, res) => {
@@ -1024,10 +1028,7 @@ app.patch('/api/users/:id', auth, adminOnly, async (req, res) => {
       _id: updated._id, login: updated.username, fullName: updated.fullName,
       email: updated.email, role: updated.role, isActive: updated.isActive
     });
-  } catch (err) {
-    console.error('❌ PATCH /api/users:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/users/:id', auth, adminOnly, async (req, res) => {
@@ -1035,20 +1036,14 @@ app.delete('/api/users/:id', auth, adminOnly, async (req, res) => {
     const deleted = await User.findByIdAndDelete(req.params.id);
     if (!deleted) return res.status(404).json({ error: 'Пользователь не найден' });
     res.json({ success: true });
-  } catch (err) {
-    console.error('❌ DELETE /api/users:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ============================================================
-// AUTH
-// ============================================================
+// ---------- Login ----------
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body || {};
   const user = await findUser(username);
   if (!user) return res.status(401).json({ error: 'Invalid credentials' });
-
   let valid;
   if (mongoose.connection.readyState === 1 && user.passwordHash === undefined) {
     valid = await bcrypt.compare(password, user.password);
@@ -1056,24 +1051,16 @@ app.post('/api/login', async (req, res) => {
     valid = bcrypt.compareSync(password, user.passwordHash || user.password);
   }
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-
-  const token = jwt.sign(
-    { username, role: user.role },
-    process.env.JWT_SECRET || 'secretkey',
-    { expiresIn: '24h' }
-  );
+  const token = jwt.sign({ username, role: user.role }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '24h' });
   res.json({ token, role: user.role });
 });
 
-// ============================================================
-// POSTS / SETTINGS
-// ============================================================
-app.get('/api/posts', auth, (req, res) => {
+// ---------- Posts ----------
+app.get('/api/posts', auth, (_req, res) => {
   try {
-    const numberOfPosts = (typeof settings.numberOfPosts === 'number' && settings.numberOfPosts > 0)
-      ? settings.numberOfPosts : 8;
+    const n = (typeof settings.numberOfPosts === 'number' && settings.numberOfPosts > 0) ? settings.numberOfPosts : 8;
     const result = {};
-    for (let i = 1; i <= numberOfPosts; i++) {
+    for (let i = 1; i <= n; i++) {
       const id = String(i);
       const state = postsState[id];
       if (state) {
@@ -1082,30 +1069,28 @@ app.get('/api/posts', auth, (req, res) => {
           safeState.balance = safeState.clientCardBalance;
         }
         result[id] = safeState;
-      } else {
-        result[id] = { busy: false };
-      }
+      } else result[id] = { busy: false };
     }
     res.json(result);
-  } catch (error) {
-    console.error('❌ Ошибка в /api/posts:', error.message);
+  } catch (err) {
+    console.error('❌ /api/posts:', err.message);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
 
+// ---------- Settings ----------
 app.get('/api/settings', (_req, res) => res.json(settings));
 
 app.put('/api/settings', auth, adminOnly, async (req, res) => {
   try {
     const newSettings = req.body;
-
     if (newSettings.prices || newSettings.relayMask || newSettings.vfdFrequencies ||
         newSettings.dimmerMask || newSettings.buttonInputs || newSettings.relayDelays ||
         newSettings.services) {
-      const numberOfPosts = newSettings.numberOfPosts || settings.numberOfPosts || 8;
+      const n = newSettings.numberOfPosts || settings.numberOfPosts || 8;
       const posts = {};
       const services = newSettings.services || settings.posts?.[1]?.services || [];
-      for (let i = 1; i <= numberOfPosts; i++) {
+      for (let i = 1; i <= n; i++) {
         posts[i] = {
           prices: newSettings.prices ? { ...newSettings.prices } : {},
           relayMask: newSettings.relayMask ? { ...newSettings.relayMask } : {},
@@ -1117,15 +1102,10 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
         };
       }
       newSettings.posts = posts;
-      delete newSettings.prices;
-      delete newSettings.relayMask;
-      delete newSettings.vfdFrequencies;
-      delete newSettings.dimmerMask;
-      delete newSettings.buttonInputs;
-      delete newSettings.relayDelays;
+      delete newSettings.prices; delete newSettings.relayMask; delete newSettings.vfdFrequencies;
+      delete newSettings.dimmerMask; delete newSettings.buttonInputs; delete newSettings.relayDelays;
       delete newSettings.services;
     }
-
     settings = { ...settings, ...newSettings };
     if (newSettings.posts) {
       for (const [postId, postData] of Object.entries(newSettings.posts)) {
@@ -1143,19 +1123,14 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
     if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
     res.json(settings);
   } catch (err) {
-    console.error('❌ PUT /api/settings error:', err.message);
-    console.error(err.stack);
+    console.error('❌ PUT /api/settings:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/api/publish-config', auth, adminOnly, (_req, res) => {
-  try {
-    publishConfigToAllPosts();
-    res.json({ ok: true, message: 'Конфиг опубликован' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  try { publishConfigToAllPosts(); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
@@ -1171,17 +1146,11 @@ app.post('/api/tank-levels', auth, adminOnly, async (req, res) => {
     await saveSettings(settings);
     if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
     res.json({ ok: true });
-  } else {
-    res.status(400).json({ error: 'Invalid tank name' });
-  }
+  } else res.status(400).json({ error: 'Invalid tank name' });
 });
 
-// ============================================================
-// MQTT settings API
-// ============================================================
-app.get('/api/mqtt/settings', auth, adminOnly, (_req, res) => {
-  res.json(settings.mqtt || {});
-});
+// ---------- MQTT settings ----------
+app.get('/api/mqtt/settings', auth, adminOnly, (_req, res) => res.json(settings.mqtt || {}));
 
 app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   try {
@@ -1198,28 +1167,22 @@ app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
       };
     } else if (brokerUrl) {
       newMqtt = { brokerUrl, username: username || '', password: password || '' };
-    } else {
-      return res.status(400).json({ error: 'Укажите local/remote или brokerUrl' });
-    }
+    } else return res.status(400).json({ error: 'Укажите local/remote или brokerUrl' });
 
     settings.mqtt = newMqtt;
     await saveSettings(settings);
     reconnectMqtt(newMqtt);
     res.json({ ok: true, mqtt: newMqtt });
   } catch (err) {
-    console.error('Ошибка обновления настроек MQTT:', err);
+    console.error('Ошибка MQTT settings:', err);
     res.status(500).json({ error: 'Ошибка обновления настроек MQTT' });
   }
 });
 
-// ============================================================
-// KKM
-// ============================================================
+// ---------- KKM ----------
 app.get('/api/kkm/status', auth, adminOnly, async (_req, res) => {
-  try {
-    const response = await axios.get('http://0.0.0.0:5001/api/kkm/status', { timeout: 2000 });
-    res.json(response.data);
-  } catch {
+  try { res.json((await axios.get('http://0.0.0.0:5001/api/kkm/status', { timeout: 2000 })).data); }
+  catch {
     res.json({
       ready: true, connected: false, paper: true,
       kkNumber: settings.kkmManual.kkNumber || null,
@@ -1243,10 +1206,7 @@ app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
 app.get('/api/kkm/current-shift', auth, adminOnly, async (_req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
   if (!shift) return res.json({ exists: false });
-  res.json({
-    shiftNumber: shift.shiftNumber, cashier: shift.cashier,
-    openedAt: shift.openedAt, fiscalShiftNumber: shift.fiscalShiftNumber
-  });
+  res.json({ shiftNumber: shift.shiftNumber, cashier: shift.cashier, openedAt: shift.openedAt, fiscalShiftNumber: shift.fiscalShiftNumber });
 });
 
 app.get('/api/kkm/shift-status', auth, adminOnly, async (_req, res) => {
@@ -1255,9 +1215,7 @@ app.get('/api/kkm/shift-status', auth, adminOnly, async (_req, res) => {
 });
 
 app.post('/api/kkm/open-shift', auth, adminOnly, async (req, res) => {
-  if (await Shift.findOne({ shiftOpen: true })) {
-    return res.status(400).json({ error: 'Уже есть открытая смена' });
-  }
+  if (await Shift.findOne({ shiftOpen: true })) return res.status(400).json({ error: 'Уже есть открытая смена' });
   const nextNumber = await getNextShiftNumber();
   const newShift = await Shift.create({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
   res.json({ shiftNumber: nextNumber, cashier: req.user.username, openedAt: newShift.openedAt });
@@ -1266,8 +1224,7 @@ app.post('/api/kkm/open-shift', auth, adminOnly, async (req, res) => {
 app.post('/api/kkm/close-shift', auth, adminOnly, async (_req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   if (!shift) return res.status(400).json({ error: 'Нет открытой смены' });
-  shift.shiftOpen = false;
-  shift.closedAt = new Date();
+  shift.shiftOpen = false; shift.closedAt = new Date();
   await shift.save();
   res.json({ message: 'Смена закрыта' });
 });
@@ -1279,7 +1236,7 @@ app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   shift.xReports.push({ timestamp: new Date(), total, count: receipts.length, cashier: req.user.username });
   await shift.save();
-  res.json({ message: 'X-отчёт сформирован', total, count: receipts.length });
+  res.json({ message: 'X-отчёт', total, count: receipts.length });
 });
 
 app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
@@ -1288,12 +1245,11 @@ app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
   const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt, $lte: new Date() } });
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   currentShift.zReport = { total, count: receipts.length, generatedAt: new Date(), cashier: req.user.username };
-  currentShift.shiftOpen = false;
-  currentShift.closedAt = new Date();
+  currentShift.shiftOpen = false; currentShift.closedAt = new Date();
   await currentShift.save();
   const nextNumber = await getNextShiftNumber();
   await Shift.create({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
-  res.json({ message: 'Z-отчёт сформирован, смена закрыта', total, count: receipts.length });
+  res.json({ message: 'Z-отчёт', total, count: receipts.length });
 });
 
 app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.kkm));
@@ -1302,10 +1258,7 @@ app.get('/api/shift-total', auth, adminOnly, async (_req, res) => {
   const currentShift = await Shift.findOne({ shiftOpen: true });
   if (!currentShift) return res.json({ total: 0, count: 0 });
   const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
-  res.json({
-    total: receipts.reduce((s, r) => s + (r.totalCost || 0), 0),
-    count: receipts.length
-  });
+  res.json({ total: receipts.reduce((s, r) => s + (r.totalCost || 0), 0), count: receipts.length });
 });
 
 app.get('/api/kkm/fiscal-registration', auth, adminOnly, async (_req, res) => {
@@ -1315,14 +1268,9 @@ app.get('/api/kkm/fiscal-registration', auth, adminOnly, async (_req, res) => {
 
 app.post('/api/kkm/fiscal-registration', auth, adminOnly, async (req, res) => {
   const { registrationNumber, inn, fnNumber, validUntil } = req.body || {};
-  if (!registrationNumber || !inn || !fnNumber || !validUntil) {
-    return res.status(400).json({ error: 'Missing fields' });
-  }
+  if (!registrationNumber || !inn || !fnNumber || !validUntil) return res.status(400).json({ error: 'Missing fields' });
   await FiscalRegistration.deleteMany({});
-  const newReg = await FiscalRegistration.create({
-    registrationNumber, inn, fnNumber, validUntil: new Date(validUntil)
-  });
-  res.json(newReg);
+  res.json(await FiscalRegistration.create({ registrationNumber, inn, fnNumber, validUntil: new Date(validUntil) }));
 });
 
 app.post('/api/kkm/fiscal/open-shift', auth, adminOnly, (_req, res) => res.json({ ok: true }));
@@ -1330,9 +1278,7 @@ app.post('/api/kkm/fiscal/close-shift', auth, adminOnly, (_req, res) => res.json
 app.get('/api/kkm/fiscal/x-report', auth, adminOnly, (_req, res) => res.json({ total: 0, count: 0 }));
 app.post('/api/kkm/fiscal/z-report', auth, adminOnly, (_req, res) => res.json({ ok: true }));
 
-// ============================================================
-// Reports
-// ============================================================
+// ---------- Reports ----------
 async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 30, size: 'A4' });
@@ -1342,11 +1288,8 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
     doc.on('error', reject);
 
     const fontPathArial = path.join(__dirname, 'fonts', 'Arial.ttf');
-    if (fs.existsSync(fontPathArial)) {
-      doc.registerFont('MainFont', fontPathArial); doc.font('MainFont');
-    } else {
-      doc.font('Helvetica');
-    }
+    if (fs.existsSync(fontPathArial)) { doc.registerFont('MainFont', fontPathArial); doc.font('MainFont'); }
+    else doc.font('Helvetica');
 
     doc.fontSize(18).text('Отчёт по кассовым чекам', { align: 'center' });
     doc.moveDown();
@@ -1380,9 +1323,7 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
       ).join(', ');
       const textHeight = doc.heightOfString(itemsStr, { width: colWidths[5] - 10 });
       const rowHeight = Math.max(20, textHeight + 10);
-      if (y + rowHeight > doc.page.height - 50) {
-        doc.addPage(); y = 50; y = drawHeaders(y);
-      }
+      if (y + rowHeight > doc.page.height - 50) { doc.addPage(); y = 50; y = drawHeaders(y); }
       let x = startX;
       const dateStr = new Date(receipt.timestamp).toLocaleString('ru-RU', {
         day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
@@ -1428,10 +1369,7 @@ app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
   const end = new Date(date.setHours(23, 59, 59, 999));
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({
-    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
-    count: translated.length, receipts: translated
-  });
+  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
 
 app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
@@ -1439,10 +1377,7 @@ app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
   const start = new Date(); start.setDate(end.getDate() - 7); start.setHours(0, 0, 0, 0);
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({
-    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
-    count: translated.length, receipts: translated
-  });
+  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
 
 app.get('/api/reports/month', auth, adminOnly, async (_req, res) => {
@@ -1450,10 +1385,7 @@ app.get('/api/reports/month', auth, adminOnly, async (_req, res) => {
   const start = new Date(); start.setDate(end.getDate() - 30); start.setHours(0, 0, 0, 0);
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({
-    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
-    count: translated.length, receipts: translated
-  });
+  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
 
 app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
@@ -1462,10 +1394,7 @@ app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
   const end = new Date(today.setHours(20, 0, 0, 0));
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({
-    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
-    count: translated.length, receipts: translated
-  });
+  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
 
 app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
@@ -1475,10 +1404,7 @@ app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
   const end = new Date(to); end.setHours(23, 59, 59, 999);
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  const summary = {
-    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
-    count: translated.length, receipts: translated
-  };
+  const summary = { totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated };
   if (mqttClient) mqttClient.publish('reports/output', JSON.stringify(summary), { qos: 0 });
   res.json(summary);
 });
@@ -1494,14 +1420,12 @@ app.post('/api/receipts', async (req, res) => {
       seconds: Math.round((item.seconds || 0) * 10) / 10,
       cost: Math.round((item.cost || 0) * 10) / 10,
       pricePerSecond: Math.round((item.pricePerSecond || 0) * 10) / 10,
-      discount: item.discount || 0,
-      discountPercent: item.discountPercent || 0
+      discount: item.discount || 0, discountPercent: item.discountPercent || 0
     }));
     const roundedTotal = Math.round(roundedItems.reduce((s, i) => s + i.cost, 0) * 10) / 10;
     let timestamp = receiptData.timestamp;
     if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) timestamp = new Date();
     else timestamp = new Date(timestamp);
-
     const receiptNumber = await getNextReceiptNumber();
     const newReceipt = await Receipt.create({
       postId: Number(receiptData.postId), receiptNumber, timestamp,
@@ -1513,33 +1437,23 @@ app.post('/api/receipts', async (req, res) => {
       correctionInfo: receiptData.correctionInfo || null,
       fiscalSent: false
     });
-    const currentShift = await Shift.findOne({ shiftOpen: true });
-    if (currentShift) {
-      const shiftReceipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
-      const total = shiftReceipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-      if (mqttClient) mqttClient.publish('shift/total', JSON.stringify({ total, count: shiftReceipts.length }), { qos: 0 });
-    }
     res.status(201).json({ message: 'Чек сохранён', id: newReceipt._id });
   } catch (err) {
-    console.error('Ошибка сохранения чека через HTTP:', err.message);
-    res.status(500).json({ error: 'Ошибка сервера при сохранении чека' });
+    console.error('Ошибка сохранения чека:', err.message);
+    res.status(500).json({ error: 'Ошибка сервера' });
   }
 });
 
-// ============================================================
-// Card release
-// ============================================================
+// ---------- Card release ----------
 app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
   const cardNumber = req.params.card.toUpperCase();
   let released = false;
   for (const [id, st] of Object.entries(postsState)) {
     if (st && st.clientCard === cardNumber) {
-      delete st.clientCard;
-      delete st.clientCardBalance;
-      delete st.clientCardType;
+      delete st.clientCard; delete st.clientCardBalance; delete st.clientCardType;
       st._lastEspBalance = null;
       released = true;
-      console.log(`🔓 [${id}] Карта ${cardNumber} освобождена оператором`);
+      console.log(`🔓 [${id}] Карта ${cardNumber} освобождена`);
     }
   }
   res.json({ ok: true, released });
@@ -1553,13 +1467,15 @@ mongoose.connect(MONGO_URI)
     console.log('MongoDB connected');
     await loadSettings();
     await initShift();
-    app.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
+    server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
+      console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);
     });
   })
   .catch(err => {
     console.warn('MongoDB not connected:', err.message);
-    app.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
+    server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
+      console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);
     });
   });
