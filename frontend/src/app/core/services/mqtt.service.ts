@@ -1,3 +1,4 @@
+// src/app/core/services/mqtt.service.ts
 import { Injectable } from '@angular/core';
 import mqtt from 'mqtt';
 import { Subject, firstValueFrom } from 'rxjs';
@@ -65,8 +66,12 @@ export class MqttService {
     private admin: AdminService,
     private clientCardService: ClientCardService,
   ) {
-    this.initMqttSettings();
+    // ⚠️ MQTT ОТКЛЮЧЁН. Всё идёт через RealtimeService (WebSocket).
+    // this.initMqttSettings();
+    console.log('[MqttService] отключён, используется RealtimeService');
   }
+
+
 
   private async initMqttSettings() {
     try {

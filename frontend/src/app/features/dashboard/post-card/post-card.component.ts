@@ -7,12 +7,6 @@ import { RealtimeService, RealtimeMessage } from '../../../core/services/realtim
 import { NotificationService } from '../../../core/services/notification.service';
 import { ReceiptModalComponent } from '../receipt-modal/receipt-modal.component';
 
-interface CardScanFlash {
-  card: string;
-  postId: string;
-  timestamp: number;
-}
-
 @Component({
   selector: 'app-post-card',
   standalone: true,
@@ -37,10 +31,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
   topUpAmount: number | null = null;
   showTopUpModal = false;
 
-  lastCardScan: CardScanFlash | null = null;
-  cardFlashVisible = false;
-  private flashTimeout: any = null;
-
   readonly functions = [
     'Вода', 'Пена', 'Воск', 'Тефлон', 'Антимошка',
     'Шампунь', 'Турбо', 'Пылесос', 'Воздух', 'Пауза',
@@ -55,24 +45,25 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
-    if (this.flashTimeout) clearTimeout(this.flashTimeout);
     this.subs.unsubscribe();
   }
 
+  // ============================================================
+  // WebSocket — единый поток событий
+  // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
-    // 1) Снимок состояния при подключении
+    // Снимок состояния при подключении
     if (msg.type === 'snapshot') {
       const state = msg.posts?.[String(this.postId)];
       if (state) this.applyState(state);
       return;
     }
 
-    // 2) Одиночное MQTT-сообщение
     if (msg.type !== 'mqtt') return;
     const topic = msg.topic || '';
     const postIdStr = String(this.postId);
 
-    // posts/<id>/lwt → online/offline
+    // posts/<id>/lwt — online/offline
     if (topic === `posts/${postIdStr}/lwt`) {
       const online = (msg.payload || '').trim().toLowerCase() === 'online';
       this.online = online;
@@ -80,7 +71,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/status → busy, balance, currentProgram
+    // posts/<id>/status — busy, balance, currentProgram
     if (topic === `posts/${postIdStr}/status`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -89,13 +80,11 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/clientcardbalance → баланс карты
+    // posts/<id>/clientcardbalance — баланс карты
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
-        if (typeof data.balance === 'number') {
-          this.balance = data.balance;
-        }
+        if (typeof data.balance === 'number') this.balance = data.balance;
       } catch { /* ignore */ }
       return;
     }
@@ -111,17 +100,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Карта-скан flash (можно вызывать и извне, если нужно)
-  // ============================================================
-  private showCardFlash(card: string, postId: string): void {
-    this.lastCardScan = { card, postId, timestamp: Date.now() };
-    this.cardFlashVisible = true;
-    if (this.flashTimeout) clearTimeout(this.flashTimeout);
-    this.flashTimeout = setTimeout(() => (this.cardFlashVisible = false), 4000);
-  }
-
-  // ============================================================
-  // Команды — через REST (backend уже умеет /api/posts/:id/command)
+  // Команды — через REST (backend сам публикует в MQTT)
   // ============================================================
   stop(): void { this.sendCommand('stop'); }
   pause(): void { this.sendCommand('pause'); }
@@ -150,30 +129,28 @@ export class PostCardComponent implements OnInit, OnDestroy {
     this.notify.success(`Пост ${postId}: пополнено на ${amount} ₽`);
   }
 
-  // ============================================================
-  // Отправка команды через REST (POST /api/posts/:id/command)
-  // ============================================================
   private sendCommand(command: string): void {
-  const token = localStorage.getItem('carwash_auth_token') || '';
-  console.log(`[PostCard ${this.postId}] → ${command}`);
-  fetch(`/api/posts/${this.postId}/command`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
-    },
-    body: JSON.stringify({ command }),
-  })
-    .then(async (res) => {
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || `HTTP ${res.status}`);
-      }
-      console.log(`[PostCard ${this.postId}] ✅ ${command}`);
+    const token = localStorage.getItem('carwash_auth_token') || '';
+    console.log(`[PostCard ${this.postId}] → ${command}`);
+
+    fetch(`/api/posts/${this.postId}/command`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ command }),
     })
-    .catch(err => {
-      console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
-      this.notify.error(`Команда не выполнена: ${err.message}`);
-    });
-}
+      .then(async (res) => {
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || `HTTP ${res.status}`);
+        }
+        console.log(`[PostCard ${this.postId}] ✅ ${command}`);
+      })
+      .catch((err) => {
+        console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
+        this.notify.error(`Команда не выполнена: ${err.message}`);
+      });
+  }
 }
