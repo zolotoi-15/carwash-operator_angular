@@ -4,7 +4,6 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ClientCardService } from '../../../core/services/client-card.service';
-import { MqttService, CardScanEvent } from '../../../core/services/mqtt.service';
 import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import {
@@ -22,7 +21,6 @@ import {
 })
 export class CardListComponent implements OnInit, OnDestroy {
   private cardService = inject(ClientCardService);
-  private mqtt = inject(MqttService);
   private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
   private router = inject(Router);
@@ -42,10 +40,6 @@ export class CardListComponent implements OnInit, OnDestroy {
   reportOperations: CardOperation[] = [];
   reportLoading = false;
 
-  waitingScan = false;
-  lastScan: CardScanEvent | null = null;
-
-  /** id последнего поста, откуда пришёл скан (для подсветки) */
   lastScanPostId: string | null = null;
 
   private subs = new Subscription();
@@ -53,26 +47,6 @@ export class CardListComponent implements OnInit, OnDestroy {
   ngOnInit(): void {
     this.loadCards();
 
-    // MQTT — оставляем для совместимости (сканы, инициированные из UI)
-    this.subs.add(
-      this.mqtt.getCardScanUpdates().subscribe((event: CardScanEvent) => {
-        this.lastScan = event;
-        this.waitingScan = false;
-        this.lastScanPostId = event.postId ?? null;
-        this.query = event.card;
-        this.search();
-        this.notify.success(`💳 Карта ${event.card} считана`);
-      }),
-    );
-
-    // MQTT — баланс (локальные обновления)
-    this.subs.add(
-      this.mqtt.getCardBalanceUpdates().subscribe(({ card, balance }) => {
-        this.applyCardBalance(card, balance);
-      }),
-    );
-
-    // 🔥 WebSocket — трансляция с backend (все клиенты получают одинаковые данные)
     this.subs.add(
       this.realtime.messages$.subscribe((msg) => this.handleRealtime(msg)),
     );
@@ -81,70 +55,48 @@ export class CardListComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void { this.subs.unsubscribe(); }
 
   // ============================================================
-  // WebSocket-события от backend
+  // WebSocket-события
   // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
-    switch (msg.type) {
-      case 'card-scan':
-        this.onCardScan(msg);
-        break;
+    // Сканирование карты на терминале
+    if (msg.type === 'card-scan') {
+      const card = (msg.card || '').toUpperCase();
+      const balance = Number(msg.balance || 0);
+      const postId = msg.postId ?? '—';
+      this.lastScanPostId = msg.postId ?? null;
 
-      case 'card-balance':
-        this.applyCardBalance(msg.card || '', Number(msg.balance || 0));
-        break;
-
-      case 'card-created':
-        if (msg.card) {
-          // Автосозданная карта (если ты включил автосоздание на бэкенде)
-          this.loadCards();
-        }
-        break;
-
-      case 'snapshot':
-        // Первичное состояние после подключения.
-        // Можно при желании применить msg.posts.
-        break;
-
-      case 'mqtt':
-        // Трансляция всех MQTT-сообщений. Пока не обрабатываем.
-        break;
-    }
-  }
-
-  /**
-   * Событие сканирования карты с терминала.
-   * Если карта уже в списке — обновить баланс.
-   * Если не известна — показать оператору, что карта не найдена.
-   */
-  private onCardScan(msg: RealtimeMessage): void {
-    const card = (msg.card || '').toUpperCase();
-    const balance = Number(msg.balance || 0);
-    const postId = msg.postId ?? '—';
-    this.lastScanPostId = msg.postId ?? null;
-
-    const idx = this.cards.findIndex(c => c.card === card);
-    if (idx >= 0) {
-      // Карта есть — обновляем баланс
-      this.cards[idx] = { ...this.cards[idx], balance };
-      this.notify.info(`💳 Карта ${card} (пост ${postId}): баланс ${balance.toFixed(2)} ₽`);
+      const idx = this.cards.findIndex(c => c.card === card);
+      if (idx >= 0) {
+        this.cards[idx] = { ...this.cards[idx], balance };
+        this.notify.info(`💳 ${card} (пост ${postId}): ${balance.toFixed(2)} ₽`);
+      } else if (msg.known === false) {
+        this.notify.warning(`Неизвестная карта ${card} (пост ${postId})`);
+      } else {
+        this.loadCards();
+      }
       return;
     }
 
-    // Карты нет в текущем списке
-    if (msg.known === false) {
-      // На бэкенде карта не найдена в БД
-      this.notify.warning(`Неизвестная карта ${card} (пост ${postId})`);
-    } else {
-      // Карта есть в БД, но её нет в отображаемом списке — подтянуть
-      this.loadCards();
+    // Обновление баланса (REST-пополнение или с терминала)
+    if (msg.type === 'card-balance') {
+      const card = (msg.card || '').toUpperCase();
+      const balance = Number(msg.balance || 0);
+      const idx = this.cards.findIndex(c => c.card === card);
+      if (idx >= 0) this.cards[idx] = { ...this.cards[idx], balance };
+      return;
     }
-  }
 
-  private applyCardBalance(card: string, balance: number): void {
-    if (!card) return;
-    const idx = this.cards.findIndex(c => c.card === card);
-    if (idx >= 0) {
-      this.cards[idx] = { ...this.cards[idx], balance };
+    // MQTT-топик posts/X/clientcardbalance — тоже несёт баланс
+    if (msg.type === 'mqtt' && msg.topic) {
+      const m = msg.topic.match(/^posts\/(\d+)\/clientcardbalance$/);
+      if (!m) return;
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        const card = String(data.card || '').toUpperCase();
+        const balance = Number(data.balance || 0);
+        const idx = this.cards.findIndex(c => c.card === card);
+        if (idx >= 0) this.cards[idx] = { ...this.cards[idx], balance };
+      } catch { /* ignore */ }
     }
   }
 
@@ -165,7 +117,8 @@ export class CardListComponent implements OnInit, OnDestroy {
     this.loading = true;
     this.cardService.searchCards(q).subscribe({
       next: (data) => {
-        this.cards = data; this.loading = false;
+        this.cards = data;
+        this.loading = false;
         if (!data.length) this.notify.warning(`Карта «${q}» не найдена`);
       },
       error: () => { this.notify.error('Ошибка поиска'); this.loading = false; },
@@ -240,12 +193,9 @@ export class CardListComponent implements OnInit, OnDestroy {
   }
 
   scanCard(): void {
-    this.waitingScan = true;
-    this.mqtt.requestCardScan();
-    this.notify.info('Ожидание сканирования...');
-    setTimeout(() => {
-      if (this.waitingScan) { this.waitingScan = false; this.notify.warning('Сканирование не выполнено'); }
-    }, 15000);
+    // Сканирование инициируется на терминале, а не из браузера.
+    // Если у тебя есть физический ридер, команду можно отправить через REST.
+    this.notify.info('Сканирование выполняется на терминале');
   }
 
   formatBalance(value: number): string { return (value ?? 0).toFixed(2); }
