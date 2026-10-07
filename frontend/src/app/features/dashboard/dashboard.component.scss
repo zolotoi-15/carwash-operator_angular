@@ -1,51 +1,53 @@
-.dashboard {
-  padding: 24px;
-}
-
 .top-row {
   display: grid;
-  grid-template-columns: 1fr 1.5fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));  /* ← 3 равные колонки */
   gap: 16px;
   margin-bottom: 24px;
-  align-items: stretch;
+  align-items: stretch;                              /* ← одинаковая высота */
 
+  /* Все три дочерних компонента — flex-контейнеры, чтобы .card растянулся */
   > app-kkm-status,
   > app-tank-levels,
   > app-shift-total {
     display: flex;
-    min-height: 100%;
+    min-width: 0;                                    /* ← чтобы grid не выдавливал */
+    height: 100%;
+  }
+
+  /* Карточка внутри каждого компонента — на всю высоту и ширину */
+  > app-kkm-status .card,
+  > app-tank-levels .card,
+  > app-shift-total .card {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    min-height: 240px;                               /* единая минимальная высота */
+    display: flex;
+    flex-direction: column;
+    padding: 16px;
+    border-radius: 10px;
+  }
+
+  /* Заголовки одной высоты, чтобы ряды не смещались */
+  > app-kkm-status .card-title,
+  > app-tank-levels .card-title,
+  > app-shift-total .card-title {
+    margin: 0 0 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    min-height: 22px;
   }
 }
 
-.section-title {
-  margin: 0 0 16px;
-  color: #334155;
-  font-size: 18px;
-}
-
-/* ===== Сетка постов: адаптивная, но не слишком широкая ===== */
-.posts-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 16px;
-  justify-content: center;   /* центрирует ряды, если карточек мало */
-}
-
-/* Ограничиваем максимальную ширину карточки — иначе на 4K они раздуваются */
-.posts-grid > app-post-card {
-  display: block;
-  max-width: 480px;          /* ← ключевое: одна карточка не шире 480px */
-  width: 100%;
-  margin: 0 auto;
-}
-
+/* ===== Адаптив ===== */
 @media (max-width: 1200px) {
   .top-row {
     grid-template-columns: 1fr 1fr;
 
-    > app-kkm-status,
     > app-tank-levels {
-      grid-column: 1 / -1;
+      grid-column: 1 / -1;   /* уровни на всю ширину во второй строке */
     }
   }
 }
@@ -54,22 +56,13 @@
   .top-row {
     grid-template-columns: 1fr;
     gap: 12px;
-  }
-  .dashboard { padding: 16px; }
-  .posts-grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
-  }
-  .posts-grid > app-post-card {
-    max-width: none;
-  }
-}
 
-@media (max-width: 640px) {
-  .dashboard { padding: 12px; }
-  .section-title {
-    font-size: 16px;
-    margin-bottom: 12px;
+    > app-tank-levels { grid-column: auto; }
+
+    > app-kkm-status .card,
+    > app-tank-levels .card,
+    > app-shift-total .card {
+      min-height: auto;
+    }
   }
-  .posts-grid { gap: 12px; }
 }

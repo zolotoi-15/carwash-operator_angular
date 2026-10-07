@@ -1,9 +1,21 @@
-@media (max-width: 520px) {
-  .tanks {
-    height: 120px;
-    gap: 4px;
-  }
-  .tank-bar { width: 28px; height: 80px; }
-  .tank-percent { font-size: 11px; }
-  .tank-label { font-size: 10px; }
+.card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.tanks {
+  flex: 1;                     /* ← растягиваем столбики на всю доступную высоту */
+  display: flex;
+  justify-content: space-around;
+  align-items: flex-end;
+  gap: 8px;
+  min-height: 140px;
+}
+
+.tank-bar {
+  height: 100%;                /* ← столбик тянется по родителю */
+  max-height: 110px;
+  min-height: 60px;
+  /* остальное как было */
 }
