@@ -28,7 +28,7 @@ const FORWARD_UP_TOPICS = [
 const DEFAULTS = {
   localHost: '0.0.0.0', localPortTcp: 1883, localPortWs: 8083,
   localPath: '/mqtt', localUsername: 'admin', localPassword: 'Zavulon56',
-  remoteHost: 'm2.wqtt.ru', remotePortTls: 13258,
+  remoteHost: 'm2.wqtt.ru', remotePortTls: 13257,
   remoteUsername: 'u_GGENLB', remotePassword: 'LTHNW22D',
 };
 
@@ -114,7 +114,7 @@ async function loadSettings() {
     console.log(`Local MQTT (WS) on ws://${cfg.localHost}:${cfg.localPortWs}${cfg.localPath}`);
   });
 
-  const remoteUrl = `mqtts://${cfg.remoteHost}:${cfg.remotePortTls}`;
+  const remoteUrl = `mqtt://${cfg.remoteHost}:${cfg.remotePortTls}`;
   console.log(`[BRIDGE] Connecting to ${remoteUrl} as ${cfg.remoteUsername}...`);
 
   const remote = mqtt.connect(remoteUrl, {
