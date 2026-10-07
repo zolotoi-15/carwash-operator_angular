@@ -154,14 +154,26 @@ export class PostCardComponent implements OnInit, OnDestroy {
   // Отправка команды через REST (POST /api/posts/:id/command)
   // ============================================================
   private sendCommand(command: string): void {
-    console.log(`[PostCard ${this.postId}] → ${command}`);
-    fetch(`/api/posts/${this.postId}/command`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${localStorage.getItem('carwash_auth_token') || ''}`,
-      },
-      body: JSON.stringify({ command }),
-    }).catch(err => console.error('sendCommand failed:', err));
-  }
+  const token = localStorage.getItem('carwash_auth_token') || '';
+  console.log(`[PostCard ${this.postId}] → ${command}`);
+  fetch(`/api/posts/${this.postId}/command`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+    },
+    body: JSON.stringify({ command }),
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      console.log(`[PostCard ${this.postId}] ✅ ${command}`);
+    })
+    .catch(err => {
+      console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
+      this.notify.error(`Команда не выполнена: ${err.message}`);
+    });
+}
 }
