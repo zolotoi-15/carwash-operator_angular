@@ -40,9 +40,14 @@ export class CardListComponent implements OnInit, OnDestroy {
   reportOperations: CardOperation[] = [];
   reportLoading = false;
 
+  /** 🔙 Возвращено: флаг ожидания сканирования (используется в HTML) */
+  waitingScan = false;
+
+  /** id последнего поста, откуда пришёл скан (для подсветки) */
   lastScanPostId: string | null = null;
 
   private subs = new Subscription();
+  private scanTimeout: any = null;
 
   ngOnInit(): void {
     this.loadCards();
@@ -52,14 +57,24 @@ export class CardListComponent implements OnInit, OnDestroy {
     );
   }
 
-  ngOnDestroy(): void { this.subs.unsubscribe(); }
+  ngOnDestroy(): void {
+    if (this.scanTimeout) clearTimeout(this.scanTimeout);
+    this.subs.unsubscribe();
+  }
 
   // ============================================================
-  // WebSocket-события
+  // WebSocket-события от backend
   // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
-    // Сканирование карты на терминале
+    // 🔔 Сканирование карты на терминале
     if (msg.type === 'card-scan') {
+      // Снимаем флаг ожидания — сканирование пришло
+      this.waitingScan = false;
+      if (this.scanTimeout) {
+        clearTimeout(this.scanTimeout);
+        this.scanTimeout = null;
+      }
+
       const card = (msg.card || '').toUpperCase();
       const balance = Number(msg.balance || 0);
       const postId = msg.postId ?? '—';
@@ -77,7 +92,7 @@ export class CardListComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Обновление баланса (REST-пополнение или с терминала)
+    // Обновление баланса карты
     if (msg.type === 'card-balance') {
       const card = (msg.card || '').toUpperCase();
       const balance = Number(msg.balance || 0);
@@ -86,7 +101,7 @@ export class CardListComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // MQTT-топик posts/X/clientcardbalance — тоже несёт баланс
+    // MQTT posts/X/clientcardbalance тоже несёт баланс
     if (msg.type === 'mqtt' && msg.topic) {
       const m = msg.topic.match(/^posts\/(\d+)\/clientcardbalance$/);
       if (!m) return;
@@ -192,10 +207,28 @@ export class CardListComponent implements OnInit, OnDestroy {
     this.reportOperations = [];
   }
 
+  // ============================================================
+  // 🔙 Возвращено: запуск ожидания сканирования
+  // ============================================================
+  /**
+   * Инициирует «режим ожидания»: оператор нажимает кнопку,
+   * затем подносит карту к терминалу.
+   * Флаг снимется, когда придёт WebSocket-событие card-scan,
+   * или по таймауту (15 сек).
+   */
   scanCard(): void {
-    // Сканирование инициируется на терминале, а не из браузера.
-    // Если у тебя есть физический ридер, команду можно отправить через REST.
-    this.notify.info('Сканирование выполняется на терминале');
+    this.waitingScan = true;
+    this.notify.info('Ожидание сканирования на терминале...');
+
+    // Таймаут: если событие не пришло за 15 секунд
+    if (this.scanTimeout) clearTimeout(this.scanTimeout);
+    this.scanTimeout = setTimeout(() => {
+      if (this.waitingScan) {
+        this.waitingScan = false;
+        this.notify.warning('Сканирование не выполнено');
+      }
+      this.scanTimeout = null;
+    }, 15000);
   }
 
   formatBalance(value: number): string { return (value ?? 0).toFixed(2); }
