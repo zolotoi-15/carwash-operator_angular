@@ -125,6 +125,7 @@ async function loadSettings() {
   connectTimeout: 10000,
  // clean: true,
   rejectUnauthorized: false,   // <-- добавьте эту строку
+  protocolVersion: 4,
 });
 
   remote.on('connect', () => {
