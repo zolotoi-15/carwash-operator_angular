@@ -263,21 +263,28 @@ function connectMqtt(settings) {
 
     // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
-      const postId = topic.split('/')[1];
-      const status = (payload || '').trim().toLowerCase();
-      if (status === 'offline') {
-        const state = postsState[postId];
-        if (state && state.clientCard) {
-          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
-          state.balance = 0;
-          state.busy = false;
-        }
-      }
+  const postId = topic.split('/')[1];
+  const status = (payload || '').trim().toLowerCase();
+  const isOnline = (status === 'online');
+
+  // 🔥 Сохраняем состояние online в postsState
+  if (!postsState[postId]) postsState[postId] = {};
+  postsState[postId].online = isOnline;
+
+  if (!isOnline) {
+    // offline — освобождаем карту
+    const state = postsState[postId];
+    if (state && state.clientCard) {
+      console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
+      delete state.clientCard;
+      delete state.clientCardBalance;
+      delete state.clientCardType;
+      state._lastEspBalance = null;
+      state.balance = 0;
+      state.busy = false;
     }
+  }
+}
 
     // ---------- Карта клиента ----------
     if (/^posts\/[^/]+\/clientcard$/.test(topic)) {

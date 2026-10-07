@@ -115,13 +115,19 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   private applyState(d: any): void {
+    // 🔥 Читаем online из snapshot
+    if (typeof d.online === 'boolean') {
+        this.online = d.online;
+        this.esp32Connected = d.online;
+    }
+
     this.busy = !!(d.busy ?? d.state === 'busy');
     this.paused = !!d.paused;
     this.balance = Number(d.balance ?? 0);
     this.sum = Number(d.sum ?? d.total ?? 0);
     const raw = String(d.currentProgram ?? d.activeFunction ?? '').trim();
     this.activeFunction = raw === '-' ? '' : raw;
-  }
+}
 
   /** 🔙 Восстановлено: показать flash-плашку с номером карты */
   private showCardFlash(card: string): void {
