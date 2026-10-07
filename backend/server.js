@@ -16,6 +16,52 @@ const cardsRouter = require('./routes/cards');
 require('dotenv').config();
 
 // ============================================================
+// МОДЕЛИ И ЗАВИСИМОСТИ
+// ============================================================
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://0.0.0.0:27017/carwash';
+
+// ---------- WebSocket ----------
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server, path: '/ws' });
+
+/**
+ * Разослать сообщение всем подключённым WebSocket-клиентам.
+ * Объявлена через function — работает hoisting, можно вызывать
+ * до определения в файле.
+ */
+function broadcast(payload) {
+  if (!wss) return;
+  const data = JSON.stringify(payload);
+  for (const ws of wss.clients) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try { ws.send(data); } catch { /* ignore */ }
+    }
+  }
+}
+
+wss.on('connection', (ws) => {
+  console.log(`🔌 WebSocket: клиент подключён (всего: ${wss.clients.size})`);
+  try {
+    ws.send(JSON.stringify({
+      type: 'snapshot',
+      posts: postsState,
+      settings: {
+        tankLevels: settings.tankLevels,
+        numberOfPosts: settings.numberOfPosts,
+      },
+      timestamp: Date.now(),
+    }));
+  } catch (e) {
+    console.warn('WebSocket snapshot error:', e.message);
+  }
+  ws.on('close', () => {
+    console.log(`🔌 WebSocket: клиент отключился (всего: ${wss.clients.size})`);
+  });
+  ws.on('error', (err) => console.warn('WebSocket error:', err.message));
+});
+
+// ============================================================
 // MQTT
 // ============================================================
 let mqttClient = null;
@@ -25,12 +71,11 @@ let mqttSettings = {
   password: ''
 };
 
-function writeMqttConfigFile(settings) {
+function writeMqttConfigFile(cfg) {
   try {
     const configPath = path.join(__dirname, '..', 'mqtt-config.json');
-    const mqtt = settings.mqtt || {};
+    const mqtt = cfg.mqtt || {};
     const local = mqtt.local || {};
-
     let mqttConfig;
     if (local.host) {
       const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
@@ -47,7 +92,6 @@ function writeMqttConfigFile(settings) {
         password: mqtt.password || ''
       };
     }
-
     fs.writeFileSync(configPath, JSON.stringify(mqttConfig, null, 2));
     console.log('✅ mqtt-config.json обновлён:', mqttConfig.brokerUrl);
   } catch (err) {
@@ -104,8 +148,7 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    // ============ ТРАНСЛЯЦИЯ MQTT → WEBSOCKET ============
-    // Любое сообщение из MQTT сразу летит всем WS-клиентам.
+    // 🔥 ТРАНСЛЯЦИЯ КАЖДОГО MQTT-СООБЩЕНИЯ В WEB-SOCKET
     broadcast({
       type: 'mqtt',
       topic,
@@ -152,7 +195,6 @@ function connectMqtt(settings) {
         });
         await newReceipt.save();
         console.log(`✅ Чек №${receiptNumber} сохранён`);
-
         const currentShift = await Shift.findOne({ shiftOpen: true });
         if (currentShift) {
           const shiftReceipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
@@ -203,12 +245,11 @@ function connectMqtt(settings) {
         const cct = state.clientCardType;
         const newEspBalance = typeof data.balance === 'number' ? data.balance : null;
         const lastEspBalance = typeof state._lastEspBalance === 'number' ? state._lastEspBalance : null;
-
         if (cc && newEspBalance !== null && lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
           const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
           const cardBal = typeof ccb === 'number' ? ccb : 0;
           if (delta > 0.001 && delta <= cardBal + 0.01) {
-            debitCardForPost(postId, delta).catch(e => console.warn(`[Post ${postId}] debit: ${e.message}`));
+            debitCardForPost(postId, delta).catch((e) => console.warn(`[Post ${postId}] debit: ${e.message}`));
           }
         }
         Object.assign(state, data, { lastSeen: Date.now() });
@@ -217,7 +258,7 @@ function connectMqtt(settings) {
         state.clientCardType = cct;
         state._lastEspBalance = newEspBalance;
         if (cc) state.balance = typeof ccb === 'number' ? ccb : 0;
-      } catch { /* не-JSON */ }
+      } catch { /* ignore */ }
     }
 
     // ---------- LWT ----------
@@ -247,7 +288,6 @@ function connectMqtt(settings) {
         if (!postsState[postId]) postsState[postId] = {};
         const state = postsState[postId];
 
-        // Снятие карты (NULL)
         if (!cardNumber || cardNumber === 'NULL') {
           const hadCard = !!state.clientCard;
           delete state.clientCard;
@@ -272,7 +312,6 @@ function connectMqtt(settings) {
           return;
         }
 
-        // Занята другим постом?
         const busyPostId = findPostWithCard(cardNumber, postId);
         if (busyPostId) {
           delete state.clientCard;
@@ -281,14 +320,9 @@ function connectMqtt(settings) {
           state._lastEspBalance = null;
           mqttClient.publish(`posts/${postId}/message`,
             JSON.stringify({ ERR: `КАРТА УЖЕ ИСПОЛЬЗУЕТСЯ НА ПОСТУ ${busyPostId}` }), { qos: 1 });
-
           broadcast({
             type: 'card-scan',
-            postId,
-            card: cardNumber,
-            balance: 0,
-            cardType: 'busy',
-            known: false,
+            postId, card: cardNumber, balance: 0, cardType: 'busy', known: false,
             error: `Карта уже используется на посту ${busyPostId}`,
             timestamp: Date.now(),
           });
@@ -297,21 +331,15 @@ function connectMqtt(settings) {
 
         const prevCard = state.clientCard;
         state.clientCard = cardNumber;
-
         const clientCard = await ClientCard.findOne({ card: cardNumber });
         if (!clientCard) {
           console.warn(`⚠️ Пост ${postId}: карта ${cardNumber} не найдена в БД`);
           delete state.clientCardBalance;
           delete state.clientCardType;
           state._lastEspBalance = null;
-
           broadcast({
             type: 'card-scan',
-            postId,
-            card: cardNumber,
-            balance: 0,
-            cardType: 'unknown',
-            known: false,
+            postId, card: cardNumber, balance: 0, cardType: 'unknown', known: false,
             timestamp: Date.now(),
           });
           return;
@@ -335,7 +363,6 @@ function connectMqtt(settings) {
         mqttClient.publish(`posts/${postId}/message`, JSON.stringify({ "": "" }), { qos: 0 });
         publishStatus(postId);
 
-        // 🔔 Сообщаем всем WS-клиентам, что карта считана
         broadcast({
           type: 'card-scan',
           postId,
@@ -396,10 +423,8 @@ function reconnectMqtt(newSettings) {
 }
 
 // ============================================================
-// MongoDB
+// СХЕМЫ
 // ============================================================
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://0.0.0.0:27017/carwash';
-
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -498,7 +523,9 @@ let settings = {
   }
 };
 
-// ---------- Хелперы ----------
+// ============================================================
+// ХЕЛПЕРЫ
+// ============================================================
 function buildServicesPayloadForPost(postId) {
   const p = settings.posts?.[postId] || {};
   const services = p.services || [];
@@ -627,7 +654,9 @@ async function loadSettings() {
   }
 }
 
-// ---------- Состояние постов ----------
+// ============================================================
+// СОСТОЯНИЕ ПОСТОВ
+// ============================================================
 let postsState = {};
 
 function getPostState(postId) {
@@ -693,7 +722,7 @@ async function debitCardForPost(postId, amountRub) {
   await card.save();
   state.clientCardBalance = card.balance;
   state.balance = card.balance;
-  console.log(`💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с ${card.card} → остаток ${card.balance.toFixed(2)} ₽`);
+  console.log(`💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с ${card.card}`);
 }
 
 function startTimer(postId) {
@@ -841,50 +870,10 @@ async function initShift() {
 }
 
 // ============================================================
-// REST API
+// MIDDLEWARE
 // ============================================================
-const app = express();
 app.use(cors());
 app.use(express.json());
-
-// ============================================================
-// WebSocket — трансляция всем клиентам
-// ============================================================
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server, path: '/ws' });
-
-function broadcast(payload) {
-  if (!wss) return;
-  const data = JSON.stringify(payload);
-  for (const ws of wss.clients) {
-    if (ws.readyState === WebSocket.OPEN) {
-      try { ws.send(data); } catch { /* ignore */ }
-    }
-  }
-}
-
-wss.on('connection', (ws) => {
-  console.log(`🔌 WebSocket: клиент подключён (всего: ${wss.clients.size})`);
-
-  try {
-    ws.send(JSON.stringify({
-      type: 'snapshot',
-      posts: postsState,
-      settings: {
-        tankLevels: settings.tankLevels,
-        numberOfPosts: settings.numberOfPosts,
-      },
-      timestamp: Date.now(),
-    }));
-  } catch (e) {
-    console.warn('WebSocket snapshot error:', e.message);
-  }
-
-  ws.on('close', () => {
-    console.log(`🔌 WebSocket: клиент отключился (всего: ${wss.clients.size})`);
-  });
-  ws.on('error', (err) => console.warn('WebSocket error:', err.message));
-});
 
 // ---------- Хук: баланс карты во все посты ----------
 app.locals.publishCardBalanceToPosts = async function (cardNumber) {
@@ -893,7 +882,6 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
     const normalized = String(cardNumber).toUpperCase();
     const clientCard = await ClientCard.findOne({ card: normalized });
     if (!clientCard) return;
-
     const postsWithCard = [];
     for (const [id, st] of Object.entries(postsState)) {
       if (st && st.clientCard === clientCard.card) {
@@ -904,14 +892,10 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
       }
     }
     if (!postsWithCard.length) return;
-
-    const payload = JSON.stringify({
-      card: clientCard.card, balance: clientCard.balance, type: clientCard.type
-    });
+    const payload = JSON.stringify({ card: clientCard.card, balance: clientCard.balance, type: clientCard.type });
     for (const postId of postsWithCard) {
       mqttClient.publish(`posts/${postId}/clientcardbalance`, payload, { qos: 1 });
       publishStatus(postId);
-
       broadcast({
         type: 'card-balance',
         postId,
@@ -937,7 +921,6 @@ function auth(req, res, next) {
     next();
   } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
-
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin' && req.user.role !== 'developer') {
     return res.status(403).json({ error: 'Admin required' });
@@ -1134,15 +1117,14 @@ app.post('/api/publish-config', auth, adminOnly, (_req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ---------- Команды постов (с защитой от null mqttClient) ----------
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   if (!mqttClient) {
     console.error(`❌ /api/posts/${req.params.postId}/command: mqttClient не подключён`);
-    return res.status(503).json({ error: 'MQTT не подключён. Проверьте настройки брокера.' });
+    return res.status(503).json({ error: 'MQTT не подключён' });
   }
-  const { command } = req.body;
-  if (!command) {
-    return res.status(400).json({ error: 'command обязателен' });
-  }
+  const { command } = req.body || {};
+  if (!command) return res.status(400).json({ error: 'command обязателен' });
   try {
     mqttClient.publish(
       `posts/${req.params.postId}/command`,
@@ -1186,7 +1168,6 @@ app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
     } else if (brokerUrl) {
       newMqtt = { brokerUrl, username: username || '', password: password || '' };
     } else return res.status(400).json({ error: 'Укажите local/remote или brokerUrl' });
-
     settings.mqtt = newMqtt;
     await saveSettings(settings);
     reconnectMqtt(newMqtt);
