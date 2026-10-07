@@ -124,6 +124,7 @@ async function loadSettings() {
     reconnectPeriod: 5000,
     connectTimeout: 10000,
     clean: true,
+	rejectUnauthorized: false,
   });
 
   remote.on('connect', () => {
