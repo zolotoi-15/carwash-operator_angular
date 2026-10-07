@@ -195,50 +195,7 @@
 }
 
 @media (max-width: 420px) {
-  .post-card {
-  position: relative;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  border-radius: 10px;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  transition: box-shadow 0.15s ease;
-  box-sizing: border-box;
-  width: 100%;
-  min-width: min-width: 90%;              /* чтобы flex-дети не выдавливали ширину */
-
-  &:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-  &.offline { opacity: 0.65; }
-  &.busy { border-color: #ef4444; }
-}
-
-/* Функции: 5 колонок, но сжимаем на узких */
-.functions {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 4px;
-
-  .fn-btn {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    /* остальное как было */
-  }
-}
-
-@media (max-width: 1400px) {
-  .functions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-}
-@media (max-width: 900px) {
-  .functions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 520px) {
-  .functions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .functions .fn-btn { font-size: 12px; padding: 8px 0; }
-}
+  .post-card { padding: 10px; gap: 8px; }
 
   .post-header .post-title { font-size: 14px; }
   .post-header .post-status { font-size: 10px; }
