@@ -1,4 +1,10 @@
 @media (max-width: 640px) {
   .amount { font-size: 28px; }
-  .card { padding: 14px; }
+.card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+.kkm-card { flex: 1; }  
 }

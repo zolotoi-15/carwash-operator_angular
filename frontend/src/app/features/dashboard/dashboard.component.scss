@@ -1,43 +1,54 @@
-.dashboard { padding: 24px; }
-
-.welcome {
-  font-size: 18px;
-  color: #1e293b;
-  margin-bottom: 24px;
-}
-
 .top-row {
   display: grid;
   grid-template-columns: 1fr 1.5fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
+  align-items: stretch;   /* ← карточки растягиваются на одну высоту */
+
+  > app-kkm-status,
+  > app-tank-levels,
+  > app-shift-total {
+    display: flex;        /* ← чтобы дочерний .card занял всю высоту */
+    min-height: 100%;
+  }
+}
+
+/* Общие стили для всех карточек верхнего ряда */
+.top-row .card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 240px;      /* единая минимальная высота */
+  padding: 16px;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
+.top-row .card-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #fff;
+  font-weight: 600;
+  min-height: 22px;       /* заголовки одной высоты */
 }
 
 @media (max-width: 1200px) {
-  .top-row { grid-template-columns: 1fr 1fr; }
-  .top-row > app-kkm-status  { grid-column: 1 / -1; }
-  .top-row > app-tank-levels { grid-column: 1 / -1; }
+  .top-row {
+    grid-template-columns: 1fr 1fr;
+
+    > app-kkm-status,
+    > app-tank-levels {
+      grid-column: 1 / -1;
+    }
+  }
 }
 
 @media (max-width: 768px) {
-  .top-row { grid-template-columns: 1fr; gap: 12px; }
-  .dashboard { padding: 16px; }
-}
-
-.section-title {
-  margin: 0 0 16px;
-  color: #334155;
-  font-size: 18px;
-}
-
-.posts-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 16px;
-}
-
-@media (max-width: 640px) {
-  .dashboard { padding: 12px; }
-  .section-title { font-size: 16px; margin-bottom: 12px; }
-  .posts-grid { gap: 12px; }
+  .top-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .top-row .card {
+    min-height: auto;
+  }
 }
