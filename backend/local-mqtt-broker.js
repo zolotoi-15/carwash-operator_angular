@@ -141,17 +141,24 @@ async function loadSettings() {
   remote.on('error',     (err) => console.error('[BRIDGE] remote error:', err.message));
 
   // remote -> local
-  remote.on('message', (topic, payload) => {
-    aedes.publish({ topic, payload, qos: 0, retain: false }, () => {});
-  });
+  remote.on('message', (topic, payload, packet) => {
+  console.log(`[BRIDGE] remote → local: ${topic} = ${payload.toString()}`);
+  aedes.publish({
+    topic,
+    payload,
+    qos: packet.qos,
+    retain: packet.retain,   // ← сохраняем retained
+  }, () => {});
+});
 
   // local -> remote
   aedes.on('publish', (packet, client) => {
-    if (!client) return;
-    if (!FORWARD_UP_TOPICS.some(re => re.test(packet.topic))) return;
-    if (!remote.connected) return;
-    remote.publish(packet.topic, packet.payload, { qos: 1 });
-  });
+  if (!client) return;
+  if (!FORWARD_UP_TOPICS.some(re => re.test(packet.topic))) return;
+  if (!remote.connected) return;
+  console.log(`[BRIDGE] local → remote: ${packet.topic} = ${packet.payload.toString()}`);
+  remote.publish(packet.topic, packet.payload, { qos: 1, retain: packet.retain });
+});
 
   aedes.on('client',           (c) => console.log('[LOCAL] client connected:', c.id));
   aedes.on('clientDisconnect', (c) => console.log('[LOCAL] client disconnected:', c.id));
