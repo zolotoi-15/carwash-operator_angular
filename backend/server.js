@@ -937,6 +937,7 @@ function auth(req, res, next) {
     next();
   } catch { res.status(401).json({ error: 'Invalid token' }); }
 }
+
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin' && req.user.role !== 'developer') {
     return res.status(403).json({ error: 'Admin required' });
@@ -1134,9 +1135,26 @@ app.post('/api/publish-config', auth, adminOnly, (_req, res) => {
 });
 
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
+  if (!mqttClient) {
+    console.error(`❌ /api/posts/${req.params.postId}/command: mqttClient не подключён`);
+    return res.status(503).json({ error: 'MQTT не подключён. Проверьте настройки брокера.' });
+  }
   const { command } = req.body;
-  mqttClient.publish(`posts/${req.params.postId}/command`, JSON.stringify({ command }), { qos: 1 });
-  res.json({ ok: true });
+  if (!command) {
+    return res.status(400).json({ error: 'command обязателен' });
+  }
+  try {
+    mqttClient.publish(
+      `posts/${req.params.postId}/command`,
+      JSON.stringify({ command }),
+      { qos: 1 },
+    );
+    console.log(`📤 [API] posts/${req.params.postId}/command → ${command}`);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('❌ publish error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/tank-levels', auth, adminOnly, async (req, res) => {
