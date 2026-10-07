@@ -7,6 +7,12 @@ import { RealtimeService, RealtimeMessage } from '../../../core/services/realtim
 import { NotificationService } from '../../../core/services/notification.service';
 import { ReceiptModalComponent } from '../receipt-modal/receipt-modal.component';
 
+interface CardScanFlash {
+  card: string;
+  postId: string;
+  timestamp: number;
+}
+
 @Component({
   selector: 'app-post-card',
   standalone: true,
@@ -20,6 +26,9 @@ export class PostCardComponent implements OnInit, OnDestroy {
   private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
 
+  // ============================================================
+  // Состояние поста
+  // ============================================================
   online = false;
   esp32Connected = false;
   busy = false;
@@ -28,8 +37,18 @@ export class PostCardComponent implements OnInit, OnDestroy {
   activeFunction = '';
   sum = 0;
 
+  // ============================================================
+  // Пополнение
+  // ============================================================
   topUpAmount: number | null = null;
   showTopUpModal = false;
+
+  // ============================================================
+  // Flash при сканировании карты — ИСПОЛЬЗУЕТСЯ В HTML
+  // ============================================================
+  lastCardScan: CardScanFlash | null = null;
+  cardFlashVisible = false;
+  private flashTimeout: any = null;
 
   readonly functions = [
     'Вода', 'Пена', 'Воск', 'Тефлон', 'Антимошка',
@@ -45,11 +64,12 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.flashTimeout) clearTimeout(this.flashTimeout);
     this.subs.unsubscribe();
   }
 
   // ============================================================
-  // WebSocket — единый поток событий
+  // WebSocket
   // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
     // Снимок состояния при подключении
@@ -59,11 +79,16 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // Событие сканирования карты — flash
+    if (msg.type === 'card-scan' && String(msg.postId) === String(this.postId)) {
+      this.showCardFlash(msg.card || '');
+      return;
+    }
+
     if (msg.type !== 'mqtt') return;
     const topic = msg.topic || '';
     const postIdStr = String(this.postId);
 
-    // posts/<id>/lwt — online/offline
     if (topic === `posts/${postIdStr}/lwt`) {
       const online = (msg.payload || '').trim().toLowerCase() === 'online';
       this.online = online;
@@ -71,7 +96,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/status — busy, balance, currentProgram
     if (topic === `posts/${postIdStr}/status`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -80,11 +104,11 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/clientcardbalance — баланс карты
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
         if (typeof data.balance === 'number') this.balance = data.balance;
+        if (data.card) this.showCardFlash(String(data.card));
       } catch { /* ignore */ }
       return;
     }
@@ -97,6 +121,22 @@ export class PostCardComponent implements OnInit, OnDestroy {
     this.sum = Number(d.sum ?? d.total ?? 0);
     const raw = String(d.currentProgram ?? d.activeFunction ?? '').trim();
     this.activeFunction = raw === '-' ? '' : raw;
+  }
+
+  /** 🔙 Восстановлено: показать flash-плашку с номером карты */
+  private showCardFlash(card: string): void {
+    if (!card) return;
+    this.lastCardScan = {
+      card,
+      postId: String(this.postId),
+      timestamp: Date.now(),
+    };
+    this.cardFlashVisible = true;
+
+    if (this.flashTimeout) clearTimeout(this.flashTimeout);
+    this.flashTimeout = setTimeout(() => {
+      this.cardFlashVisible = false;
+    }, 4000);
   }
 
   // ============================================================
