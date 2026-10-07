@@ -1,3 +1,4 @@
+// src/app/features/dashboard/post-card/post-card.component.ts
 import { Component, Input, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -36,6 +37,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
   balance = 0;
   activeFunction = '';
   sum = 0;
+  lastSeen: number | null = null;
 
   // ============================================================
   // Пополнение
@@ -44,7 +46,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
   showTopUpModal = false;
 
   // ============================================================
-  // Flash при сканировании карты — ИСПОЛЬЗУЕТСЯ В HTML
+  // Flash при сканировании карты
   // ============================================================
   lastCardScan: CardScanFlash | null = null;
   cardFlashVisible = false;
@@ -69,26 +71,36 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // WebSocket
+  // WebSocket — единый поток событий
   // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
-    // Снимок состояния при подключении
+    const postIdStr = String(this.postId);
+
+    // ---------- 1. Snapshot при подключении ----------
     if (msg.type === 'snapshot') {
-      const state = msg.posts?.[String(this.postId)];
+      const state = msg.posts?.[postIdStr];
       if (state) this.applyState(state);
       return;
     }
 
-    // Событие сканирования карты — flash
-    if (msg.type === 'card-scan' && String(msg.postId) === String(this.postId)) {
+    // ---------- 2. Сканирование карты (от backend) ----------
+    if (msg.type === 'card-scan' && String(msg.postId) === postIdStr) {
       this.showCardFlash(msg.card || '');
       return;
     }
 
+    // ---------- 3. Обновление баланса карты (от backend) ----------
+    if (msg.type === 'card-balance' && String(msg.postId) === postIdStr) {
+      if (typeof msg.balance === 'number') this.balance = msg.balance;
+      if (msg.card) this.showCardFlash(String(msg.card));
+      return;
+    }
+
+    // ---------- 4. Трансляция MQTT ----------
     if (msg.type !== 'mqtt') return;
     const topic = msg.topic || '';
-    const postIdStr = String(this.postId);
 
+    // posts/<id>/lwt
     if (topic === `posts/${postIdStr}/lwt`) {
       const online = (msg.payload || '').trim().toLowerCase() === 'online';
       this.online = online;
@@ -96,6 +108,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // posts/<id>/status
     if (topic === `posts/${postIdStr}/status`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -104,6 +117,21 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // posts/<id>/status_relay
+    if (topic === `posts/${postIdStr}/status_relay`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        if (typeof data.busy === 'boolean') this.busy = data.busy;
+        if (typeof data.paused === 'boolean') this.paused = data.paused;
+        if (typeof data.currentProgram === 'string') {
+          const raw = data.currentProgram.trim();
+          this.activeFunction = raw === '-' ? '' : raw;
+        }
+      } catch { /* ignore */ }
+      return;
+    }
+
+    // posts/<id>/clientcardbalance
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -114,22 +142,29 @@ export class PostCardComponent implements OnInit, OnDestroy {
     }
   }
 
+  /** Применить состояние из snapshot или posts/<id>/status */
   private applyState(d: any): void {
-    // 🔥 Читаем online из snapshot
+    // 🔥 online — читаем из snapshot и status
     if (typeof d.online === 'boolean') {
-        this.online = d.online;
-        this.esp32Connected = d.online;
+      this.online = d.online;
+      this.esp32Connected = d.online;
     }
 
-    this.busy = !!(d.busy ?? d.state === 'busy');
-    this.paused = !!d.paused;
-    this.balance = Number(d.balance ?? 0);
-    this.sum = Number(d.sum ?? d.total ?? 0);
+    if (typeof d.busy === 'boolean') this.busy = d.busy;
+    if (typeof d.paused === 'boolean') this.paused = d.paused;
+    if (typeof d.balance === 'number') this.balance = d.balance;
+    if (typeof d.sum === 'number') this.sum = d.sum;
+    else if (typeof d.total === 'number') this.sum = d.total;
+
     const raw = String(d.currentProgram ?? d.activeFunction ?? '').trim();
     this.activeFunction = raw === '-' ? '' : raw;
-}
 
-  /** 🔙 Восстановлено: показать flash-плашку с номером карты */
+    if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
+  }
+
+  // ============================================================
+  // Flash при сканировании карты
+  // ============================================================
   private showCardFlash(card: string): void {
     if (!card) return;
     this.lastCardScan = {
@@ -146,7 +181,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Команды — через REST (backend сам публикует в MQTT)
+  // Команды — через REST (backend публикует в MQTT)
   // ============================================================
   stop(): void { this.sendCommand('stop'); }
   pause(): void { this.sendCommand('pause'); }
