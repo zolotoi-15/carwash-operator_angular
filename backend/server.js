@@ -259,26 +259,27 @@ function connectMqtt(settings) {
 
     // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
-      const postId = topic.split('/')[1];
-      const status = (payload || '').trim().toLowerCase();
-      const isOnline = (status === 'online');
+  const postId = topic.split('/')[1];
+  const status = (payload || '').trim().toLowerCase();
+  const isOnline = (status === 'online');
 
-      if (!postsState[postId]) postsState[postId] = {};
-      postsState[postId].online = isOnline;
+  // 🔥 Сохраняем online/offline в postsState — иначе snapshot не содержит это поле
+  if (!postsState[postId]) postsState[postId] = {};
+  postsState[postId].online = isOnline;
 
-      if (!isOnline) {
-        const state = postsState[postId];
-        if (state && state.clientCard) {
-          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
-          state.balance = 0;
-          state.busy = false;
-        }
-      }
+  if (!isOnline) {
+    const state = postsState[postId];
+    if (state && state.clientCard) {
+      console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
+      delete state.clientCard;
+      delete state.clientCardBalance;
+      delete state.clientCardType;
+      state._lastEspBalance = null;
+      state.balance = 0;
+      state.busy = false;
     }
+  }
+}
 
     // ---------- Карта клиента ----------
     if (/^posts\/[^/]+\/clientcard$/.test(topic)) {
