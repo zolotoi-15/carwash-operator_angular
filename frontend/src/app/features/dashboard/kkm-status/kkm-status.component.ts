@@ -53,25 +53,46 @@ import { MqttService } from '../../../core/services/mqtt.service';
     </div>
     `,
   styles: [`
-    .card { background: #6d28d9; color: #e9d5ff; border-radius: 10px; padding: 16px; }
-    .card-title { margin: 0 0 12px; font-size: 15px; color: #fff; }
-    .kkm-row {
-      display: flex; justify-content: space-between;
-      padding: 6px 0; font-size: 13px;
-      border-bottom: 1px solid rgba(255,255,255,0.1);
-    }
-    .kkm-row:last-of-type { border-bottom: none; }
-    .label { color: #c4b5fd; }
-    .value { color: #fff; font-weight: 500; }
-    .value.ok { color: #4ade80; }
-    .value.err { color: #fca5a5; }
-    .mono { font-family: ui-monospace, monospace; font-size: 12px; }
-    .warning {
-      margin-top: 12px; padding: 8px 10px;
-      background: rgba(0,0,0,0.2);
-      border-radius: 6px; font-size: 12px; color: #fde68a;
-    }
-  `]
+  :host {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+  }
+  .card {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    background: #6d28d9;
+    color: #e9d5ff;
+    border-radius: 10px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+  }
+  .card-title { margin: 0 0 12px; font-size: 15px; color: #fff; font-weight: 600; }
+  .kkm-card { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
+  .kkm-row {
+    display: flex; justify-content: space-between; align-items: center;
+    width: 100%; padding: 6px 0; font-size: 13.5px; gap: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .kkm-row:last-of-type { border-bottom: none; }
+  .label { color: #c4b5fd; flex-shrink: 0; }
+  .value {
+    color: #fff; font-weight: 500; text-align: right; margin-left: auto;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .value.ok { color: #4ade80; }
+  .value.err { color: #fca5a5; }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+  .warning {
+    margin-top: 12px; padding: 8px 10px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 6px; font-size: 12px; color: #fde68a;
+  }
+`]
 })
 export class KkmStatusComponent implements OnInit, OnDestroy {
   private mqtt = inject(MqttService);

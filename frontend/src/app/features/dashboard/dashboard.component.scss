@@ -1,25 +1,23 @@
 .dashboard {
-  padding: 20px 24px;
+  padding: 0;                /* ← padding перенесён в .app-content */
+  width: 100%;
 }
 
-.welcome {
-  font-size: 18px;
-  color: #1e293b;
-  margin: 0 0 20px;
-}
-
-/* ===== Верхний ряд: три карточки в одну строку, одинаковой ширины/высоты ===== */
+/* ===== Верхний ряд: три карточки в одну строку во всю ширину ===== */
 .top-row {
   display: grid;
   grid-template-columns: 1fr 1.2fr 1fr;
-  gap: 8px;               /* ← было 12px */
+  gap: 12px;
   margin-bottom: 20px;
   align-items: stretch;
+  width: 100%;                /* ← во всю ширину родителя */
+  max-width: none;            /* ← никаких ограничений */
 
   > app-kkm-status,
   > app-tank-levels,
   > app-shift-total {
     display: flex;
+    width: 100%;
     min-width: 0;
     height: 100%;
   }
@@ -34,11 +32,45 @@
     min-height: 220px;
     display: flex;
     flex-direction: column;
-    padding: 16px 18px;    /* ← было 14px, чуть больше воздуха по бокам */
+    padding: 16px 18px;
     border-radius: 10px;
+  }
+
+  > app-kkm-status .card-title,
+  > app-tank-levels .card-title,
+  > app-shift-total .card-title {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    min-height: 20px;
   }
 }
 
+/* ===== Ниже — сетка постов, ограниченная по ширине ===== */
+.section-title {
+  margin: 0 auto 12px;
+  max-width: 1400px;
+  color: #334155;
+  font-size: 17px;
+}
+
+.posts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 12px;
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.posts-grid > app-post-card {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+/* ===== Адаптив ===== */
 @media (max-width: 1200px) {
   .top-row {
     grid-template-columns: 1fr 1fr;
@@ -64,32 +96,9 @@
   }
 }
 
-.section-title {
-  margin: 0 0 12px;
-  color: #334155;
-  font-size: 17px;
-}
-
-/* ===== Карточки постов ===== */
-.posts-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-  gap: 12px;
-  justify-content: stretch;
-}
-
-.posts-grid > app-post-card {
-  display: block;
-  width: 100%;
-  min-width: 0;
-}
-
 @media (max-width: 640px) {
-  .dashboard { padding: 12px; }
-  .section-title {
-    font-size: 16px;
-    margin-bottom: 12px;
-  }
+  .section-title { font-size: 16px; margin-bottom: 12px; }
+
   .posts-grid {
     grid-template-columns: 1fr;
     gap: 12px;
