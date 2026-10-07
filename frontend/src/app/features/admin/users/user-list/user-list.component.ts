@@ -1,6 +1,6 @@
 ﻿// src/app/features/admin/users/user-list/user-list.component.ts
 import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { FormsModule } from '@angular/forms';
 import {
   UserService,
@@ -13,7 +13,7 @@ import { NotificationService } from '../../../../core/services/notification.serv
 @Component({
   selector: 'app-user-list',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [FormsModule],
   templateUrl: './user-list.component.html',
   styleUrls: ['./user-list.component.scss'],
 })

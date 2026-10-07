@@ -1,9 +1,11 @@
 <div class="post-card" [class.busy]="busy" [class.offline]="!online">
 
   <!-- Flash при сканировании карты -->
-  <div class="card-flash" *ngIf="cardFlashVisible && lastCardScan">
-    💳 {{ lastCardScan.card }}
-  </div>
+  @if (cardFlashVisible && lastCardScan) {
+    <div class="card-flash">
+      💳 {{ lastCardScan.card }}
+    </div>
+  }
 
   <!-- Заголовок + статус ESP32 -->
   <div class="post-header">
@@ -34,50 +36,53 @@
 
   <!-- Кнопки программ -->
   <div class="functions">
-    <button *ngFor="let fn of functions"
-            class="fn-btn"
-            [class.active]="activeFunction === fn"
-            (click)="activateFunction(fn)">
-      {{ fn }}
-    </button>
+    @for (fn of functions; track fn) {
+      <button
+        class="fn-btn"
+        [class.active]="activeFunction === fn"
+        (click)="activateFunction(fn)">
+        {{ fn }}
+      </button>
+    }
   </div>
 
   <!-- Строка «Сумма» — поле ввода + кнопка ₽ -->
   <div class="sum-row">
     <span>Сумма</span>
     <input type="number"
-           class="sum-input"
-           [(ngModel)]="topUpAmount"
-           [name]="'topUpAmount_' + postId"
-           placeholder="0"
-           min="1"
-           step="1"
-           autocomplete="off"
-           (keydown.enter)="quickTopUp()">
-    <button type="button"
-            class="quick-topup-btn"
-            [disabled]="!topUpAmount || topUpAmount <= 0"
-            (click)="quickTopUp()"
-            title="Пополнить на введённую сумму">
-      ₽
-    </button>
+      class="sum-input"
+      [(ngModel)]="topUpAmount"
+      [name]="'topUpAmount_' + postId"
+      placeholder="0"
+      min="1"
+      step="1"
+      autocomplete="off"
+      (keydown.enter)="quickTopUp()">
+      <button type="button"
+        class="quick-topup-btn"
+        [disabled]="!topUpAmount || topUpAmount <= 0"
+        (click)="quickTopUp()"
+        title="Пополнить на введённую сумму">
+        ₽
+      </button>
+    </div>
+
+    <!-- Кнопки оператора -->
+    <div class="actions">
+      <button class="act-btn topup" (click)="openTopUpModal()">➕ Пополнить</button>
+      <button class="act-btn stop"  (click)="stop()">⏹️ Остановить</button>
+      <button class="act-btn pause" (click)="pause()">⏸️ Пауза</button>
+      <button class="act-btn reset" (click)="reset()">🔄 Сброс</button>
+      <button class="act-btn print" (click)="printReceipt()">🧾 Печать чека</button>
+    </div>
+
   </div>
 
-  <!-- Кнопки оператора -->
-  <div class="actions">
-    <button class="act-btn topup" (click)="openTopUpModal()">➕ Пополнить</button>
-    <button class="act-btn stop"  (click)="stop()">⏹️ Остановить</button>
-    <button class="act-btn pause" (click)="pause()">⏸️ Пауза</button>
-    <button class="act-btn reset" (click)="reset()">🔄 Сброс</button>
-    <button class="act-btn print" (click)="printReceipt()">🧾 Печать чека</button>
-  </div>
-
-</div>
-
-<!-- Модалка пополнения с чеками — вне .post-card, чтобы не обрезалась overflow -->
-<app-receipt-modal
-  *ngIf="showTopUpModal"
-  [postId]="postId"
-  (close)="closeTopUpModal()"
-  (topUp)="handleTopUp($event)">
-</app-receipt-modal>
+  <!-- Модалка пополнения с чеками — вне .post-card, чтобы не обрезалась overflow -->
+  @if (showTopUpModal) {
+    <app-receipt-modal
+      [postId]="postId"
+      (close)="closeTopUpModal()"
+      (topUp)="handleTopUp($event)">
+    </app-receipt-modal>
+  }

@@ -1,55 +1,57 @@
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { Subscription } from 'rxjs';
 import { MqttService } from '../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-kkm-status',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   template: `
     <div class="card kkm-card">
       <h3 class="card-title">📟 Кассовый аппарат (ККМ)</h3>
-
+    
       <div class="kkm-row">
         <span class="label">Состояние:</span>
         <span class="value" [class.ok]="kkm.ready" [class.err]="!kkm.ready">
           {{ kkm.ready ? '✅ Готов' : '⚠️ Не отвечает' }}
         </span>
       </div>
-
+    
       <div class="kkm-row">
         <span class="label">Подключение:</span>
         <span class="value" [class.ok]="kkm.connected" [class.err]="!kkm.connected">
           {{ kkm.connected ? '🟢 Да' : '🔴 Нет' }}
         </span>
       </div>
-
+    
       <div class="kkm-row">
         <span class="label">Бумага:</span>
         <span class="value">{{ kkm.paper ? '📄 Есть' : '❌ Нет' }}</span>
       </div>
-
+    
       <div class="kkm-row">
         <span class="label">Номер ККТ:</span>
         <span class="value mono">{{ kkm.number || '—' }}</span>
       </div>
-
+    
       <div class="kkm-row">
         <span class="label">Фискальная смена №:</span>
         <span class="value mono">{{ kkm.shiftNumber }}</span>
       </div>
-
+    
       <div class="kkm-row">
         <span class="label">Кассир:</span>
         <span class="value">{{ kkm.cashier || '—' }}</span>
       </div>
-
-      <div class="warning" *ngIf="!kkm.ready">
-        ⚠️ ККМ не отвечает, используются ручные настройки
-      </div>
+    
+      @if (!kkm.ready) {
+        <div class="warning">
+          ⚠️ ККМ не отвечает, используются ручные настройки
+        </div>
+      }
     </div>
-  `,
+    `,
   styles: [`
     .card { background: #6d28d9; color: #e9d5ff; border-radius: 10px; padding: 16px; }
     .card-title { margin: 0 0 12px; font-size: 15px; color: #fff; }

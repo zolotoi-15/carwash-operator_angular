@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { Subscription } from 'rxjs';
 import { MqttService } from '../../../core/services/mqtt.service';
 
@@ -8,21 +8,23 @@ interface Tank { key: string; label: string; level: number; }
 @Component({
   selector: 'app-tank-levels',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   template: `
     <div class="card">
       <h3 class="card-title">🛢️ Уровни воды и химии</h3>
       <div class="tanks">
-        <div class="tank" *ngFor="let t of tanks">
-          <div class="tank-bar">
-            <div class="tank-fill" [style.height.%]="t.level"></div>
+        @for (t of tanks; track t) {
+          <div class="tank">
+            <div class="tank-bar">
+              <div class="tank-fill" [style.height.%]="t.level"></div>
+            </div>
+            <div class="tank-percent">{{ t.level }}%</div>
+            <div class="tank-label">{{ t.label }}</div>
           </div>
-          <div class="tank-percent">{{ t.level }}%</div>
-          <div class="tank-label">{{ t.label }}</div>
-        </div>
+        }
       </div>
     </div>
-  `,
+    `,
   styles: [`
     .card { background: #1e293b; color: #e2e8f0; border-radius: 10px; padding: 16px; }
     .card-title { margin: 0 0 16px; font-size: 15px; color: #fff; }

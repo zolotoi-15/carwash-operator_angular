@@ -1,5 +1,5 @@
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { Subscription } from 'rxjs';
 import { AuthService } from '../../core/services/auth.service';
 import { AdminService } from '../../core/services/admin.service';
@@ -13,12 +13,11 @@ import { PostCardComponent } from './post-card/post-card.component';
   selector: 'app-dashboard',
   standalone: true,
   imports: [
-    CommonModule,
     KkmStatusComponent,
     TankLevelsComponent,
     ShiftTotalComponent,
-    PostCardComponent,
-  ],
+    PostCardComponent
+],
   templateUrl: './dashboard.component.html',
   styleUrls: ['./dashboard.component.scss'],
 })

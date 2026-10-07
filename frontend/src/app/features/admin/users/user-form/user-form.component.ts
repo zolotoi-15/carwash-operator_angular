@@ -1,6 +1,6 @@
 ﻿// src/app/features/admin/users/user-form/user-form.component.ts
 import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router, RouterModule } from '@angular/router';
 import {
@@ -24,7 +24,7 @@ interface UserFormModel {
 @Component({
   selector: 'app-user-form',
   standalone: true,
-  imports: [CommonModule, FormsModule, RouterModule],
+  imports: [FormsModule, RouterModule],
   templateUrl: './user-form.component.html',
   styleUrls: ['./user-form.component.scss'],
 })

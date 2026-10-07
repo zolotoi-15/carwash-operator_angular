@@ -11,7 +11,7 @@
         placeholder="login"
         autocomplete="off"
         required
-      />
+        />
     </label>
 
     <label>
@@ -23,7 +23,7 @@
         placeholder="••••••••"
         autocomplete="new-password"
         [required]="!isEdit"
-      />
+        />
     </label>
 
     <label>
@@ -39,7 +39,9 @@
     <label>
       Роль
       <select [(ngModel)]="m.role" name="role">
-        <option *ngFor="let r of roles" [ngValue]="r.value">{{ r.label }}</option>
+        @for (r of roles; track r) {
+          <option [ngValue]="r.value">{{ r.label }}</option>
+        }
       </select>
     </label>
 

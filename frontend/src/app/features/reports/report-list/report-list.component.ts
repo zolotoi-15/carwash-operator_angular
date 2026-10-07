@@ -16,25 +16,25 @@ type Period = 'day' | 'week' | 'month' | 'shift' | 'custom';
   template: `
     <div class="reports-page">
       <h2>📊 Отчёты по кассовым чекам</h2>
-
+    
       <div class="filters">
         <button [class.active]="period === 'day'"    (click)="setPeriod('day')">День</button>
         <button [class.active]="period === 'week'"   (click)="setPeriod('week')">Неделя</button>
         <button [class.active]="period === 'month'"  (click)="setPeriod('month')">Месяц</button>
         <button [class.active]="period === 'shift'"  (click)="setPeriod('shift')">Смена (8–20)</button>
-
+    
         <span class="range-label">Диапазон:</span>
         <input type="date" [(ngModel)]="dateFrom" (change)="onCustomRangeChange()" />
         <input type="date" [(ngModel)]="dateTo"   (change)="onCustomRangeChange()" />
-
+    
         <button class="pdf-btn" (click)="downloadPdf()">📄 Скачать PDF</button>
       </div>
-
+    
       <p class="summary">
         Итого: <strong>{{ total | number:'1.2-2' }}</strong> руб.,
         чеков: <strong>{{ receipts.length }}</strong>
       </p>
-
+    
       <table class="receipts-table">
         <thead>
           <tr>
@@ -47,27 +47,35 @@ type Period = 'day' | 'week' | 'month' | 'shift' | 'custom';
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let r of receipts; let i = index">
-            <td>{{ i + 1 }}</td>
-            <td>{{ r.receiptNumber }}</td>
-            <td>{{ r.postId }}</td>
-            <td>{{ r.date | date:'dd.MM.yy HH:mm' }}</td>
-            <td class="amount">{{ r.total | number:'1.2-2' }} ₽</td>
-            <td class="services">
-              <span *ngFor="let svc of r.services; let last = last">
-                {{ svc.name }} (цена сек: {{ svc.pricePerSecond }}коп,
-                время: {{ svc.seconds }}с,
-                сумма: {{ svc.total | number:'1.2-2' }})<span *ngIf="!last">, </span>
-              </span>
+          @for (r of receipts; track r; let i = $index) {
+            <tr>
+              <td>{{ i + 1 }}</td>
+              <td>{{ r.receiptNumber }}</td>
+              <td>{{ r.postId }}</td>
+              <td>{{ r.date | date:'dd.MM.yy HH:mm' }}</td>
+              <td class="amount">{{ r.total | number:'1.2-2' }} ₽</td>
+              <td class="services">
+                @for (svc of r.services; track svc; let last = $last) {
+                  <span>
+                    {{ svc.name }} (цена сек: {{ svc.pricePerSecond }}коп,
+                    время: {{ svc.seconds }}с,
+                    сумма: {{ svc.total | number:'1.2-2' }})@if (!last) {
+                    <span>, </span>
+                  }
+                </span>
+              }
             </td>
           </tr>
-          <tr *ngIf="!receipts.length">
+        }
+        @if (!receipts.length) {
+          <tr>
             <td colspan="6" class="empty">Нет чеков за выбранный период</td>
           </tr>
-        </tbody>
-      </table>
+        }
+      </tbody>
+    </table>
     </div>
-  `,
+    `,
   styles: [`
     .reports-page { padding: 24px; }
     .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }

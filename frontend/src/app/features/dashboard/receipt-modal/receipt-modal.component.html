@@ -7,70 +7,82 @@
     </header>
 
     <section class="modal-body">
-      <p class="shift-info" *ngIf="shiftOpenedAt">
-        Смена открыта: {{ formatDate(shiftOpenedAt) }}
-      </p>
-      <p class="shift-info" *ngIf="!shiftOpenedAt">
-        Смена не открыта — показаны все чеки поста.
-      </p>
+      @if (shiftOpenedAt) {
+        <p class="shift-info">
+          Смена открыта: {{ formatDate(shiftOpenedAt) }}
+        </p>
+      }
+      @if (!shiftOpenedAt) {
+        <p class="shift-info">
+          Смена не открыта — показаны все чеки поста.
+        </p>
+      }
 
-      <div *ngIf="receipts.length === 0" class="empty">
-        Чеков за смену нет.
-      </div>
+      @if (receipts.length === 0) {
+        <div class="empty">
+          Чеков за смену нет.
+        </div>
+      }
 
-      <table *ngIf="receipts.length > 0" class="receipts-table">
-        <thead>
-          <tr>
-            <th>№</th>
-            <th>Время</th>
-            <th>Услуги</th>
-            <th class="right">Сумма</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr *ngFor="let r of receipts">
-            <td>{{ r.receiptNumber || r.id }}</td>
-            <td>{{ formatDate(r.date) }}</td>
-            <td class="services">
-              <span *ngFor="let s of r.services; let last = last">
-                {{ s.name }} ({{ s.seconds | number:'1.0-1' }}с){{ last ? '' : ', ' }}
-              </span>
-            </td>
-            <td class="right">{{ r.total | number:'1.2-2' }} ₽</td>
-          </tr>
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colspan="3" class="right"><strong>Итого за смену:</strong></td>
-            <td class="right"><strong>{{ totalForShift | number:'1.2-2' }} ₽</strong></td>
-          </tr>
-        </tfoot>
-      </table>
+      @if (receipts.length > 0) {
+        <table class="receipts-table">
+          <thead>
+            <tr>
+              <th>№</th>
+              <th>Время</th>
+              <th>Услуги</th>
+              <th class="right">Сумма</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (r of receipts; track r) {
+              <tr>
+                <td>{{ r.receiptNumber || r.id }}</td>
+                <td>{{ formatDate(r.date) }}</td>
+                <td class="services">
+                  @for (s of r.services; track s; let last = $last) {
+                    <span>
+                      {{ s.name }} ({{ s.seconds | number:'1.0-1' }}с){{ last ? '' : ', ' }}
+                    </span>
+                  }
+                </td>
+                <td class="right">{{ r.total | number:'1.2-2' }} ₽</td>
+              </tr>
+            }
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3" class="right"><strong>Итого за смену:</strong></td>
+              <td class="right"><strong>{{ totalForShift | number:'1.2-2' }} ₽</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      }
     </section>
 
     <footer class="modal-footer">
       <label class="amount-label">
         Сумма пополнения:
         <input type="number"
-               min="1"
-               step="1"
-               [(ngModel)]="amount"
-               name="topUpAmount"
-               class="amount-input"
-               placeholder="0"
-               autocomplete="off" />
-        <span>₽</span>
-      </label>
+          min="1"
+          step="1"
+          [(ngModel)]="amount"
+          name="topUpAmount"
+          class="amount-input"
+          placeholder="0"
+          autocomplete="off" />
+          <span>₽</span>
+        </label>
 
-      <div class="actions">
-        <button class="btn-secondary" (click)="cancel()">Отмена</button>
-        <button class="btn-primary"
-                [disabled]="amount <= 0"
-                (click)="confirmTopUp()">
-          ➕ Пополнить на {{ amount || 0 }} ₽
-        </button>
-      </div>
-    </footer>
+        <div class="actions">
+          <button class="btn-secondary" (click)="cancel()">Отмена</button>
+          <button class="btn-primary"
+            [disabled]="amount <= 0"
+            (click)="confirmTopUp()">
+            ➕ Пополнить на {{ amount || 0 }} ₽
+          </button>
+        </div>
+      </footer>
 
+    </div>
   </div>
-</div>
