@@ -2,20 +2,69 @@
   height: 100%;
   display: flex;
   flex-direction: column;
+  background: #1e293b;
+  color: #e2e8f0;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.card-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: #fff;
+  font-weight: 600;
 }
 
 .tanks {
-  flex: 1;                     /* ← растягиваем столбики на всю доступную высоту */
+  flex: 1;
   display: flex;
   justify-content: space-around;
   align-items: flex-end;
-  gap: 8px;
-  min-height: 140px;
+  gap: 6px;
+  min-height: 120px;
+  padding-top: 8px;
+}
+
+.tank {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
 }
 
 .tank-bar {
-  height: 100%;                /* ← столбик тянется по родителю */
-  max-height: 110px;
-  min-height: 60px;
-  /* остальное как было */
+  width: 32px;
+  flex: 1;
+  max-height: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: flex-end;
+  margin-bottom: 4px;
+}
+
+.tank-fill {
+  width: 100%;
+  background: linear-gradient(to top, #38bdf8, #0ea5e9);
+  transition: height 0.35s ease;
+}
+
+.tank-percent {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1;
+}
+
+.tank-label {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+  line-height: 1;
 }

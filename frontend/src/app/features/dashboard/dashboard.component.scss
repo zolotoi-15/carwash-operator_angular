@@ -1,20 +1,29 @@
+.dashboard {
+  padding: 20px 24px;
+}
+
+.welcome {
+  font-size: 18px;
+  color: #1e293b;
+  margin: 0 0 20px;
+}
+
+/* ===== Верхний ряд: три карточки в одну строку, одинаковой ширины/высоты ===== */
 .top-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));  /* ← 3 равные колонки */
-  gap: 16px;
-  margin-bottom: 24px;
-  align-items: stretch;                              /* ← одинаковая высота */
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+  align-items: stretch;
 
-  /* Все три дочерних компонента — flex-контейнеры, чтобы .card растянулся */
   > app-kkm-status,
   > app-tank-levels,
   > app-shift-total {
     display: flex;
-    min-width: 0;                                    /* ← чтобы grid не выдавливал */
+    min-width: 0;
     height: 100%;
   }
 
-  /* Карточка внутри каждого компонента — на всю высоту и ширину */
   > app-kkm-status .card,
   > app-tank-levels .card,
   > app-shift-total .card {
@@ -22,32 +31,30 @@
     width: 100%;
     height: 100%;
     box-sizing: border-box;
-    min-height: 240px;                               /* единая минимальная высота */
+    min-height: 220px;
     display: flex;
     flex-direction: column;
-    padding: 16px;
+    padding: 14px;
     border-radius: 10px;
   }
 
-  /* Заголовки одной высоты, чтобы ряды не смещались */
   > app-kkm-status .card-title,
   > app-tank-levels .card-title,
   > app-shift-total .card-title {
-    margin: 0 0 12px;
-    font-size: 15px;
+    margin: 0 0 10px;
+    font-size: 14px;
     font-weight: 600;
     color: #fff;
-    min-height: 22px;
+    min-height: 20px;
   }
 }
 
-/* ===== Адаптив ===== */
 @media (max-width: 1200px) {
   .top-row {
     grid-template-columns: 1fr 1fr;
 
     > app-tank-levels {
-      grid-column: 1 / -1;   /* уровни на всю ширину во второй строке */
+      grid-column: 1 / -1;
     }
   }
 }
@@ -64,5 +71,37 @@
     > app-shift-total .card {
       min-height: auto;
     }
+  }
+}
+
+.section-title {
+  margin: 0 0 12px;
+  color: #334155;
+  font-size: 17px;
+}
+
+/* ===== Карточки постов ===== */
+.posts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 12px;
+  justify-content: stretch;
+}
+
+.posts-grid > app-post-card {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .dashboard { padding: 12px; }
+  .section-title {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .posts-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 }

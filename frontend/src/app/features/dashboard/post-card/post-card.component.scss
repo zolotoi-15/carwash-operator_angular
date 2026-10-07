@@ -8,8 +8,11 @@
   flex-direction: column;
   gap: 10px;
   transition: box-shadow 0.15s ease;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
 
-  &:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+  &:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
   &.offline { opacity: 0.65; }
   &.busy { border-color: #ef4444; }
 }
@@ -88,10 +91,10 @@
   }
 }
 
-/* ===== Программы: 5 колонок на широком, 4/3 на среднем, 2 на узком ===== */
+/* ===== Программы ===== */
 .functions {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
 
   .fn-btn {
@@ -108,7 +111,7 @@
     text-overflow: ellipsis;
     white-space: nowrap;
 
-    &:hover  { background: #e2e8f0; }
+    &:hover { background: #e2e8f0; }
     &.active {
       background: #3b82f6;
       color: #fff;
@@ -118,17 +121,17 @@
 }
 
 @media (max-width: 1400px) {
-  .functions { grid-template-columns: repeat(4, 1fr); }
+  .functions { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @media (max-width: 900px) {
-  .functions { grid-template-columns: repeat(3, 1fr); }
+  .functions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 520px) {
-  .functions { grid-template-columns: repeat(2, 1fr); }
+  .functions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .functions .fn-btn { font-size: 12px; padding: 8px 0; }
 }
 
-/* ===== Строка Сумма + инпут ===== */
+/* ===== Строка «Сумма» ===== */
 .sum-row {
   display: flex;
   justify-content: space-between;
@@ -188,7 +191,7 @@
     &.stop  { background: #dc2626; }
     &.pause { background: #f59e0b; }
     &.reset { background: #3b82f6; }
-    &.print { background: #7c3aed; grid-column: 1 / -1; } /* печать чека на всю ширину */
+    &.print { background: #7c3aed; grid-column: 1 / -1; }
 
     &:hover { filter: brightness(0.92); }
   }

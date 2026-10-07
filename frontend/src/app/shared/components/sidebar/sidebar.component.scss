@@ -18,16 +18,10 @@
   scrollbar-width: thin;
   scrollbar-color: #334155 transparent;
 
-  &::-webkit-scrollbar {
-    height: 6px;
-  }
-  &::-webkit-scrollbar-thumb {
-    background: #334155;
-    border-radius: 3px;
-  }
+  &::-webkit-scrollbar { height: 6px; }
+  &::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
 }
 
-/* ===== Бренд ===== */
 .sidebar-brand {
   display: flex;
   align-items: center;
@@ -42,7 +36,6 @@
   letter-spacing: 0.3px;
 }
 
-/* ===== Навигация ===== */
 .sidebar-nav {
   display: flex;
   flex-direction: row;
@@ -54,9 +47,7 @@
   overflow-y: visible;
   scrollbar-width: none;
 
-  &::-webkit-scrollbar {
-    display: none;
-  }
+  &::-webkit-scrollbar { display: none; }
 }
 
 .sidebar-link {
@@ -91,7 +82,6 @@
   }
 }
 
-/* ===== Разделитель ===== */
 .sidebar-divider {
   display: flex;
   align-items: center;
@@ -108,7 +98,6 @@
   margin-left: 6px;
 }
 
-/* ===== Футер ===== */
 .sidebar-footer {
   display: flex;
   align-items: center;
@@ -135,35 +124,18 @@
   }
 }
 
-/* ===== Адаптив ===== */
 @media (max-width: 900px) {
-  .sidebar {
-    min-height: 48px;
-  }
-  .sidebar-brand {
-    padding: 10px 14px;
-    font-size: 14px;
-  }
-  .sidebar-link {
-    padding: 14px 12px;
-    font-size: 13px;
-  }
-  .sidebar-divider {
-    display: none;
-  }
+  .sidebar { min-height: 48px; }
+  .sidebar-brand { padding: 10px 14px; font-size: 14px; }
+  .sidebar-link { padding: 14px 12px; font-size: 13px; }
+  .sidebar-divider { display: none; }
 }
 
 @media (max-width: 640px) {
   .sidebar-link {
     padding: 12px 10px;
     font-size: 12px;
-
-    .icon {
-      font-size: 14px;
-    }
+    .icon { font-size: 14px; }
   }
-  .sidebar-brand {
-    font-size: 13px;
-    padding: 8px 12px;
-  }
+  .sidebar-brand { font-size: 13px; padding: 8px 12px; }
 }
