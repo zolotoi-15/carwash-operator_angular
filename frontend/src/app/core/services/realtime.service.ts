@@ -1,6 +1,6 @@
 // src/app/core/services/realtime.service.ts
 import { Injectable, OnDestroy } from '@angular/core';
-import { BehaviorSubject, Subject } from 'rxjs';
+import { BehaviorSubject, Subject, ReplaySubject } from 'rxjs';
 import { environment } from '../../../environments/environment';
 
 export interface RealtimeMessage {
@@ -22,7 +22,9 @@ export interface RealtimeMessage {
 export class RealtimeService implements OnDestroy {
   private ws?: WebSocket;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
-  private messagesSubject = new Subject<RealtimeMessage>();
+ // private messagesSubject = new Subject<RealtimeMessage>();
+  private messagesSubject = new ReplaySubject<RealtimeMessage>(100);
+
   private connectedSubject = new BehaviorSubject<boolean>(false);
 
   messages$ = this.messagesSubject.asObservable();
