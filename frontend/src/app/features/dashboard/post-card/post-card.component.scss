@@ -207,7 +207,7 @@
   transition: box-shadow 0.15s ease;
   box-sizing: border-box;
   width: 100%;
-  min-width: 0;              /* чтобы flex-дети не выдавливали ширину */
+  min-width: min-width: 90%;              /* чтобы flex-дети не выдавливали ширину */
 
   &:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
   &.offline { opacity: 0.65; }
