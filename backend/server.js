@@ -9,27 +9,20 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const mqtt = require('mqtt');
+const mqtt = require('mqtt');           // ← МОДУЛЬ, нельзя перекрывать
 const WebSocket = require('ws');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
 require('dotenv').config();
 
 // ============================================================
-// МОДЕЛИ И ЗАВИСИМОСТИ
+// WebSocket — общая шина для всех клиентов
 // ============================================================
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://0.0.0.0:27017/carwash';
-
-// ---------- WebSocket ----------
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/ws' });
 
-/**
- * Разослать сообщение всем подключённым WebSocket-клиентам.
- * Объявлена через function — работает hoisting, можно вызывать
- * до определения в файле.
- */
+/** Разослать JSON всем подключённым клиентам */
 function broadcast(payload) {
   if (!wss) return;
   const data = JSON.stringify(payload);
@@ -62,7 +55,7 @@ wss.on('connection', (ws) => {
 });
 
 // ============================================================
-// MQTT
+// MQTT — модуль подключается, клиент живёт в mqttClient
 // ============================================================
 let mqttClient = null;
 let mqttSettings = {
@@ -74,26 +67,28 @@ let mqttSettings = {
 function writeMqttConfigFile(cfg) {
   try {
     const configPath = path.join(__dirname, '..', 'mqtt-config.json');
-    const mqtt = cfg.mqtt || {};
-    const local = mqtt.local || {};
-    let mqttConfig;
+    const mqttCfg = cfg.mqtt || {};
+    const local = mqttCfg.local || {};
+
+    let out;
     if (local.host) {
       const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
       const port = local.portTcp ?? 1883;
-      mqttConfig = {
+      out = {
         brokerUrl: `mqtt://${host}:${port}`,
         username: local.username || '',
         password: local.password || ''
       };
     } else {
-      mqttConfig = {
-        brokerUrl: mqtt.brokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
-        username: mqtt.username || '',
-        password: mqtt.password || ''
+      out = {
+        brokerUrl: mqttCfg.brokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
+        username: mqttCfg.username || '',
+        password: mqttCfg.password || ''
       };
     }
-    fs.writeFileSync(configPath, JSON.stringify(mqttConfig, null, 2));
-    console.log('✅ mqtt-config.json обновлён:', mqttConfig.brokerUrl);
+
+    fs.writeFileSync(configPath, JSON.stringify(out, null, 2));
+    console.log('✅ mqtt-config.json обновлён:', out.brokerUrl);
   } catch (err) {
     console.warn('⚠️ Не удалось сохранить mqtt-config.json:', err.message);
   }
@@ -105,8 +100,9 @@ function connectMqtt(settings) {
     mqttClient = null;
   }
 
-  const mqtt = settings || {};
-  const local = mqtt.local || {};
+  // ⚠️ локальная переменная НЕ должна называться `mqtt` — иначе перекроет модуль
+  const mqttCfg = settings || {};
+  const local = mqttCfg.local || {};
 
   let brokerUrl, username, password;
   if (local.host) {
@@ -114,10 +110,10 @@ function connectMqtt(settings) {
     brokerUrl = `mqtt://${host}:${local.portTcp ?? 1883}`;
     username = local.username || '';
     password = local.password || '';
-  } else if (mqtt.brokerUrl) {
-    brokerUrl = mqtt.brokerUrl;
-    username = mqtt.username || '';
-    password = mqtt.password || '';
+  } else if (mqttCfg.brokerUrl) {
+    brokerUrl = mqttCfg.brokerUrl;
+    username = mqttCfg.username || '';
+    password = mqttCfg.password || '';
   } else {
     brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883';
     username = '';
@@ -129,7 +125,7 @@ function connectMqtt(settings) {
   if (password) options.password = password;
 
   console.log('Подключение к локальному брокеру:', brokerUrl);
-  mqttClient = mqtt.connect(brokerUrl, options);
+  mqttClient = mqtt.connect(brokerUrl, options);   // ← mqtt — это модуль
 
   mqttClient.on('connect', () => {
     console.log('✅ Подключено к MQTT брокеру:', brokerUrl);
@@ -148,7 +144,7 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    // 🔥 ТРАНСЛЯЦИЯ КАЖДОГО MQTT-СООБЩЕНИЯ В WEB-SOCKET
+    // ---------- Трансляция всего MQTT в WebSocket ----------
     broadcast({
       type: 'mqtt',
       topic,
@@ -263,28 +259,26 @@ function connectMqtt(settings) {
 
     // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
-  const postId = topic.split('/')[1];
-  const status = (payload || '').trim().toLowerCase();
-  const isOnline = (status === 'online');
+      const postId = topic.split('/')[1];
+      const status = (payload || '').trim().toLowerCase();
+      const isOnline = (status === 'online');
 
-  // 🔥 Сохраняем состояние online в postsState
-  if (!postsState[postId]) postsState[postId] = {};
-  postsState[postId].online = isOnline;
+      if (!postsState[postId]) postsState[postId] = {};
+      postsState[postId].online = isOnline;
 
-  if (!isOnline) {
-    // offline — освобождаем карту
-    const state = postsState[postId];
-    if (state && state.clientCard) {
-      console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
-      delete state.clientCard;
-      delete state.clientCardBalance;
-      delete state.clientCardType;
-      state._lastEspBalance = null;
-      state.balance = 0;
-      state.busy = false;
+      if (!isOnline) {
+        const state = postsState[postId];
+        if (state && state.clientCard) {
+          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
+          delete state.clientCard;
+          delete state.clientCardBalance;
+          delete state.clientCardType;
+          state._lastEspBalance = null;
+          state.balance = 0;
+          state.busy = false;
+        }
+      }
     }
-  }
-}
 
     // ---------- Карта клиента ----------
     if (/^posts\/[^/]+\/clientcard$/.test(topic)) {
@@ -399,7 +393,7 @@ function connectMqtt(settings) {
       } catch { /* ignore */ }
     }
 
-    // ---------- Отчёты ----------
+    // ---------- Отчёты по MQTT ----------
     if (topic === 'reports/request') {
       try {
         const { from, to, responseTopic } = JSON.parse(payload);
@@ -430,8 +424,10 @@ function reconnectMqtt(newSettings) {
 }
 
 // ============================================================
-// СХЕМЫ
+// MongoDB / схемы
 // ============================================================
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://0.0.0.0:27017/carwash';
+
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true, unique: true },
   password: { type: String, required: true },
@@ -531,7 +527,7 @@ let settings = {
 };
 
 // ============================================================
-// ХЕЛПЕРЫ
+// Хелперы
 // ============================================================
 function buildServicesPayloadForPost(postId) {
   const p = settings.posts?.[postId] || {};
@@ -662,7 +658,7 @@ async function loadSettings() {
 }
 
 // ============================================================
-// СОСТОЯНИЕ ПОСТОВ
+// Состояние постов
 // ============================================================
 let postsState = {};
 
@@ -698,6 +694,7 @@ function findService(postId, name) {
 }
 
 function publishStatus(postId) {
+  if (!mqttClient) return;
   const state = getPostState(postId);
   mqttClient.publish(`posts/${postId}/status`, JSON.stringify({
     busy: state.busy, paused: state.paused,
@@ -710,6 +707,7 @@ function publishStatus(postId) {
 }
 
 function publishRelayStatus(postId) {
+  if (!mqttClient) return;
   const state = getPostState(postId);
   mqttClient.publish(`posts/${postId}/status_relay`,
     JSON.stringify({ busy: state.busy, relayMask: state.busy ? 1 : 0 }), { qos: 0 });
@@ -877,7 +875,7 @@ async function initShift() {
 }
 
 // ============================================================
-// MIDDLEWARE
+// Middleware
 // ============================================================
 app.use(cors());
 app.use(express.json());
@@ -1124,7 +1122,7 @@ app.post('/api/publish-config', auth, adminOnly, (_req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ---------- Команды постов (с защитой от null mqttClient) ----------
+// ---------- Команды постов (защита от null mqttClient) ----------
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   if (!mqttClient) {
     console.error(`❌ /api/posts/${req.params.postId}/command: mqttClient не подключён`);
@@ -1466,7 +1464,7 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
 });
 
 // ============================================================
-// START
+// Start
 // ============================================================
 mongoose.connect(MONGO_URI)
   .then(async () => {
