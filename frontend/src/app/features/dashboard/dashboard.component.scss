@@ -14,7 +14,14 @@
 }
 
 @media (max-width: 1200px) {
-  .top-row { grid-template-columns: 1fr; }
+  .top-row { grid-template-columns: 1fr 1fr; }
+  .top-row > app-kkm-status  { grid-column: 1 / -1; }
+  .top-row > app-tank-levels { grid-column: 1 / -1; }
+}
+
+@media (max-width: 768px) {
+  .top-row { grid-template-columns: 1fr; gap: 12px; }
+  .dashboard { padding: 16px; }
 }
 
 .section-title {
@@ -25,10 +32,12 @@
 
 .posts-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
 }
 
-@media (max-width: 1400px) { .posts-grid { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 1024px) { .posts-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 640px)  { .posts-grid { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .dashboard { padding: 12px; }
+  .section-title { font-size: 16px; margin-bottom: 12px; }
+  .posts-grid { gap: 12px; }
+}

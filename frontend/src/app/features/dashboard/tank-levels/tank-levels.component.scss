@@ -1,0 +1,9 @@
+@media (max-width: 520px) {
+  .tanks {
+    height: 120px;
+    gap: 4px;
+  }
+  .tank-bar { width: 28px; height: 80px; }
+  .tank-percent { font-size: 11px; }
+  .tank-label { font-size: 10px; }
+}

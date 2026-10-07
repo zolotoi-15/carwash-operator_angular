@@ -410,4 +410,33 @@ h2 {
   .actions-cell {
     flex-direction: column;
   }
+  
+   @media (max-width: 900px) {
+    thead { display: none; }
+
+    tbody tr {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 4px;
+      padding: 12px;
+      border-bottom: 1px solid #e2e8f0;
+
+      td {
+        display: flex;
+        justify-content: space-between;
+        padding: 4px 0;
+        border-bottom: none;
+
+        &::before {
+          content: attr(data-label);
+          font-weight: 600;
+          color: #475569;
+          font-size: 11px;
+          text-transform: uppercase;
+          margin-right: 12px;
+        }
+      }
+    }
+  }
+  
 }
