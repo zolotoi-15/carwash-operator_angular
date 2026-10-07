@@ -12,7 +12,7 @@
 .top-row {
   display: grid;
   grid-template-columns: 1fr 1.2fr 1fr;
-  gap: 12px;
+  gap: 8px;               /* ← было 12px */
   margin-bottom: 20px;
   align-items: stretch;
 
@@ -34,18 +34,8 @@
     min-height: 220px;
     display: flex;
     flex-direction: column;
-    padding: 14px;
+    padding: 16px 18px;    /* ← было 14px, чуть больше воздуха по бокам */
     border-radius: 10px;
-  }
-
-  > app-kkm-status .card-title,
-  > app-tank-levels .card-title,
-  > app-shift-total .card-title {
-    margin: 0 0 10px;
-    font-size: 14px;
-    font-weight: 600;
-    color: #fff;
-    min-height: 20px;
   }
 }
 
