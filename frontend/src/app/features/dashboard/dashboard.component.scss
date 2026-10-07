@@ -1,35 +1,42 @@
+.dashboard {
+  padding: 24px;
+}
+
 .top-row {
   display: grid;
   grid-template-columns: 1fr 1.5fr 1fr;
   gap: 16px;
   margin-bottom: 24px;
-  align-items: stretch;   /* ← карточки растягиваются на одну высоту */
+  align-items: stretch;
 
   > app-kkm-status,
   > app-tank-levels,
   > app-shift-total {
-    display: flex;        /* ← чтобы дочерний .card занял всю высоту */
+    display: flex;
     min-height: 100%;
   }
 }
 
-/* Общие стили для всех карточек верхнего ряда */
-.top-row .card {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 240px;      /* единая минимальная высота */
-  padding: 16px;
-  border-radius: 10px;
-  box-sizing: border-box;
+.section-title {
+  margin: 0 0 16px;
+  color: #334155;
+  font-size: 18px;
 }
 
-.top-row .card-title {
-  margin: 0 0 12px;
-  font-size: 15px;
-  color: #fff;
-  font-weight: 600;
-  min-height: 22px;       /* заголовки одной высоты */
+/* ===== Сетка постов: адаптивная, но не слишком широкая ===== */
+.posts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+  justify-content: center;   /* центрирует ряды, если карточек мало */
+}
+
+/* Ограничиваем максимальную ширину карточки — иначе на 4K они раздуваются */
+.posts-grid > app-post-card {
+  display: block;
+  max-width: 480px;          /* ← ключевое: одна карточка не шире 480px */
+  width: 100%;
+  margin: 0 auto;
 }
 
 @media (max-width: 1200px) {
@@ -48,7 +55,21 @@
     grid-template-columns: 1fr;
     gap: 12px;
   }
-  .top-row .card {
-    min-height: auto;
+  .dashboard { padding: 16px; }
+  .posts-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
+  .posts-grid > app-post-card {
+    max-width: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard { padding: 12px; }
+  .section-title {
+    font-size: 16px;
+    margin-bottom: 12px;
+  }
+  .posts-grid { gap: 12px; }
 }

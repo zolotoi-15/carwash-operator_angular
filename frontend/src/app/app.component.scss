@@ -1,25 +1,33 @@
 .app-layout {
   display: flex;
+  flex-direction: column;   /* сайдбар горизонтальный сверху */
   min-height: 100vh;
+  width: 100%;
 }
 
 .app-main {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-width: 0; /* важно для grid/flex детей */
+  min-width: 0;
 }
 
 .app-content {
   flex: 1;
   padding: 24px;
   background: #f5f7fa;
+
+  /* Ограничиваем ширину и центрируем */
+  width: 100%;
+  max-width: 1440px;        /* ← ключевое: на широких экранах не растягивается */
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 @media (max-width: 900px) {
-  .app-layout { flex-direction: column; }
   .app-content { padding: 16px; }
 }
+
 @media (max-width: 640px) {
   .app-content { padding: 12px; }
 }
