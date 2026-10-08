@@ -542,7 +542,8 @@ let settings = {
 // ============================================================
 function buildServicesPayloadForPost(postId) {
   const p = settings.posts?.[postId] || {};
-  const services = (p.services || []).filter(svc => svc.enabled !== false); // ← только активные
+  // ★ Только активные услуги
+  const services = (p.services || []).filter(svc => svc.enabled !== false);
   const prices = p.prices || {};
   const relayMask = p.relayMask || {};
   const vfd = p.vfdFrequencies || {};
@@ -559,7 +560,7 @@ function buildServicesPayloadForPost(postId) {
     onDelay: delays[svc.name]?.onDelay ?? 100,
     offDelay: delays[svc.name]?.offDelay ?? 200,
     buttonInput: buttons[svc.name] ?? 0,
-    enabled: true,  // раз мы уже отфильтровали — все оставшиеся активны
+    enabled: true,
   }));
 }
 
@@ -712,7 +713,7 @@ async function loadSettings() {
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
-          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
+          // ★ ИСПРАВЛЕНО
           settings.posts[i].services = settings.posts[i].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
@@ -763,7 +764,7 @@ function findPostWithCard(cardNumber, excludePostId = null) {
 function findService(postId, name) {
   const p = settings.posts?.[postId];
   if (p && p.services) {
-    // ★ ИСПРАВЛЕНО: было s.enable !== false
+    // ★ ИСПРАВЛЕНО
     return p.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enabled !== false);
   }
   if (settings.services) {
@@ -934,8 +935,6 @@ function printReceipt(postId) {
       console.error(`[Post ${postId}] printReceipt: ${err.message}`);
       mqttClient.publish('kkm/print', JSON.stringify({
         postId: parseInt(postId),
-        timestamp: new Date().toISOString(),
-        operation: 'Финальный чек по сессии',
         kind: 'final',
         items,
         balance: balanceAfter,
@@ -1283,7 +1282,6 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           dimmerMask: newSettings.dimmerMask ? { ...newSettings.dimmerMask } : {},
           buttonInputs: newSettings.buttonInputs ? { ...newSettings.buttonInputs } : {},
           relayDelays: newSettings.relayDelays ? { ...newSettings.relayDelays } : {},
-          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           services: services.map(s => ({ ...s, enabled: s.enabled !== false }))
         };
       }
@@ -1298,7 +1296,6 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
         if (!settings.posts[postId]) settings.posts[postId] = {};
         settings.posts[postId] = { ...settings.posts[postId], ...postData };
         if (settings.posts[postId].services) {
-          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
