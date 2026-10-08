@@ -75,7 +75,7 @@ h2 {
   }
 }
 
-// ---------- НОВОЕ: две группы MQTT ----------
+// ---------- Группы MQTT ----------
 .mqtt-group {
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -114,6 +114,7 @@ h2 {
   }
 }
 
+// ---------- Строки услуг в блоках Цены/Частоты/Реле/Задержки/Кнопки ----------
 .service-row {
   padding: 10px 0;
   border-bottom: 1px dashed #e2e8f0;
@@ -144,6 +145,7 @@ h2 {
   }
 }
 
+// ---------- Чекбоксы реле/диммеров ----------
 .check-row {
   display: flex;
   align-items: center;
@@ -174,6 +176,7 @@ h2 {
   }
 }
 
+// ---------- Таблица услуг ----------
 .services-table {
   width: 100%;
   border-collapse: collapse;
@@ -184,6 +187,7 @@ h2 {
     text-align: left;
     font-size: 13px;
     border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
   }
 
   th {
@@ -200,8 +204,61 @@ h2 {
     border-radius: 4px;
     font-size: 13px;
   }
+
+  input[type="text"].svc-name {
+    width: 100%;
+    max-width: 260px;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  input[type="checkbox"] {
+    transform: scale(1.15);
+    cursor: pointer;
+  }
+
+  .remove-btn {
+    background: #fee2e2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    font-weight: 700;
+    line-height: 1;
+
+    &:hover { background: #fecaca; }
+  }
+
+  .empty-row {
+    text-align: center;
+    color: #94a3b8;
+    padding: 16px;
+    font-style: italic;
+  }
 }
 
+// ---------- Кнопки в блоке «Услуги» ----------
+.services-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+
+  .add-btn {
+    background: #0ea5e9;
+    &:hover { background: #0284c7; }
+  }
+
+  .save-btn {
+    background: #16a34a;
+    &:hover { background: #15803d; }
+  }
+}
+
+// ---------- Общая кнопка ----------
 button {
   padding: 8px 14px;
   border: none;
