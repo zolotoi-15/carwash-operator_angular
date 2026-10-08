@@ -13,6 +13,8 @@ const mqtt = require('mqtt');
 const WebSocket = require('ws');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
+const Receipt = require('./models/Receipt');
+const { initReceiptService, createReceipt } = require('./services/receipt.service');
 require('dotenv').config();
 
 // URL драйвера ККТ (HTTP-bridge на :5001)
@@ -54,7 +56,6 @@ wss.on('connection', async (ws) => {
 
   try { await closeExpiredShiftIfNeeded(); } catch { /* ignore */ }
 
-  // Итог смены
   try {
     const currentShift = await Shift.findOne({ shiftOpen: true });
     if (currentShift) {
@@ -71,7 +72,6 @@ wss.on('connection', async (ws) => {
     console.warn('WebSocket shift/total snapshot error:', e.message);
   }
 
-  // Статус ККМ (с опросом драйвера)
   try {
     await publishKkmStatus();
     const shift = await Shift.findOne({ shiftOpen: true }).lean();
@@ -212,42 +212,22 @@ function connectMqtt(settings) {
           if (m) receiptData.postId = parseInt(m[1], 10);
         }
 
-        // ★ Автооткрытие смены перед сохранением чека
-        await ensureOpenShift();
+        const items = Array.isArray(receiptData.items) ? receiptData.items : [];
+        const totalCost = items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
 
-        let timestamp = receiptData.timestamp;
-        if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) {
-          timestamp = new Date();
-        } else {
-          timestamp = new Date(timestamp);
-        }
-        const totalCost = receiptData.items.reduce((sum, item) => sum + (item.cost || 0), 0);
-        const roundedTotal = Math.round(totalCost * 10) / 10;
-        const roundedItems = receiptData.items.map(item => ({
-          ...item,
-          seconds: Math.round((item.seconds || 0) * 10) / 10,
-          cost: Math.round((item.cost || 0) * 10) / 10,
-          pricePerSecond: Math.round(((item.cost || 0) / (item.seconds || 1)) * 10) / 10,
-          discount: item.discount || 0
-        }));
-        const receiptNumber = await getNextReceiptNumber();
-        const newReceipt = new Receipt({
-          postId: receiptData.postId,
-          receiptNumber,
-          timestamp,
-          operation: receiptData.operation || 'sell',
-          items: roundedItems,
-          totalCost: roundedTotal,
-          balanceAfter: Math.round((receiptData.balance || 0) * 10) / 10,
-          paymentMethod: receiptData.paymentMethod || null,
-          discountTotal: receiptData.discountTotal || 0,
+        await createReceipt({
+          postId:         receiptData.postId || 0,
+          kind:           receiptData.kind || 'session',
+          operation:      receiptData.operation || 'sell',
+          items,
+          totalCost:      Math.round(totalCost * 10) / 10,
+          balanceAfter:   receiptData.balance || 0,
+          paymentMethod:  receiptData.paymentMethod || null,
+          discountTotal:  receiptData.discountTotal || 0,
           correctionInfo: receiptData.correctionInfo || null,
-          fiscalSent: false
+          timestamp:      receiptData.timestamp,
         });
-        await newReceipt.save();
-        console.log(`✅ Чек №${receiptNumber} сохранён`);
-
-        await broadcastShiftTotal();
+        console.log(`✅ Чек сохранён (postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'})`);
       } catch (err) {
         console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
       }
@@ -488,29 +468,7 @@ const userSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
-const receiptSchema = new mongoose.Schema({
-  postId: Number,
-  receiptNumber: { type: Number, default: null },
-  timestamp: { type: Date, default: Date.now },
-  operation: String,
-  items: [{
-    name: String, seconds: Number, cost: Number, pricePerSecond: Number,
-    discount: { type: Number, default: 0 }, discountPercent: { type: Number, default: 0 }
-  }],
-  totalCost: Number,
-  balanceAfter: Number,
-  paymentMethod: { type: String, default: null },
-  discountTotal: { type: Number, default: 0 },
-  fiscalSent: { type: Boolean, default: false },
-  fiscalUuid: { type: String, default: null },
-  fiscalDocumentNumber: { type: Number, default: null },
-  fiscalSign: { type: String, default: null },
-  correctionInfo: {
-    type: { type: String, enum: ['self', 'instruction'], default: null },
-    baseDate: { type: Date, default: null },
-    baseNumber: { type: String, default: null }
-  }
-});
+// ⚠️ receiptSchema удалена — используется ./models/Receipt.js
 
 const counterSchema = new mongoose.Schema({ _id: String, seq: { type: Number, default: 0 } });
 
@@ -544,11 +502,20 @@ const settingSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', userSchema);
-const Receipt = mongoose.model('Receipt', receiptSchema);
+// ⚠️ Receipt импортируется из ./models/Receipt.js
 const Counter = mongoose.model('Counter', counterSchema);
 const Shift = mongoose.model('Shift', shiftSchema);
 const FiscalRegistration = mongoose.model('FiscalRegistration', fiscalRegistrationSchema);
 const Setting = mongoose.model('Setting', settingSchema);
+
+// Инициализация receipt.service — прокидываем зависимости
+initReceiptService({
+  Counter,
+  Shift,
+  broadcastShiftTotal: (...a) => broadcastShiftTotal(...a),
+  publishKkmStatus:    (...a) => publishKkmStatus(...a),
+  ensureOpenShift:     (...a) => ensureOpenShift(...a),
+});
 
 // ---------- Настройки по умолчанию ----------
 let settings = {
@@ -629,11 +596,8 @@ async function publishKkmStatus() {
   if (!mqttClient) return;
 
   const shift = await Shift.findOne({ shiftOpen: true }).lean();
-
-  // 1. Пытаемся получить реальный статус из драйвера
   const driverData = await fetchKkmStatusFromDriver();
 
-  // 2. Если драйвер ответил — обновляем settings.kkmManual из его данных
   if (driverData) {
     let changed = false;
     if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) {
@@ -653,7 +617,6 @@ async function publishKkmStatus() {
     }
   }
 
-  // 3. Собираем payload: реальные данные драйвера, fallback на settings
   const payload = JSON.stringify({
     ready:              driverData ? !!driverData.ready       : true,
     connected:          driverData ? !!driverData.connected   : false,
@@ -963,7 +926,8 @@ function printReceipt(postId) {
   if (!items.length || totalCost < 0.01) return;
   mqttClient.publish('kkm/print', JSON.stringify({
     postId: parseInt(postId), timestamp: new Date().toISOString(),
-    operation: 'Чек по сессии', items, balance: Math.round(state.balance * 100) / 100
+    operation: 'Чек по сессии', kind: 'session',
+    items, balance: Math.round(state.balance * 100) / 100
   }), { qos: 1 });
   state.servicesUsage = {};
   state.receiptCount++;
@@ -1126,6 +1090,10 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
     console.error('publishCardBalanceToPosts error:', err.message);
   }
 };
+
+// Прокидываем createReceipt и addBalance в routes/cards.js
+app.locals.createReceipt = createReceipt;
+app.locals.addBalance = (postId, amount) => addBalance(String(postId), amount);
 
 app.use('/api/cards', cardsRouter);
 
@@ -1357,6 +1325,62 @@ app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     console.error('❌ publish error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- Пополнение поста с чеком ----------
+// POST /api/posts/:postId/topup { amount, paymentMethod }
+app.post('/api/posts/:postId/topup', auth, async (req, res) => {
+  const postId = String(req.params.postId);
+  const amount = Number(req.body?.amount);
+  const paymentMethod = req.body?.paymentMethod || null;
+
+  if (!amount || amount <= 0) {
+    return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
+  }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
+  try {
+    const n = settings.numberOfPosts || 8;
+    if (Number(postId) < 1 || Number(postId) > n) {
+      return res.status(404).json({ error: `Пост ${postId} не найден` });
+    }
+
+    // Обновляем локальное состояние (и ESP32 получит команду ниже)
+    addBalance(postId, amount);
+    const state = getPostState(postId);
+
+    const receipt = await createReceipt({
+      postId:        Number(postId),
+      kind:          'topup_post',
+      operation:     'topup',
+      items:         [{ name: 'Пополнение поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
+      totalCost:     amount,
+      balanceAfter:  state.balance,
+      paymentMethod,
+    });
+
+    if (mqttClient) {
+      mqttClient.publish(
+        `posts/${postId}/command`,
+        JSON.stringify({ command: `add_balance ${amount}` }),
+        { qos: 1 },
+      );
+    }
+
+    res.json({
+      ok: true,
+      postId: Number(postId),
+      amount,
+      balance: state.balance,
+      paymentMethod,
+      receiptNumber: receipt.receiptNumber,
+    });
+  } catch (err) {
+    console.error('Ошибка пополнения поста:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1801,6 +1825,7 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
       date:          r.timestamp,
       postId,
       paymentMethod: pm,
+      kind:          r.kind || 'session',
       total:         Math.round(totalCost * 100) / 100,
       items,
     };
@@ -1844,41 +1869,26 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
   });
 });
 
+// POST /api/receipts — через createReceipt
 app.post('/api/receipts', async (req, res) => {
   try {
-    const receiptData = req.body;
-    if (!receiptData.postId || !Array.isArray(receiptData.items) || !receiptData.items.length) {
+    const d = req.body || {};
+    if (!d.postId || !Array.isArray(d.items) || !d.items.length) {
       return res.status(400).json({ error: 'postId и items обязательны' });
     }
-    const roundedItems = receiptData.items.map(item => ({
-      name: item.name || 'Услуга',
-      seconds: Math.round((item.seconds || 0) * 10) / 10,
-      cost: Math.round((item.cost || 0) * 10) / 10,
-      pricePerSecond: Math.round((item.pricePerSecond || 0) * 10) / 10,
-      discount: item.discount || 0, discountPercent: item.discountPercent || 0
-    }));
-    const roundedTotal = Math.round(roundedItems.reduce((s, i) => s + i.cost, 0) * 10) / 10;
-    let timestamp = receiptData.timestamp;
-    if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) timestamp = new Date();
-    else timestamp = new Date(timestamp);
-
-    await ensureOpenShift();
-
-    const receiptNumber = await getNextReceiptNumber();
-    const newReceipt = await Receipt.create({
-      postId: Number(receiptData.postId), receiptNumber, timestamp,
-      operation: receiptData.operation || 'sell',
-      items: roundedItems, totalCost: roundedTotal,
-      balanceAfter: Math.round((receiptData.balance || 0) * 10) / 10,
-      paymentMethod: receiptData.paymentMethod || null,
-      discountTotal: receiptData.discountTotal || 0,
-      correctionInfo: receiptData.correctionInfo || null,
-      fiscalSent: false
+    const receipt = await createReceipt({
+      postId:        d.postId,
+      kind:          d.kind || 'session',
+      operation:     d.operation || 'sell',
+      items:         d.items,
+      totalCost:     d.totalCost,
+      balanceAfter:  d.balance,
+      paymentMethod: d.paymentMethod || null,
+      discountTotal: d.discountTotal || 0,
+      correctionInfo: d.correctionInfo || null,
+      timestamp:     d.timestamp,
     });
-
-    await broadcastShiftTotal();
-
-    res.status(201).json({ message: 'Чек сохранён', id: newReceipt._id });
+    res.status(201).json({ message: 'Чек сохранён', id: receipt._id, receiptNumber: receipt.receiptNumber });
   } catch (err) {
     console.error('Ошибка сохранения чека:', err.message);
     res.status(500).json({ error: 'Ошибка сервера' });
@@ -1909,12 +1919,10 @@ mongoose.connect(MONGO_URI)
     await loadSettings();
     await initShift();
 
-    // Автозакрытие смены — раз в минуту
     setInterval(async () => {
       try { await closeExpiredShiftIfNeeded(); } catch (e) { /* ignore */ }
     }, 60_000);
 
-    // ★ Опрос ККМ — раз в 10 секунд
     setInterval(async () => {
       try { await publishKkmStatus(); } catch (e) { /* ignore */ }
     }, 10_000);
