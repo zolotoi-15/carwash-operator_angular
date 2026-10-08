@@ -25,21 +25,14 @@
   font-weight: 600;
 }
 
-.kkm-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-
 .kkm-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  padding: 6px 0;
-  font-size: 13.5px;
-  gap: 12px;
+  padding: 5px 0;
+  font-size: 13px;
+  gap: 8px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 
   &:last-of-type { border-bottom: none; }
@@ -54,10 +47,10 @@
   color: #fff;
   font-weight: 500;
   text-align: right;
-  margin-left: auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  margin-left: auto;
 
   &.ok  { color: #4ade80; }
   &.err { color: #fca5a5; }
@@ -66,6 +59,53 @@
 .mono {
   font-family: ui-monospace, monospace;
   font-size: 12px;
+}
+
+.warn-mini {
+  color: #fde68a;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+/* ===== Кнопки управления сменой ===== */
+.shift-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.btn {
+  padding: 8px 6px;
+  font-size: 11px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #fff;
+  font-weight: 600;
+  transition: filter .15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:disabled { opacity: .4; cursor: not-allowed; }
+  &:not(:disabled):hover { filter: brightness(1.15); }
+}
+
+.btn-open { background: #16a34a; }
+.btn-x    { background: #2563eb; }
+.btn-z    { background: #dc2626; }
+
+@media (max-width: 520px) {
+  .shift-actions {
+    grid-template-columns: 1fr;
+  }
+  .btn {
+    font-size: 12px;
+    padding: 10px 6px;
+  }
 }
 
 .warning {

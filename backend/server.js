@@ -9,20 +9,22 @@ const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
-const mqtt = require('mqtt');           // ← МОДУЛЬ, нельзя перекрывать
+const mqtt = require('mqtt');
 const WebSocket = require('ws');
 const ClientCard = require('./models/ClientCard');
 const cardsRouter = require('./routes/cards');
 require('dotenv').config();
 
+// URL драйвера ККТ (HTTP-bridge на :5001)
+const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
+
 // ============================================================
-// WebSocket — общая шина для всех клиентов
+// WebSocket
 // ============================================================
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server, path: '/ws' });
 
-/** Разослать JSON всем подключённым клиентам */
 function broadcast(payload) {
   if (!wss) return;
   const data = JSON.stringify(payload);
@@ -33,8 +35,9 @@ function broadcast(payload) {
   }
 }
 
-wss.on('connection', (ws) => {
+wss.on('connection', async (ws) => {
   console.log(`🔌 WebSocket: клиент подключён (всего: ${wss.clients.size})`);
+
   try {
     ws.send(JSON.stringify({
       type: 'snapshot',
@@ -48,6 +51,56 @@ wss.on('connection', (ws) => {
   } catch (e) {
     console.warn('WebSocket snapshot error:', e.message);
   }
+
+  try { await closeExpiredShiftIfNeeded(); } catch { /* ignore */ }
+
+  // Итог смены
+  try {
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (currentShift) {
+      const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
+      const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+      ws.send(JSON.stringify({
+        type: 'mqtt',
+        topic: 'shift/total',
+        payload: JSON.stringify({ total, count: receipts.length }),
+        timestamp: Date.now(),
+      }));
+    }
+  } catch (e) {
+    console.warn('WebSocket shift/total snapshot error:', e.message);
+  }
+
+  // Статус ККМ (с опросом драйвера)
+  try {
+    await publishKkmStatus();
+    const shift = await Shift.findOne({ shiftOpen: true }).lean();
+    const driverData = await fetchKkmStatusFromDriver();
+
+    const kkmPayload = JSON.stringify({
+      ready:              driverData ? !!driverData.ready       : true,
+      connected:          driverData ? !!driverData.connected   : false,
+      paper:              driverData ? !!driverData.paper       : true,
+      kkNumber:           driverData?.kkNumber || settings.kkmManual?.kkNumber || '',
+      shiftNumber:        driverData?.shiftNumber ?? settings.kkmManual?.fiscalShiftNumber ?? 0,
+      cashier:            driverData?.cashierName || settings.kkmManual?.cashierName || 'Оператор',
+      shiftOpened:        !!shift,
+      shiftOpenedAt:      shift?.openedAt || null,
+      shiftAutoCloseAt:   shift?.autoCloseAt || null,
+      currentShiftNumber: shift?.shiftNumber || 0,
+      driverOnline:       !!driverData,
+      errors:             driverData?.errors || [],
+    });
+    ws.send(JSON.stringify({
+      type: 'mqtt',
+      topic: 'kkm/status',
+      payload: kkmPayload,
+      timestamp: Date.now(),
+    }));
+  } catch (e) {
+    console.warn('WebSocket kkm/status snapshot error:', e.message);
+  }
+
   ws.on('close', () => {
     console.log(`🔌 WebSocket: клиент отключился (всего: ${wss.clients.size})`);
   });
@@ -55,7 +108,7 @@ wss.on('connection', (ws) => {
 });
 
 // ============================================================
-// MQTT — модуль подключается, клиент живёт в mqttClient
+// MQTT
 // ============================================================
 let mqttClient = null;
 let mqttSettings = {
@@ -100,7 +153,6 @@ function connectMqtt(settings) {
     mqttClient = null;
   }
 
-  // ⚠️ локальная переменная НЕ должна называться `mqtt` — иначе перекроет модуль
   const mqttCfg = settings || {};
   const local = mqttCfg.local || {};
 
@@ -125,7 +177,7 @@ function connectMqtt(settings) {
   if (password) options.password = password;
 
   console.log('Подключение к локальному брокеру:', brokerUrl);
-  mqttClient = mqtt.connect(brokerUrl, options);   // ← mqtt — это модуль
+  mqttClient = mqtt.connect(brokerUrl, options);
 
   mqttClient.on('connect', () => {
     console.log('✅ Подключено к MQTT брокеру:', brokerUrl);
@@ -144,7 +196,6 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    // ---------- Трансляция всего MQTT в WebSocket ----------
     broadcast({
       type: 'mqtt',
       topic,
@@ -160,6 +211,10 @@ function connectMqtt(settings) {
           const m = topic.match(/^posts\/(\d+)\//);
           if (m) receiptData.postId = parseInt(m[1], 10);
         }
+
+        // ★ Автооткрытие смены перед сохранением чека
+        await ensureOpenShift();
+
         let timestamp = receiptData.timestamp;
         if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) {
           timestamp = new Date();
@@ -191,12 +246,8 @@ function connectMqtt(settings) {
         });
         await newReceipt.save();
         console.log(`✅ Чек №${receiptNumber} сохранён`);
-        const currentShift = await Shift.findOne({ shiftOpen: true });
-        if (currentShift) {
-          const shiftReceipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
-          const total = shiftReceipts.reduce((sum, r) => sum + (r.totalCost || 0), 0);
-          mqttClient.publish('shift/total', JSON.stringify({ total, count: shiftReceipts.length }), { qos: 0 });
-        }
+
+        await broadcastShiftTotal();
       } catch (err) {
         console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
       }
@@ -259,27 +310,26 @@ function connectMqtt(settings) {
 
     // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
-  const postId = topic.split('/')[1];
-  const status = (payload || '').trim().toLowerCase();
-  const isOnline = (status === 'online');
+      const postId = topic.split('/')[1];
+      const status = (payload || '').trim().toLowerCase();
+      const isOnline = (status === 'online');
 
-  // 🔥 Сохраняем online/offline в postsState — иначе snapshot не содержит это поле
-  if (!postsState[postId]) postsState[postId] = {};
-  postsState[postId].online = isOnline;
+      if (!postsState[postId]) postsState[postId] = {};
+      postsState[postId].online = isOnline;
 
-  if (!isOnline) {
-    const state = postsState[postId];
-    if (state && state.clientCard) {
-      console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
-      delete state.clientCard;
-      delete state.clientCardBalance;
-      delete state.clientCardType;
-      state._lastEspBalance = null;
-      state.balance = 0;
-      state.busy = false;
+      if (!isOnline) {
+        const state = postsState[postId];
+        if (state && state.clientCard) {
+          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
+          delete state.clientCard;
+          delete state.clientCardBalance;
+          delete state.clientCardType;
+          state._lastEspBalance = null;
+          state.balance = 0;
+          state.busy = false;
+        }
+      }
     }
-  }
-}
 
     // ---------- Карта клиента ----------
     if (/^posts\/[^/]+\/clientcard$/.test(topic)) {
@@ -399,8 +449,8 @@ function connectMqtt(settings) {
       try {
         const { from, to, responseTopic } = JSON.parse(payload);
         if (!from || !to) return;
-        const start = new Date(from); start.setHours(0, 0, 0, 0);
-        const end = new Date(to); end.setHours(23, 59, 59, 999);
+        const start = new Date(from);
+        const end = new Date(to);
         const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
         const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
         const translatedReceipts = receipts.map(r => ({
@@ -468,8 +518,10 @@ const shiftSchema = new mongoose.Schema({
   shiftNumber: { type: Number, required: true },
   shiftOpen: { type: Boolean, default: true },
   openedAt: { type: Date, default: Date.now },
+  autoCloseAt: { type: Date, default: null },
   closedAt: { type: Date, default: null },
   cashier: { type: String, default: '' },
+  autoClosed: { type: Boolean, default: false },
   fiscalShiftNumber: { type: Number, default: null },
   xReports: [{ timestamp: { type: Date, default: Date.now }, total: Number, count: Number, cashier: String }],
   zReport: {
@@ -563,6 +615,84 @@ function publishConfigToAllPosts() {
   console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
 
+// ---------- ★ ОПРОС ДРАЙВЕРА ККТ ----------
+async function fetchKkmStatusFromDriver() {
+  try {
+    const r = await axios.get(`${KKM_DRIVER_URL}/status`, { timeout: 2000 });
+    return r.data || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function publishKkmStatus() {
+  if (!mqttClient) return;
+
+  const shift = await Shift.findOne({ shiftOpen: true }).lean();
+
+  // 1. Пытаемся получить реальный статус из драйвера
+  const driverData = await fetchKkmStatusFromDriver();
+
+  // 2. Если драйвер ответил — обновляем settings.kkmManual из его данных
+  if (driverData) {
+    let changed = false;
+    if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) {
+      settings.kkmManual.kkNumber = driverData.kkNumber;
+      changed = true;
+    }
+    if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) {
+      settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber;
+      changed = true;
+    }
+    if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) {
+      settings.kkmManual.cashierName = driverData.cashierName;
+      changed = true;
+    }
+    if (changed) {
+      saveSettings(settings).catch(() => {});
+    }
+  }
+
+  // 3. Собираем payload: реальные данные драйвера, fallback на settings
+  const payload = JSON.stringify({
+    ready:              driverData ? !!driverData.ready       : true,
+    connected:          driverData ? !!driverData.connected   : false,
+    paper:              driverData ? !!driverData.paper       : true,
+    kkNumber:           driverData?.kkNumber
+                          || settings.kkmManual.kkNumber
+                          || '',
+    shiftNumber:        driverData?.shiftNumber
+                          ?? settings.kkmManual.fiscalShiftNumber
+                          ?? 0,
+    cashier:            driverData?.cashierName
+                          || settings.kkmManual.cashierName
+                          || 'Оператор',
+    shiftOpened:        !!shift,
+    shiftOpenedAt:      shift?.openedAt || null,
+    shiftAutoCloseAt:   shift?.autoCloseAt || null,
+    currentShiftNumber: shift?.shiftNumber || 0,
+    errors:             driverData?.errors || [],
+    driverOnline:       !!driverData,
+  });
+
+  mqttClient.publish('kkm/status', payload, { qos: 0, retain: true });
+  broadcast({ type: 'mqtt', topic: 'kkm/status', payload, timestamp: Date.now() });
+}
+
+async function broadcastShiftTotal() {
+  const currentShift = await Shift.findOne({ shiftOpen: true });
+  if (!currentShift) {
+    const payload = JSON.stringify({ total: 0, count: 0 });
+    broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
+    return;
+  }
+  const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
+  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+  const payload = JSON.stringify({ total, count: receipts.length });
+  if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
+  broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
+}
+
 async function saveSettings(newSettings) {
   try {
     await Setting.findOneAndUpdate({ key: 'main' }, { $set: { value: newSettings } }, { upsert: true });
@@ -653,6 +783,7 @@ async function loadSettings() {
     }
     writeMqttConfigFile(settings);
     publishConfigToAllPosts();
+    await publishKkmStatus();
   } catch (err) {
     console.warn('Не удалось загрузить настройки из БД:', err.message);
   }
@@ -865,13 +996,94 @@ async function getNextShiftNumber() {
   return c.seq;
 }
 
+// ============================================================
+// Смена: авто-открытие / авто-закрытие
+// ============================================================
+function getShiftAutoCloseAt(openedAt) {
+  const dt = new Date(openedAt);
+  dt.setHours(dt.getHours() + 24);
+  return dt;
+}
+
+async function closeExpiredShiftIfNeeded() {
+  const shift = await Shift.findOne({ shiftOpen: true });
+  if (!shift) return null;
+
+  const autoCloseAt = shift.autoCloseAt || getShiftAutoCloseAt(shift.openedAt);
+  if (new Date() < autoCloseAt) return shift;
+
+  const closedAt = new Date();
+  shift.shiftOpen = false;
+  shift.closedAt = closedAt;
+  shift.autoClosed = true;
+
+  const receipts = await Receipt.find({
+    timestamp: { $gte: shift.openedAt, $lte: closedAt }
+  });
+  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+  shift.zReport = {
+    total,
+    count: receipts.length,
+    generatedAt: closedAt,
+    cashier: 'system (auto)'
+  };
+  await shift.save();
+  console.log(`♻️ Смена №${shift.shiftNumber} автозакрыта (прошло 24 часа)`);
+
+  const nextNumber = await getNextShiftNumber();
+  const openedAt = new Date();
+  const newShift = await Shift.create({
+    shiftNumber: nextNumber,
+    shiftOpen: true,
+    openedAt,
+    autoCloseAt: getShiftAutoCloseAt(openedAt),
+    cashier: 'system (auto)',
+  });
+  console.log(`♻️ Открыта новая смена №${nextNumber}`);
+
+  await publishKkmStatus();
+  await broadcastShiftTotal();
+  return newShift;
+}
+
+async function ensureOpenShift() {
+  await closeExpiredShiftIfNeeded();
+
+  let shift = await Shift.findOne({ shiftOpen: true });
+  if (shift) return shift;
+
+  const nextNumber = await getNextShiftNumber();
+  const openedAt = new Date();
+  shift = await Shift.create({
+    shiftNumber: nextNumber,
+    shiftOpen: true,
+    openedAt,
+    autoCloseAt: getShiftAutoCloseAt(openedAt),
+    cashier: 'system (auto)',
+  });
+  console.log(`♻️ Смена №${nextNumber} автоматически открыта перед печатью чека`);
+
+  await publishKkmStatus();
+  return shift;
+}
+
 async function initShift() {
   await Shift.deleteMany({ shiftNumber: { $exists: false } });
   let currentShift = await Shift.findOne({ shiftOpen: true });
   if (!currentShift) {
     const nextNumber = await getNextShiftNumber();
-    await new Shift({ shiftNumber: nextNumber, shiftOpen: true, cashier: 'system' }).save();
+    const openedAt = new Date();
+    await new Shift({
+      shiftNumber: nextNumber,
+      shiftOpen: true,
+      openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt),
+      cashier: 'system',
+    }).save();
     console.log(`✅ Смена №${nextNumber} создана`);
+  } else if (!currentShift.autoCloseAt) {
+    currentShift.autoCloseAt = getShiftAutoCloseAt(currentShift.openedAt);
+    await currentShift.save();
   }
 }
 
@@ -881,7 +1093,6 @@ async function initShift() {
 app.use(cors());
 app.use(express.json());
 
-// ---------- Хук: баланс карты во все посты ----------
 app.locals.publishCardBalanceToPosts = async function (cardNumber) {
   if (!mqttClient || !cardNumber) return;
   try {
@@ -920,13 +1131,18 @@ app.use('/api/cards', cardsRouter);
 
 // ---------- Auth ----------
 function auth(req, res, next) {
-  const token = req.headers.authorization?.split(' ')[1];
+  const header = req.headers.authorization?.split(' ')[1];
+  const query  = typeof req.query.token === 'string' ? req.query.token : null;
+  const token  = header || query;
   if (!token) return res.status(401).json({ error: 'No token' });
   try {
     req.user = jwt.verify(token, process.env.JWT_SECRET || 'secretkey');
     next();
-  } catch { res.status(401).json({ error: 'Invalid token' }); }
+  } catch {
+    res.status(401).json({ error: 'Invalid token' });
+  }
 }
+
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin' && req.user.role !== 'developer') {
     return res.status(403).json({ error: 'Admin required' });
@@ -1123,7 +1339,7 @@ app.post('/api/publish-config', auth, adminOnly, (_req, res) => {
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ---------- Команды постов (защита от null mqttClient) ----------
+// ---------- Команды постов ----------
 app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   if (!mqttClient) {
     console.error(`❌ /api/posts/${req.params.postId}/command: mqttClient не подключён`);
@@ -1184,16 +1400,21 @@ app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   }
 });
 
-// ---------- KKM ----------
+// ============================================================
+// KKM
+// ============================================================
 app.get('/api/kkm/status', auth, adminOnly, async (_req, res) => {
-  try { res.json((await axios.get('http://0.0.0.0:5001/api/kkm/status', { timeout: 2000 })).data); }
-  catch {
+  try {
+    const r = await axios.get(`${KKM_DRIVER_URL}/status`, { timeout: 2000 });
+    res.json(r.data);
+  } catch {
     res.json({
       ready: true, connected: false, paper: true,
       kkNumber: settings.kkmManual.kkNumber || null,
       shiftNumber: settings.kkmManual.fiscalShiftNumber || null,
       cashierName: settings.kkmManual.cashierName || null,
-      errors: ['Драйвер ККМ не отвечает, используются ручные настройки']
+      errors: ['Драйвер ККМ не отвечает, используются ручные настройки'],
+      driverOnline: false,
     });
   }
 });
@@ -1205,13 +1426,22 @@ app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
   if (cashierName !== undefined) settings.kkmManual.cashierName = cashierName;
   await saveSettings(settings);
   if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
+  await publishKkmStatus();
   res.json(settings.kkmManual);
 });
 
 app.get('/api/kkm/current-shift', auth, adminOnly, async (_req, res) => {
+  await closeExpiredShiftIfNeeded();
   const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
   if (!shift) return res.json({ exists: false });
-  res.json({ shiftNumber: shift.shiftNumber, cashier: shift.cashier, openedAt: shift.openedAt, fiscalShiftNumber: shift.fiscalShiftNumber });
+  res.json({
+    shiftNumber:       shift.shiftNumber,
+    cashier:           shift.cashier,
+    openedAt:          shift.openedAt,
+    autoCloseAt:       shift.autoCloseAt,
+    fiscalShiftNumber: shift.fiscalShiftNumber,
+    exists: true,
+  });
 });
 
 app.get('/api/kkm/shift-status', auth, adminOnly, async (_req, res) => {
@@ -1220,26 +1450,68 @@ app.get('/api/kkm/shift-status', auth, adminOnly, async (_req, res) => {
 });
 
 app.post('/api/kkm/open-shift', auth, adminOnly, async (req, res) => {
-  if (await Shift.findOne({ shiftOpen: true })) return res.status(400).json({ error: 'Уже есть открытая смена' });
+  await closeExpiredShiftIfNeeded();
+  if (await Shift.findOne({ shiftOpen: true })) {
+    return res.status(400).json({ error: 'Уже есть открытая смена' });
+  }
   const nextNumber = await getNextShiftNumber();
-  const newShift = await Shift.create({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
-  res.json({ shiftNumber: nextNumber, cashier: req.user.username, openedAt: newShift.openedAt });
+  const openedAt = new Date();
+  const newShift = await Shift.create({
+    shiftNumber: nextNumber,
+    shiftOpen: true,
+    openedAt,
+    autoCloseAt: getShiftAutoCloseAt(openedAt),
+    cashier: req.user.username,
+  });
+  await publishKkmStatus();
+  await broadcastShiftTotal();
+  res.json({
+    shiftNumber: newShift.shiftNumber,
+    cashier:     newShift.cashier,
+    openedAt:    newShift.openedAt,
+    autoCloseAt: newShift.autoCloseAt,
+  });
 });
 
 app.post('/api/kkm/close-shift', auth, adminOnly, async (_req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   if (!shift) return res.status(400).json({ error: 'Нет открытой смены' });
-  shift.shiftOpen = false; shift.closedAt = new Date();
+
+  const closedAt = new Date();
+  shift.shiftOpen = false;
+  shift.closedAt = closedAt;
+  shift.autoClosed = false;
+
+  const receipts = await Receipt.find({
+    timestamp: { $gte: shift.openedAt, $lte: closedAt }
+  });
+  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+  shift.zReport = {
+    total,
+    count: receipts.length,
+    generatedAt: closedAt,
+    cashier: req.user.username,
+  };
   await shift.save();
-  res.json({ message: 'Смена закрыта' });
+
+  await publishKkmStatus();
+  await broadcastShiftTotal();
+  res.json({ message: 'Смена закрыта', total, count: receipts.length });
 });
 
 app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
+
   const receipts = await Receipt.find({ timestamp: { $gte: shift.openedAt } });
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-  shift.xReports.push({ timestamp: new Date(), total, count: receipts.length, cashier: req.user.username });
+
+  shift.xReports.push({
+    timestamp: new Date(),
+    total,
+    count: receipts.length,
+    cashier: req.user.username,
+  });
   await shift.save();
   res.json({ message: 'X-отчёт', total, count: receipts.length });
 });
@@ -1247,14 +1519,41 @@ app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
 app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
   const currentShift = await Shift.findOne({ shiftOpen: true });
   if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
-  const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt, $lte: new Date() } });
+
+  const closedAt = new Date();
+  const receipts = await Receipt.find({
+    timestamp: { $gte: currentShift.openedAt, $lte: closedAt }
+  });
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-  currentShift.zReport = { total, count: receipts.length, generatedAt: new Date(), cashier: req.user.username };
-  currentShift.shiftOpen = false; currentShift.closedAt = new Date();
+
+  currentShift.zReport = {
+    total,
+    count: receipts.length,
+    generatedAt: closedAt,
+    cashier: req.user.username,
+  };
+  currentShift.shiftOpen = false;
+  currentShift.closedAt = closedAt;
   await currentShift.save();
+
   const nextNumber = await getNextShiftNumber();
-  await Shift.create({ shiftNumber: nextNumber, shiftOpen: true, cashier: req.user.username });
-  res.json({ message: 'Z-отчёт', total, count: receipts.length });
+  const openedAt = new Date();
+  const newShift = await Shift.create({
+    shiftNumber: nextNumber,
+    shiftOpen: true,
+    openedAt,
+    autoCloseAt: getShiftAutoCloseAt(openedAt),
+    cashier: req.user.username,
+  });
+
+  await publishKkmStatus();
+  await broadcastShiftTotal();
+
+  res.json({
+    message: 'Z-отчёт сформирован, смена закрыта',
+    closed: { total, count: receipts.length },
+    newShift: { shiftNumber: newShift.shiftNumber, openedAt: newShift.openedAt },
+  });
 });
 
 app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.kkm));
@@ -1283,7 +1582,9 @@ app.post('/api/kkm/fiscal/close-shift', auth, adminOnly, (_req, res) => res.json
 app.get('/api/kkm/fiscal/x-report', auth, adminOnly, (_req, res) => res.json({ total: 0, count: 0 }));
 app.post('/api/kkm/fiscal/z-report', auth, adminOnly, (_req, res) => res.json({ ok: true }));
 
-// ---------- Reports ----------
+// ============================================================
+// Reports
+// ============================================================
 async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 30, size: 'A4' });
@@ -1357,21 +1658,28 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
 app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
-  const start = new Date(from); start.setHours(0, 0, 0, 0);
-  const end = new Date(to); end.setHours(23, 59, 59, 999);
+
+  const start = new Date(from);
+  const end   = new Date(to);
+  if (isNaN(start) || isNaN(end)) {
+    return res.status(400).json({ error: 'Некорректные from/to' });
+  }
+
   let receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   receipts = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+
   const pdfData = await generatePDFReport(receipts, totalSum, from, to);
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition', `attachment; filename=report_${from}_${to}.pdf`);
+  res.setHeader('Content-Disposition',
+    `attachment; filename=report_${String(from).slice(0,10)}_${String(to).slice(0,10)}.pdf`);
   res.send(pdfData);
 });
 
 app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
   const date = new Date(req.params.date);
-  const start = new Date(date.setHours(0, 0, 0, 0));
-  const end = new Date(date.setHours(23, 59, 59, 999));
+  const start = new Date(date); start.setHours(0, 0, 0, 0);
+  const end   = new Date(date); end.setHours(23, 59, 59, 999);
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
@@ -1394,9 +1702,10 @@ app.get('/api/reports/month', auth, adminOnly, async (_req, res) => {
 });
 
 app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
-  const today = new Date();
-  const start = new Date(today.setHours(8, 0, 0, 0));
-  const end = new Date(today.setHours(20, 0, 0, 0));
+  const currentShift = await Shift.findOne({ shiftOpen: true });
+  if (!currentShift) return res.json({ totalSum: 0, count: 0, receipts: [] });
+  const start = new Date(currentShift.openedAt);
+  const end = new Date();
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
@@ -1405,13 +1714,134 @@ app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
 app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
-  const start = new Date(from); start.setHours(0, 0, 0, 0);
-  const end = new Date(to); end.setHours(23, 59, 59, 999);
+
+  const start = new Date(from);
+  const end   = new Date(to);
+  if (isNaN(start) || isNaN(end)) {
+    return res.status(400).json({ error: 'Некорректные from/to' });
+  }
+
   const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  const summary = { totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated };
+  const summary = {
+    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
+    count: translated.length,
+    receipts: translated,
+  };
   if (mqttClient) mqttClient.publish('reports/output', JSON.stringify(summary), { qos: 0 });
   res.json(summary);
+});
+
+app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
+  const { from, to } = req.query;
+  if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
+
+  const start = new Date(from);
+  const end   = new Date(to);
+  if (isNaN(start) || isNaN(end)) {
+    return res.status(400).json({ error: 'Некорректные from/to' });
+  }
+
+  const receipts = await Receipt.find({
+    timestamp: { $gte: start, $lte: end }
+  }).sort({ timestamp: 1 }).lean();
+
+  const PAY_LABELS = {
+    cash:          'Наличные',
+    card_terminal: 'Карта',
+    client_card:   'Карта клиента',
+  };
+
+  const days = {};
+  let grandTotal = 0;
+  let grandCount = 0;
+
+  for (const r of receipts) {
+    const dt = new Date(r.timestamp);
+    const dayKey =
+      `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+
+    const pm = PAY_LABELS[r.paymentMethod] || 'Прочее';
+    const postId = r.postId;
+    const totalCost = Number(r.totalCost) || 0;
+
+    if (!days[dayKey]) {
+      days[dayKey] = { date: dayKey, posts: {}, total: 0, count: 0 };
+    }
+    const d = days[dayKey];
+
+    if (!d.posts[postId]) {
+      d.posts[postId] = { postId, paymentMethods: {}, total: 0, count: 0 };
+    }
+    const p = d.posts[postId];
+
+    if (!p.paymentMethods[pm]) {
+      p.paymentMethods[pm] = { paymentMethod: pm, receipts: [], total: 0, count: 0 };
+    }
+    const pmGroup = p.paymentMethods[pm];
+
+    const items = (r.items || []).map(it => {
+      const cost  = Number(it.cost)    || 0;
+      const secs  = Number(it.seconds) || 0;
+      const price = Number(it.pricePerSecond)
+                    || (secs > 0 ? Math.round((cost / secs) * 10000) / 10000 : 0);
+
+      return {
+        name:           programNamesRu[it.name] || it.name || '—',
+        pricePerSecond: price,
+        quantity:       Math.round(secs * 10) / 10,
+        unit:           'секунда',
+        timeWorkedSec:  Math.round(secs * 10) / 10,
+        sum:            Math.round(cost * 100) / 100,
+      };
+    });
+
+    const receipt = {
+      receiptNumber: r.receiptNumber,
+      date:          r.timestamp,
+      postId,
+      paymentMethod: pm,
+      total:         Math.round(totalCost * 100) / 100,
+      items,
+    };
+
+    pmGroup.receipts.push(receipt);
+    pmGroup.total += totalCost;
+    pmGroup.count += 1;
+
+    p.total += totalCost;
+    p.count += 1;
+
+    d.total += totalCost;
+    d.count += 1;
+
+    grandTotal += totalCost;
+    grandCount += 1;
+  }
+
+  const resultDays = Object.values(days).map(d => ({
+    date:  d.date,
+    total: Math.round(d.total * 100) / 100,
+    count: d.count,
+    posts: Object.values(d.posts).map(p => ({
+      postId: p.postId,
+      total:  Math.round(p.total * 100) / 100,
+      count:  p.count,
+      paymentMethods: Object.values(p.paymentMethods).map(pm => ({
+        paymentMethod: pm.paymentMethod,
+        total: Math.round(pm.total * 100) / 100,
+        count: pm.count,
+        receipts: pm.receipts,
+      })),
+    })),
+  }));
+
+  res.json({
+    from, to,
+    grandTotal: Math.round(grandTotal * 100) / 100,
+    grandCount,
+    days: resultDays,
+  });
 });
 
 app.post('/api/receipts', async (req, res) => {
@@ -1431,6 +1861,9 @@ app.post('/api/receipts', async (req, res) => {
     let timestamp = receiptData.timestamp;
     if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) timestamp = new Date();
     else timestamp = new Date(timestamp);
+
+    await ensureOpenShift();
+
     const receiptNumber = await getNextReceiptNumber();
     const newReceipt = await Receipt.create({
       postId: Number(receiptData.postId), receiptNumber, timestamp,
@@ -1442,6 +1875,9 @@ app.post('/api/receipts', async (req, res) => {
       correctionInfo: receiptData.correctionInfo || null,
       fiscalSent: false
     });
+
+    await broadcastShiftTotal();
+
     res.status(201).json({ message: 'Чек сохранён', id: newReceipt._id });
   } catch (err) {
     console.error('Ошибка сохранения чека:', err.message);
@@ -1472,6 +1908,17 @@ mongoose.connect(MONGO_URI)
     console.log('MongoDB connected');
     await loadSettings();
     await initShift();
+
+    // Автозакрытие смены — раз в минуту
+    setInterval(async () => {
+      try { await closeExpiredShiftIfNeeded(); } catch (e) { /* ignore */ }
+    }, 60_000);
+
+    // ★ Опрос ККМ — раз в 10 секунд
+    setInterval(async () => {
+      try { await publishKkmStatus(); } catch (e) { /* ignore */ }
+    }, 10_000);
+
     server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
       console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);

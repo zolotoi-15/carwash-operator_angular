@@ -1,11 +1,15 @@
-import { Component, OnInit, OnDestroy, inject } from '@angular/core';
+// frontend/src/app/features/reports/report-list/report-list.component.ts
+import { Component, OnInit, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { Subscription } from 'rxjs';
-import { ReceiptService } from '../../../core/services/receipt.service';
-import { ShiftService } from '../../../core/services/shift.service';
-import { ReceiptData } from '../../../core/models/receipt.model';
-import { CashShift } from '../../../core/models/shift.model';
+import { HttpClient } from '@angular/common/http';
+import {
+  ReceiptService,
+  GroupedReport,
+  GroupedDay,
+  GroupedPost,
+  GroupedPaymentMethod,
+} from '../../../core/services/receipt.service';
 
 type Period = 'day' | 'week' | 'month' | 'shift' | 'custom';
 
@@ -13,180 +17,191 @@ type Period = 'day' | 'week' | 'month' | 'shift' | 'custom';
   selector: 'app-report-list',
   standalone: true,
   imports: [CommonModule, FormsModule],
-  template: `
-    <div class="reports-page">
-      <h2>📊 Отчёты по кассовым чекам</h2>
-    
-      <div class="filters">
-        <button [class.active]="period === 'day'"    (click)="setPeriod('day')">День</button>
-        <button [class.active]="period === 'week'"   (click)="setPeriod('week')">Неделя</button>
-        <button [class.active]="period === 'month'"  (click)="setPeriod('month')">Месяц</button>
-        <button [class.active]="period === 'shift'"  (click)="setPeriod('shift')">Смена (8–20)</button>
-    
-        <span class="range-label">Диапазон:</span>
-        <input type="date" [(ngModel)]="dateFrom" (change)="onCustomRangeChange()" />
-        <input type="date" [(ngModel)]="dateTo"   (change)="onCustomRangeChange()" />
-    
-        <button class="pdf-btn" (click)="downloadPdf()">📄 Скачать PDF</button>
-      </div>
-    
-      <p class="summary">
-        Итого: <strong>{{ total | number:'1.2-2' }}</strong> руб.,
-        чеков: <strong>{{ receipts.length }}</strong>
-      </p>
-    
-      <table class="receipts-table">
-        <thead>
-          <tr>
-            <th>№</th>
-            <th>№ чека</th>
-            <th>Пост</th>
-            <th>Дата</th>
-            <th>Сумма</th>
-            <th>Услуги</th>
-          </tr>
-        </thead>
-        <tbody>
-          @for (r of receipts; track r; let i = $index) {
-            <tr>
-              <td>{{ i + 1 }}</td>
-              <td>{{ r.receiptNumber }}</td>
-              <td>{{ r.postId }}</td>
-              <td>{{ r.date | date:'dd.MM.yy HH:mm' }}</td>
-              <td class="amount">{{ r.total | number:'1.2-2' }} ₽</td>
-              <td class="services">
-                @for (svc of r.services; track svc; let last = $last) {
-                  <span>
-                    {{ svc.name }} (цена сек: {{ svc.pricePerSecond }}коп,
-                    время: {{ svc.seconds }}с,
-                    сумма: {{ svc.total | number:'1.2-2' }})@if (!last) {
-                    <span>, </span>
-                  }
-                </span>
-              }
-            </td>
-          </tr>
-        }
-        @if (!receipts.length) {
-          <tr>
-            <td colspan="6" class="empty">Нет чеков за выбранный период</td>
-          </tr>
-        }
-      </tbody>
-    </table>
-    </div>
-    `,
-  styles: [`
-    .reports-page { padding: 24px; }
-    .filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-    .filters button { padding: 6px 12px; cursor: pointer; border: 1px solid #cbd5e1; background: #fff; border-radius: 4px; }
-    .filters button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
-    .range-label { margin-left: 12px; color: #64748b; font-size: 13px; }
-    .filters input[type=date] { padding: 6px 8px; border: 1px solid #cbd5e1; border-radius: 4px; }
-    .pdf-btn { margin-left: auto; }
-    .summary { margin: 16px 0; font-size: 15px; }
-    .receipts-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-    .receipts-table th, .receipts-table td { padding: 10px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
-    .receipts-table th { background: #f8fafc; font-weight: 600; }
-    .amount { font-weight: 500; white-space: nowrap; }
-    .services { font-size: 12px; color: #475569; max-width: 480px; }
-    .empty { text-align: center; color: #94a3b8; padding: 24px; }
-  `]
+  templateUrl: './report-list.component.html',
+  styleUrls: ['./report-list.component.scss'],
 })
-export class ReportListComponent implements OnInit, OnDestroy {
+export class ReportListComponent implements OnInit {
   private receiptService = inject(ReceiptService);
-  private shiftService = inject(ShiftService);
+  private http = inject(HttpClient);
 
-  receipts: ReceiptData[] = [];
-  total = 0;
-  currentShift: CashShift | null = null;
+  report: GroupedReport | null = null;
+  loading = false;
+  errorMsg = '';
 
   period: Period = 'day';
   dateFrom = '';
   dateTo = '';
 
-  private subs = new Subscription();
+  private currentShiftOpenedAt: string | null = null;
 
   ngOnInit(): void {
-    this.setPeriod('day');
-
-    this.subs.add(
-      this.shiftService.currentShift$.subscribe(s => {
-        this.currentShift = s;
-      })
-    );
+    this.http.get<any>('/api/kkm/current-shift').subscribe({
+      next: (s) => {
+        if (s && s.exists !== false && s.openedAt) {
+          this.currentShiftOpenedAt = s.openedAt;
+        }
+        this.setPeriod('day');
+      },
+      error: () => this.setPeriod('day'),
+    });
   }
 
-  ngOnDestroy(): void {
-    this.subs.unsubscribe();
-  }
-
-  // ================= PERIOD =================
-
+  // ============================================================
+  // Периоды
+  // ============================================================
   setPeriod(p: Period): void {
     this.period = p;
 
     const now = new Date();
-    const start = new Date(now);
-    const end = new Date(now);
-    end.setHours(23, 59, 59, 999);
+    let start: Date;
+    let end: Date;
 
-    switch (p) {
-      case 'day':
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'week':
-        start.setDate(now.getDate() - 6);
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'month':
-        start.setDate(1);
-        start.setHours(0, 0, 0, 0);
-        break;
-      case 'shift':
-        start.setHours(8, 0, 0, 0);
-        end.setHours(20, 0, 0, 0);
-        break;
-      case 'custom':
-        // диапазон выбран вручную — используем dateFrom/dateTo
-        this.loadReport();
+    if (p === 'shift') {
+      if (!this.currentShiftOpenedAt) {
+        this.errorMsg = 'Смена не открыта';
+        this.report = null;
         return;
+      }
+      // Точно от openedAt до сейчас, БЕЗ обрезки до 00:00
+      start = new Date(this.currentShiftOpenedAt);
+      end   = new Date();
+    } else {
+      start = new Date(now);
+      end   = new Date(now);
+      end.setHours(23, 59, 59, 999);
+
+      switch (p) {
+        case 'day':
+          start.setHours(0, 0, 0, 0);
+          break;
+        case 'week':
+          start.setDate(now.getDate() - 6);
+          start.setHours(0, 0, 0, 0);
+          break;
+        case 'month':
+          start.setDate(1);
+          start.setHours(0, 0, 0, 0);
+          break;
+        case 'custom':
+          this.load();
+          return;
+      }
     }
 
     this.dateFrom = this.toInputDate(start);
     this.dateTo = this.toInputDate(end);
-    this.loadReport();
+    this.load(start, end);
   }
 
   onCustomRangeChange(): void {
     this.period = 'custom';
-    this.loadReport();
+    this.load();
   }
 
-  // ================= DATA =================
-
-  private loadReport(): void {
-    const start = this.dateFrom ? new Date(this.dateFrom) : new Date(0);
-    const end = this.dateTo ? new Date(this.dateTo) : new Date();
-    end.setHours(23, 59, 59, 999);
-
-    const list = this.receiptService.getReceiptsForPeriod(start, end);
-    this.receipts = list;
-    this.total = list.reduce((sum, r) => sum + (r.total ?? 0), 0);
+  // ============================================================
+  // Хелперы rowspan
+  // ============================================================
+  countDayRows(day: GroupedDay): number {
+    let n = 0;
+    for (const post of day.posts) {
+      n += this.countPostRows(post) + 1;
+    }
+    return n + 1;
   }
 
-  downloadPdf(): void {
-    // TODO: подключить сервис генерации PDF
-    console.log('Скачивание PDF:', {
-      period: this.period,
-      from: this.dateFrom,
-      to: this.dateTo,
-      receipts: this.receipts.length,
-      total: this.total
+  countPostRows(post: GroupedPost): number {
+    let n = 0;
+    for (const pm of post.paymentMethods) {
+      n += this.countPmRows(pm) + 1;
+    }
+    return n + 1;
+  }
+
+  countPmRows(pm: GroupedPaymentMethod): number {
+    let n = 0;
+    for (const rcp of pm.receipts) {
+      n += rcp.items.length + 1;
+    }
+    return n + 1;
+  }
+
+  formatTime(totalSec: number): string {
+    const s = Math.round(totalSec || 0);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+  }
+
+  // ============================================================
+  // Загрузка / PDF
+  // ============================================================
+  private load(startInput?: Date, endInput?: Date): void {
+    let start: Date;
+    let end: Date;
+
+    if (startInput && endInput) {
+      // Явный диапазон (day/week/month/shift) — НЕ трогаем часы
+      start = new Date(startInput);
+      end   = new Date(endInput);
+    } else {
+      // Ручной диапазон — обрезаем по дню
+      start = this.dateFrom ? new Date(this.dateFrom) : new Date(0);
+      start.setHours(0, 0, 0, 0);
+      end = this.dateTo ? new Date(this.dateTo) : new Date();
+      end.setHours(23, 59, 59, 999);
+    }
+
+    this.loading = true;
+    this.errorMsg = '';
+
+    this.receiptService.loadGrouped(start, end).subscribe({
+      next: (r) => {
+        this.report = r;
+        this.loading = false;
+      },
+      error: (err) => {
+        console.error('[reports] grouped load failed:', err);
+        this.report = null;
+        this.errorMsg = 'Не удалось загрузить отчёт';
+        this.loading = false;
+      },
     });
   }
 
-  // ================= HELPERS =================
+  downloadPdf(): void {
+    if (!this.dateFrom || !this.dateTo) return;
+
+    let start: Date;
+    let end: Date;
+
+    if (this.period === 'shift' && this.currentShiftOpenedAt) {
+      start = new Date(this.currentShiftOpenedAt);
+      end   = new Date();
+    } else {
+      start = new Date(this.dateFrom);
+      start.setHours(0, 0, 0, 0);
+      end = new Date(this.dateTo);
+      end.setHours(23, 59, 59, 999);
+    }
+
+    this.receiptService.downloadPdf(start, end).subscribe({
+      next: (blob) => {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `report_${this.dateFrom}_${this.dateTo}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      },
+      error: (err) => {
+        console.error('[reports] pdf download failed:', err);
+        this.errorMsg = 'Не удалось скачать PDF';
+      },
+    });
+  }
 
   private toInputDate(d: Date): string {
     const y = d.getFullYear();

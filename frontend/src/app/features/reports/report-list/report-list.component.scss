@@ -1,0 +1,221 @@
+/* ============================================================
+   Общее
+   ============================================================ */
+.reports-page {
+  padding: 24px;
+}
+
+.filters {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+
+  button {
+    padding: 6px 12px;
+    cursor: pointer;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    border-radius: 4px;
+
+    &.active {
+      background: #2563eb;
+      color: #fff;
+      border-color: #2563eb;
+    }
+  }
+
+  input[type=date] {
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+  }
+}
+
+.range-label {
+  margin-left: 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.pdf-btn {
+  margin-left: auto;
+}
+
+.summary {
+  margin: 16px 0;
+  font-size: 15px;
+}
+
+.error {
+  color: #dc2626;
+  font-size: 13px;
+  margin: 4px 0 12px;
+}
+
+.empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 24px;
+}
+
+/* ============================================================
+   Обёртка таблицы
+   ============================================================ */
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.grouped-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th,
+  td {
+    border: 1px solid #cbd5e1;
+    padding: 6px 8px;
+    vertical-align: top;
+  }
+
+  thead th {
+    background: #e0e7ff;
+    font-weight: 600;
+    text-align: left;
+    white-space: nowrap;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+}
+
+/* ============================================================
+   Группировочные ячейки (rowspan)
+   ============================================================ */
+.cell-day {
+  background: #e9d5ff;
+  font-weight: 600;
+  text-align: center;
+  vertical-align: middle !important;
+  white-space: nowrap;
+  color: #4c1d95;
+}
+
+.cell-post {
+  background: #ddd6fe;
+  font-weight: 600;
+  text-align: center;
+  vertical-align: middle !important;
+  white-space: nowrap;
+  color: #4c1d95;
+}
+
+.cell-pay {
+  background: #c7d2fe;
+  font-weight: 600;
+  text-align: center;
+  vertical-align: middle !important;
+  white-space: nowrap;
+}
+
+.cell-rcp {
+  background: #eef2ff;
+  font-weight: 600;
+  text-align: center;
+  vertical-align: middle !important;
+  white-space: nowrap;
+}
+
+/* ============================================================
+   Ячейки данных позиции
+   ============================================================ */
+.cell-name {
+  text-align: left;
+}
+
+.cell-price {
+  text-align: right;
+  width: 90px;
+  font-family: ui-monospace, monospace;
+  color: #334155;
+  font-size: 12px;
+}
+
+.cell-qty {
+  text-align: right;
+  width: 70px;
+}
+
+.cell-sum {
+  text-align: right;
+  width: 90px;
+  font-weight: 500;
+}
+
+.cell-unit {
+  text-align: left;
+  width: 70px;
+  color: #64748b;
+}
+
+.cell-time {
+  text-align: right;
+  width: 100px;
+  font-family: ui-monospace, monospace;
+}
+
+.cell-right {
+  text-align: right;
+  font-weight: 600;
+}
+
+/* ============================================================
+   Строки итогов
+   ============================================================ */
+.row-receipt-total td {
+  background: #f8fafc;
+  font-weight: 600;
+  color: #475569;
+  font-size: 12px;
+}
+
+.row-pm-total td {
+  background: #dbeafe;
+  font-weight: 600;
+}
+
+.row-post-total td {
+  background: #c7d2fe;
+  font-weight: 700;
+}
+
+.row-day-total td {
+  background: #a78bfa;
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.row-grand-total td {
+  background: #1e293b;
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+/* ============================================================
+   Пустые строки-разделители
+   ============================================================ */
+.row-spacer td {
+  background: #f5f7fa;
+  border-left: none;
+  border-right: none;
+  height: 12px;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+}
