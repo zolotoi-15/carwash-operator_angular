@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const ClientCard = require('../models/ClientCard');
 const CardOperation = require('../models/CardOperation');
+const { createReceipt } = require('../services/receipt.service');
 
 // ============================================================
 // ВАЖНО: специфичные пути — ДО параметрических /:card
@@ -61,12 +62,18 @@ router.post('/', async (req, res) => {
 });
 
 // ---------- TOPUP BY NUMBER ----------
-// POST /api/cards/by-number/:number/topup
+// POST /api/cards/by-number/:number/topup  { amount, paymentMethod }
 router.post('/by-number/:number/topup', async (req, res) => {
   const num = Number(req.body?.amount);
+  const paymentMethod = req.body?.paymentMethod || null;
+
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
   const number = String(req.params.number || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
@@ -85,24 +92,39 @@ router.post('/by-number/:number/topup', async (req, res) => {
       comment: 'Пополнение по номеру карты',
     }).catch(() => {});
 
+    const receipt = await createReceipt({
+      postId:        0,
+      kind:          'topup_card',
+      operation:     'topup',
+      items:         [{ name: 'Пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
+
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
 
-    res.json(card);
+    res.json({ ...card.toObject(), receiptNumber: receipt.receiptNumber });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // ---------- TOPUP FROM POST ----------
-// POST /api/cards/:card/topup-from-post
+// POST /api/cards/:card/topup-from-post  { postId, amount, paymentMethod }
 router.post('/:card/topup-from-post', async (req, res) => {
-  const { postId, amount } = req.body || {};
+  const { postId, amount, paymentMethod } = req.body || {};
   const num = Number(amount);
+
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
   const cardNumber = String(req.params.card || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
@@ -121,24 +143,40 @@ router.post('/:card/topup-from-post', async (req, res) => {
       comment: 'Перенос баланса с поста',
     }).catch(() => {});
 
+    const receipt = await createReceipt({
+      postId:        Number(postId) || 0,
+      kind:          'topup_card',
+      operation:     'topup',
+      items:         [{ name: 'Пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
+
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
 
-    console.log(`💳 [Post ${postId ?? '—'}] → карта ${card.card}: +${num} ₽ (итог ${card.balance})`);
-    res.json(card);
+    console.log(`💳 [Post ${postId ?? '—'}] → карта ${card.card}: +${num} ₽ (итог ${card.balance}), чек №${receipt.receiptNumber}`);
+    res.json({ ...card.toObject(), receiptNumber: receipt.receiptNumber });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // ---------- TOPUP (manual) ----------
-// POST /api/cards/:card/topup
+// POST /api/cards/:card/topup  { amount, paymentMethod }
 router.post('/:card/topup', async (req, res) => {
   const num = Number(req.body?.amount);
+  const paymentMethod = req.body?.paymentMethod || null;
+
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
   const cardNumber = String(req.params.card || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
@@ -157,11 +195,21 @@ router.post('/:card/topup', async (req, res) => {
       comment: 'Ручное пополнение оператором',
     }).catch(() => {});
 
+    const receipt = await createReceipt({
+      postId:        0,
+      kind:          'topup_card',
+      operation:     'topup',
+      items:         [{ name: 'Пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
+
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
 
-    res.json(card);
+    res.json({ ...card.toObject(), receiptNumber: receipt.receiptNumber });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
