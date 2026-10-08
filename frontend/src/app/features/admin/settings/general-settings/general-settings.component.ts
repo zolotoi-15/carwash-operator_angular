@@ -31,7 +31,6 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
   saving = false;
 
   numberOfPostsOptions = [4, 6, 8, 10, 12];
-
   relayNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
   dimmers = [1, 2, 3, 4];
 
@@ -43,10 +42,7 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
 
     this.settingsUpdate.settingsUpdated$
       .pipe(takeUntil(this.destroy$))
-      .subscribe(() => {
-        console.log('GeneralSettings: settings updated, reloading...');
-        this.loadSettings();
-      });
+      .subscribe(() => this.loadSettings());
   }
 
   ngOnDestroy(): void {
@@ -72,27 +68,18 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
           this.selectedPostId = this.settings.posts[0]?.postId ?? 1;
         }
       },
-      error: (err: any) => {
-        console.error('[general-settings] load failed:', err);
+      error: () => {
         this.notify.error('Не удалось загрузить настройки');
         this.loading = false;
       },
     });
   }
 
-  saveAll(): void {
-    this.persist('Настройки сохранены');
-  }
-
-  saveMqtt(): void {
-    this.persist('MQTT-настройки сохранены');
-  }
+  saveAll(): void { this.persist('Настройки сохранены'); }
+  saveMqtt(): void { this.persist('MQTT-настройки сохранены'); }
 
   savePostSettings(): void {
-    if (!this.ps) {
-      this.notify.warning('Пост не выбран');
-      return;
-    }
+    if (!this.ps) { this.notify.warning('Пост не выбран'); return; }
     this.persist(`Настройки поста ${this.ps.postId} сохранены`);
   }
 
@@ -105,9 +92,7 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
         this.notify.success(successMessage);
       },
       error: (err: any) => {
-        console.error('[general-settings] save failed:', err);
-        const msg =
-          err?.error?.error || err?.error?.message || err?.message || 'Ошибка сохранения';
+        const msg = err?.error?.error || err?.error?.message || err?.message || 'Ошибка сохранения';
         this.notify.error(msg);
         this.saving = false;
       },
@@ -116,15 +101,11 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
 
   copyFromFirstToAll(): void {
     const post1 = this.settings.posts?.[0];
-    if (!post1) {
-      this.notify.warning('Пост 1 не найден');
-      return;
-    }
-    const clone = structuredClone(post1);
-    const numberOfPosts = this.settings.numberOfPosts || 8;
+    if (!post1) { this.notify.warning('Пост 1 не найден'); return; }
+    const count = this.settings.numberOfPosts || 8;
     const newPosts: PostSettings[] = [];
-    for (let i = 1; i <= numberOfPosts; i++) {
-      newPosts.push({ ...structuredClone(clone), postId: i });
+    for (let i = 1; i <= count; i++) {
+      newPosts.push({ ...structuredClone(post1), postId: i });
     }
     this.settings = { ...this.settings, posts: newPosts };
     this.persist('Настройки скопированы на все посты');
@@ -133,20 +114,12 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
   publishConfig(): void {
     this.admin.publishConfig().subscribe({
       next: () => this.notify.success('Конфиг опубликован во все посты'),
-      error: (err: any) => {
-        console.error('[general-settings] publishConfig failed:', err);
-        this.notify.error('Не удалось опубликовать конфиг');
-      },
+      error: () => this.notify.error('Не удалось опубликовать конфиг'),
     });
   }
 
-  get mqtt(): MqttSettings {
-    return this.settings.mqtt ?? DEFAULT_MQTT;
-  }
-
-  get kkm(): KkmSettings {
-    return this.settings.kkm ?? emptyGeneralSettings.kkm;
-  }
+  get mqtt(): MqttSettings { return this.settings.mqtt ?? DEFAULT_MQTT; }
+  get kkm(): KkmSettings { return this.settings.kkm ?? emptyGeneralSettings.kkm; }
 
   addService(postId: number): void {
     const post = this.settings.posts.find(p => p.postId === postId);
