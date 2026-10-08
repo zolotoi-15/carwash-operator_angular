@@ -54,6 +54,11 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     return this.settings.posts.find(p => p.postId === this.selectedPostId);
   }
 
+  /** Только активные услуги — для блоков Цены/Частоты/Реле/Задержки/Кнопки */
+  activeServices(post: PostSettings): ServiceConfig[] {
+    return (post.services || []).filter(s => s.enabled !== false);
+  }
+
   onPostChange(postId: number | string): void {
     this.selectedPostId = Number(postId);
   }
@@ -134,5 +139,7 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     const post = this.settings.posts.find(p => p.postId === postId);
     if (!post) return;
     post.services.splice(index, 1);
+    // пересобираем массив, чтобы Angular увидел изменение
+    post.services = [...post.services];
   }
 }
