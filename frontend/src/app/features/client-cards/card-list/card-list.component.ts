@@ -11,11 +11,15 @@ import {
   CardOperation,
   CreateClientCardDto,
 } from '../../../core/models/client-card.model';
+import {
+  PaymentMethodDialogComponent,
+  PaymentMethod,
+} from '../../../shared/components/payment-method-dialog/payment-method-dialog.component';
 
 @Component({
   selector: 'app-card-list',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, PaymentMethodDialogComponent],
   templateUrl: './card-list.component.html',
   styleUrls: ['./card-list.component.scss'],
 })
@@ -40,18 +44,20 @@ export class CardListComponent implements OnInit, OnDestroy {
   reportOperations: CardOperation[] = [];
   reportLoading = false;
 
-  /** 🔙 Возвращено: флаг ожидания сканирования (используется в HTML) */
   waitingScan = false;
-
-  /** id последнего поста, откуда пришёл скан (для подсветки) */
   lastScanPostId: string | null = null;
+
+  // ---------- Диалог выбора способа оплаты ----------
+  paymentDialogOpen = false;
+  paymentDialogAmount = 0;
+  paymentDialogCard = '';
+  private pendingTopUp: { card: ClientCard; amount: number } | null = null;
 
   private subs = new Subscription();
   private scanTimeout: any = null;
 
   ngOnInit(): void {
     this.loadCards();
-
     this.subs.add(
       this.realtime.messages$.subscribe((msg) => this.handleRealtime(msg)),
     );
@@ -63,12 +69,10 @@ export class CardListComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // WebSocket-события от backend
+  // WebSocket-события
   // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
-    // 🔔 Сканирование карты на терминале
     if (msg.type === 'card-scan') {
-      // Снимаем флаг ожидания — сканирование пришло
       this.waitingScan = false;
       if (this.scanTimeout) {
         clearTimeout(this.scanTimeout);
@@ -92,7 +96,6 @@ export class CardListComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // Обновление баланса карты
     if (msg.type === 'card-balance') {
       const card = (msg.card || '').toUpperCase();
       const balance = Number(msg.balance || 0);
@@ -101,7 +104,6 @@ export class CardListComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // MQTT posts/X/clientcardbalance тоже несёт баланс
     if (msg.type === 'mqtt' && msg.topic) {
       const m = msg.topic.match(/^posts\/(\d+)\/clientcardbalance$/);
       if (!m) return;
@@ -162,21 +164,49 @@ export class CardListComponent implements OnInit, OnDestroy {
     });
   }
 
+  // ============================================================
+  // Пополнение с диалогом выбора способа оплаты
+  // ============================================================
   topUp(card: ClientCard): void {
     const amount = this.topUpAmount[card.card];
-    if (!amount || amount <= 0) { this.notify.warning('Введите сумму'); return; }
-    this.cardService.topUp(card.card, amount).subscribe({
+    if (!amount || amount <= 0) {
+      this.notify.warning('Введите сумму');
+      return;
+    }
+    this.pendingTopUp = { card, amount };
+    this.paymentDialogCard = card.card;
+    this.paymentDialogAmount = amount;
+    this.paymentDialogOpen = true;
+  }
+
+  onPaymentSelected(method: PaymentMethod): void {
+    const pending = this.pendingTopUp;
+    this.paymentDialogOpen = false;
+    this.pendingTopUp = null;
+    if (!pending) return;
+
+    this.cardService.topUp(pending.card.card, pending.amount, method).subscribe({
       next: (updated) => {
-        this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
-        this.topUpAmount[card.card] = 0;
-        const idx = this.cards.findIndex(c => c.card === card.card);
-        if (idx >= 0) this.cards[idx] = updated;
+        const label = method === 'cash' ? 'нал.' : 'безнал.';
+        const receipt = (updated as any)?.receiptNumber;
+        this.notify.success(
+          `Карта ${pending.card.card} пополнена на ${pending.amount} ₽ (${label})` +
+          (receipt ? `, чек №${receipt}` : ''),
+        );
+        this.topUpAmount[pending.card.card] = 0;
+        const idx = this.cards.findIndex(c => c.card === pending.card.card);
+        if (idx >= 0) this.cards[idx] = { ...this.cards[idx], balance: updated.balance };
       },
       error: (err) => {
         const msg = err?.error?.error || err?.message || 'Ошибка пополнения';
         this.notify.error(msg);
       },
     });
+  }
+
+  onPaymentCancelled(): void {
+    this.paymentDialogOpen = false;
+    this.pendingTopUp = null;
   }
 
   deleteCard(card: ClientCard): void {
@@ -207,20 +237,10 @@ export class CardListComponent implements OnInit, OnDestroy {
     this.reportOperations = [];
   }
 
-  // ============================================================
-  // 🔙 Возвращено: запуск ожидания сканирования
-  // ============================================================
-  /**
-   * Инициирует «режим ожидания»: оператор нажимает кнопку,
-   * затем подносит карту к терминалу.
-   * Флаг снимется, когда придёт WebSocket-событие card-scan,
-   * или по таймауту (15 сек).
-   */
   scanCard(): void {
     this.waitingScan = true;
     this.notify.info('Ожидание сканирования на терминале...');
 
-    // Таймаут: если событие не пришло за 15 секунд
     if (this.scanTimeout) clearTimeout(this.scanTimeout);
     this.scanTimeout = setTimeout(() => {
       if (this.waitingScan) {
