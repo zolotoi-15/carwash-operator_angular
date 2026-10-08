@@ -32,7 +32,6 @@
       <span>🧼 Активная функция:</span>
       <span class="value">{{ activeFunction || '-' }}</span>
     </div>
-    <!-- ★ Номер текущего авансового чека -->
     @if (currentAdvanceReceiptNumber) {
       <div class="info-row">
         <span>🧾 Аванс №:</span>
@@ -41,7 +40,7 @@
     }
   </div>
 
-  <!-- Кнопки программ -->
+  <!-- Кнопки программ — из активных услуг -->
   <div class="functions">
     @for (fn of functions; track fn) {
       <button
@@ -50,6 +49,9 @@
         (click)="activateFunction(fn)">
         {{ fn }}
       </button>
+    }
+    @if (!functions.length) {
+      <div class="no-services">Нет активных услуг</div>
     }
   </div>
 
@@ -65,41 +67,41 @@
       step="1"
       autocomplete="off"
       (keydown.enter)="quickTopUp()">
-      <button type="button"
-        class="quick-topup-btn"
-        [disabled]="!topUpAmount || topUpAmount <= 0"
-        (click)="quickTopUp()"
-        title="Пополнить на введённую сумму">
-        ₽
-      </button>
-    </div>
-
-    <!-- Кнопки оператора -->
-    <div class="actions">
-      <button class="act-btn topup" (click)="openTopUpModal()">➕ Пополнить</button>
-      <button class="act-btn stop"  (click)="stop()">⏹️ Остановить</button>
-      <button class="act-btn pause" (click)="pause()">⏸️ Пауза</button>
-      <button class="act-btn reset" (click)="reset()">🔄 Сброс</button>
-      <button class="act-btn print" (click)="printReceipt()">🧾 Печать чека</button>
-    </div>
-
+    <button type="button"
+      class="quick-topup-btn"
+      [disabled]="!topUpAmount || topUpAmount <= 0"
+      (click)="quickTopUp()"
+      title="Пополнить на введённую сумму">
+      ₽
+    </button>
   </div>
 
-  <!-- Модалка пополнения с чеками -->
-  @if (showTopUpModal) {
-    <app-receipt-modal
-      [postId]="postId"
-      (close)="closeTopUpModal()"
-      (topUp)="handleTopUp($event)">
-    </app-receipt-modal>
-  }
+  <!-- Кнопки оператора -->
+  <div class="actions">
+    <button class="act-btn topup" (click)="openTopUpModal()">➕ Пополнить</button>
+    <button class="act-btn stop"  (click)="stop()">⏹️ Остановить</button>
+    <button class="act-btn pause" (click)="pause()">⏸️ Пауза</button>
+    <button class="act-btn reset" (click)="reset()">🔄 Сброс</button>
+    <button class="act-btn print" (click)="printReceipt()">🧾 Печать чека</button>
+  </div>
 
-  <!-- ★ Диалог выбора способа оплаты — вне .post-card, чтобы не обрезался overflow -->
-  @if (showPaymentDialog) {
-    <app-payment-method-dialog
-      [amount]="pendingTopUpAmount"
-      [title]="'Пополнение поста ' + postId"
-      (selected)="onPaymentSelected($event)"
-      (cancelled)="onPaymentCancelled()">
-    </app-payment-method-dialog>
-  }
+</div>
+
+<!-- Модалка пополнения с чеками — вне .post-card, чтобы не обрезался overflow -->
+@if (showTopUpModal) {
+  <app-receipt-modal
+    [postId]="postId"
+    (close)="closeTopUpModal()"
+    (topUp)="handleTopUp($event)">
+  </app-receipt-modal>
+}
+
+<!-- Диалог выбора способа оплаты -->
+@if (showPaymentDialog) {
+  <app-payment-method-dialog
+    [amount]="pendingTopUpAmount"
+    [title]="'Пополнение поста ' + postId"
+    (selected)="onPaymentSelected($event)"
+    (cancelled)="onPaymentCancelled()">
+  </app-payment-method-dialog>
+}
