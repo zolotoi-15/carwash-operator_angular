@@ -542,7 +542,7 @@ let settings = {
 // ============================================================
 function buildServicesPayloadForPost(postId) {
   const p = settings.posts?.[postId] || {};
-  const services = p.services || [];
+  const services = (p.services || []).filter(svc => svc.enabled !== false); // ← только активные
   const prices = p.prices || {};
   const relayMask = p.relayMask || {};
   const vfd = p.vfdFrequencies || {};
@@ -559,8 +559,7 @@ function buildServicesPayloadForPost(postId) {
     onDelay: delays[svc.name]?.onDelay ?? 100,
     offDelay: delays[svc.name]?.offDelay ?? 200,
     buttonInput: buttons[svc.name] ?? 0,
-    // ★ ИСПРАВЛЕНО: было svc.enabled !== undefined ? svc.enabled : true
-    enabled: svc.enabled !== false
+    enabled: true,  // раз мы уже отфильтровали — все оставшиеся активны
   }));
 }
 
