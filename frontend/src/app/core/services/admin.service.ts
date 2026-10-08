@@ -1,8 +1,9 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { Observable, of, switchMap } from 'rxjs';
+import { map, tap } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
+import { SettingsUpdateService } from './settings-update.service';
 
 // ================= МОДЕЛИ =================
 
@@ -53,7 +54,6 @@ export interface RemoteMqttSettings {
 export interface MqttSettings {
   local: LocalMqttSettings;
   remote: RemoteMqttSettings;
-  /** Прямой URL брокера (для совместимости со старой конфигурацией). */
   brokerUrl?: string;
 }
 
@@ -116,6 +116,7 @@ export const emptyGeneralSettings: GeneralSettings = {
 @Injectable({ providedIn: 'root' })
 export class AdminService {
   private http = inject(HttpClient);
+  private settingsUpdate = inject(SettingsUpdateService);
   private apiUrl = `${environment.apiUrl}`;
 
   // ------- server → UI -------
@@ -128,6 +129,7 @@ export class AdminService {
       const postId = Number(postIdStr);
       const pd = pdRaw || {};
       const prices = pd.prices || {};
+
       const services: ServiceConfig[] = (pd.services || []).map((svc: any) => ({
         name: svc.name,
         price:
@@ -137,7 +139,7 @@ export class AdminService {
             ? prices[svc.name]
             : 0,
         free_time_sec: svc.free_time_sec ?? 0,
-        enabled: svc.enabled !== undefined ? svc.enabled : svc.enable !== false,
+        enabled: svc.enabled !== false,
       }));
 
       posts.push({
@@ -154,7 +156,6 @@ export class AdminService {
 
     posts.sort((a, b) => a.postId - b.postId);
 
-    // MQTT — нормализуем (новый формат { local, remote }, старый { brokerUrl })
     const mqttRaw = data?.mqtt || {};
     let mqtt: MqttSettings;
     if (mqttRaw.local || mqttRaw.remote) {
@@ -193,7 +194,6 @@ export class AdminService {
   // ------- UI → server -------
 
   private toServer(settings: GeneralSettings): any {
-    // 1) posts: массив → объект-словарь
     const postsObj: any = {};
     settings.posts.forEach(p => {
       const prices: any = {};
@@ -217,13 +217,11 @@ export class AdminService {
       };
     });
 
-    // 2) mqtt: отправляем { local, remote } — server.js это понимает
     const mqtt = {
       local: settings.mqtt?.local ?? DEFAULT_MQTT.local,
       remote: settings.mqtt?.remote ?? DEFAULT_MQTT.remote,
     };
 
-    // 3) kkm: приводим UI-поля к серверным
     const kkmFromUi = settings.kkm || {};
     const kkm = {
       enabled: !!kkmFromUi.enabled,
@@ -256,35 +254,64 @@ export class AdminService {
     const body = this.toServer(settings);
     return this.http
       .put<any>(`${this.apiUrl}/settings`, body)
-      .pipe(map(data => this.fromServer(data)));
+      .pipe(
+        map(data => this.fromServer(data)),
+        tap(() => this.settingsUpdate.notifySettingsUpdated())
+      );
   }
 
-  /** Публикация текущего конфига во все посты через MQTT (POST /api/publish-config) */
   publishConfig(): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/publish-config`, {});
   }
 
-  updatePostSettings(postId: number, ps: PostSettings): Observable<PostSettings> {
-    return of(ps);
+  getPostSettings(postId: number): Observable<PostSettings> {
+    return this.getSettings().pipe(
+      map(settings => {
+        const post = settings.posts.find(p => p.postId === postId);
+        if (!post) throw new Error(`Пост ${postId} не найден`);
+        return post;
+      })
+    );
+  }
+
+  updatePostSettings(postId: number, ps: Partial<PostSettings>): Observable<PostSettings> {
+    return this.getSettings().pipe(
+      map(settings => {
+        const idx = settings.posts.findIndex(p => p.postId === postId);
+        if (idx === -1) throw new Error(`Пост ${postId} не найден`);
+        settings.posts[idx] = { ...settings.posts[idx], ...ps };
+        return settings;
+      }),
+      switchMap(updated => this.updateSettings(updated)),
+      map(settings => {
+        const post = settings.posts.find(p => p.postId === postId);
+        if (!post) throw new Error(`Пост ${postId} не найден после обновления`);
+        return post;
+      })
+    );
   }
 
   copySettingsFromPost1ToAll(): Observable<void> {
-    return of(void 0);
+    return this.getSettings().pipe(
+      map(settings => {
+        const post1 = settings.posts.find(p => p.postId === 1);
+        if (!post1) throw new Error('Пост 1 не найден');
+        const count = settings.numberOfPosts || 8;
+        const newPosts: PostSettings[] = [];
+        for (let i = 1; i <= count; i++) {
+          newPosts.push({ ...structuredClone(post1), postId: i });
+        }
+        return { ...settings, posts: newPosts };
+      }),
+      switchMap(updated => this.updateSettings(updated)),
+      map(() => void 0)
+    );
   }
 }
 
-/**
- * Строит WebSocket-URL MQTT из настроек.
- * Приоритет: brokerUrl → local (host + portWs + path).
- * Возвращает '' если собрать не удалось.
- */
 export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
   if (!mqtt) return '';
-
-  if (mqtt.brokerUrl && mqtt.brokerUrl.trim()) {
-    return mqtt.brokerUrl.trim();
-  }
-
+  if (mqtt.brokerUrl && mqtt.brokerUrl.trim()) return mqtt.brokerUrl.trim();
   const local = mqtt.local;
   if (local && local.host) {
     const port = local.portWs || 8083;
@@ -292,6 +319,5 @@ export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
     if (!path.startsWith('/')) path = '/' + path;
     return `ws://${local.host}:${port}${path}`;
   }
-
   return '';
 }
