@@ -7,6 +7,8 @@ import {
   CardReportResponse,
 } from '../models/client-card.model';
 
+export type PaymentMethod = 'cash' | 'card_terminal' | 'client_card';
+
 @Injectable({ providedIn: 'root' })
 export class ClientCardService {
   private readonly apiUrl = '/api/cards';
@@ -49,21 +51,28 @@ export class ClientCardService {
     );
   }
 
-  topUp(card: string, amount: number): Observable<ClientCard> {
-    return this.http.post<ClientCard>(
+  /** Ручное пополнение карты (со страницы карт). */
+  topUp(
+    card: string,
+    amount: number,
+    paymentMethod: PaymentMethod,
+  ): Observable<ClientCard & { receiptNumber?: number }> {
+    return this.http.post<ClientCard & { receiptNumber?: number }>(
       `${this.apiUrl}/${encodeURIComponent(card)}/topup`,
-      { amount },
+      { amount, paymentMethod },
     );
   }
 
+  /** Перенос баланса с поста на карту. */
   topUpFromPost(
     card: string,
     postId: string,
     amount: number,
-  ): Observable<ClientCard> {
-    return this.http.post<ClientCard>(
+    paymentMethod: PaymentMethod,
+  ): Observable<ClientCard & { receiptNumber?: number }> {
+    return this.http.post<ClientCard & { receiptNumber?: number }>(
       `${this.apiUrl}/${encodeURIComponent(card)}/topup-from-post`,
-      { postId, amount },
+      { postId, amount, paymentMethod },
     );
   }
 
