@@ -1,3 +1,73 @@
+<div class="cards-page">
+  <h2>💳 Карты клиентов</h2>
+
+  <div class="search-row">
+    <input class="search-input"
+      placeholder="Поиск по номеру карты, ФИО или телефону..."
+      [(ngModel)]="query"
+      (keyup.enter)="search()" />
+    <button class="btn btn-primary" (click)="search()">🔍 Найти</button>
+    @if (query) {
+      <button class="btn btn-secondary" (click)="clearSearch()">✕ Сбросить</button>
+    }
+    <button class="btn btn-scan" (click)="scanCard()" [disabled]="waitingScan">
+      {{ waitingScan ? '⏳ Ожидание...' : '📷 Сканировать карту' }}
+    </button>
+  </div>
+
+  <div class="add-row">
+    <h3>Клиент</h3>
+    <div class="add-form">
+      <input placeholder="Номер карты" [(ngModel)]="newCard.card" />
+      <input placeholder="ФИО (необязательно)" [(ngModel)]="newCard.fullName" />
+      <input placeholder="Телефон (необязательно)" [(ngModel)]="newCard.phone" />
+      <button class="btn btn-primary" (click)="addCard()">Добавить</button>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="cards-table">
+      <thead>
+        <tr>
+          <th>Номер карты</th><th>ФИО</th><th>Телефон</th>
+          <th>Тип</th><th>Баланс</th><th>Пополнение</th><th>Действия</th>
+        </tr>
+      </thead>
+      <tbody>
+        @for (c of cards; track trackByCard($index, c)) {
+          <tr>
+            <td class="mono">{{ c.card }}</td>
+            <td>{{ c.fullName || '—' }}</td>
+            <td>{{ c.phone || '—' }}</td>
+            <td><span class="badge" [class]="'badge-' + c.type">{{ c.type }}</span></td>
+            <td class="balance">{{ formatBalance(c.balance) }} ₽</td>
+            <td>
+              <div class="topup-cell">
+                <input type="number" min="0" step="1" placeholder="Сумма"
+                  [(ngModel)]="topUpAmount[c.card]"
+                  (keyup.enter)="topUp(c)" />
+                <button class="btn btn-success btn-sm" (click)="topUp(c)">Пополнить</button>
+              </div>
+            </td>
+            <td>
+              <div class="actions-cell">
+                <button class="btn btn-secondary btn-sm" (click)="openReport(c)">Отчёт</button>
+                <button class="btn btn-danger btn-sm" (click)="deleteCard(c)">Удалить</button>
+              </div>
+            </td>
+          </tr>
+        }
+        @if (!cards.length && !loading) {
+          <tr><td colspan="7" class="empty">Карты не найдены</td></tr>
+        }
+        @if (loading) {
+          <tr><td colspan="7" class="empty">Загрузка...</td></tr>
+        }
+      </tbody>
+    </table>
+  </div>
+</div>
+
 @if (reportModalOpen) {
   <div class="modal-backdrop" (click)="closeReport()"></div>
 }
