@@ -189,7 +189,6 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/clientcard');
     mqttClient.subscribe('posts/+/receipt');
     mqttClient.subscribe('posts/+/lwt');
-    // ★ Подписка на номер авансового чека от поста (если прошивка его публикует)
     mqttClient.subscribe('posts/+/receipt_number');
     if (settings.posts) publishConfigToAllPosts();
   });
@@ -204,7 +203,6 @@ function connectMqtt(settings) {
       timestamp: Date.now(),
     });
 
-    // ---------- Чеки ----------
     if (topic === 'kkm/print' || /^posts\/[^/]+\/receipt$/.test(topic)) {
       try {
         const receiptData = JSON.parse(payload);
@@ -236,7 +234,6 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Команды постов ----------
     if (topic.startsWith('posts/') && topic.endsWith('/command')) {
       const postId = topic.split('/')[1];
       try {
@@ -263,7 +260,6 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Статусы постов ----------
     if (topic.startsWith('posts/') && topic.endsWith('/status')) {
       const postId = topic.split('/')[1];
       try {
@@ -291,7 +287,6 @@ function connectMqtt(settings) {
       } catch { /* ignore */ }
     }
 
-    // ---------- LWT ----------
     if (/^posts\/[^/]+\/lwt$/.test(topic)) {
       const postId = topic.split('/')[1];
       const status = (payload || '').trim().toLowerCase();
@@ -314,7 +309,6 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Карта клиента ----------
     if (/^posts\/[^/]+\/clientcard$/.test(topic)) {
       const postId = topic.split('/')[1];
       try {
@@ -412,7 +406,6 @@ function connectMqtt(settings) {
       }
     }
 
-    // ---------- Уровни баков ----------
     if (topic === 'tank/levels') {
       try {
         const { tank, level } = JSON.parse(payload);
@@ -427,7 +420,6 @@ function connectMqtt(settings) {
       } catch { /* ignore */ }
     }
 
-    // ---------- Отчёты по MQTT ----------
     if (topic === 'reports/request') {
       try {
         const { from, to, responseTopic } = JSON.parse(payload);
@@ -567,7 +559,8 @@ function buildServicesPayloadForPost(postId) {
     onDelay: delays[svc.name]?.onDelay ?? 100,
     offDelay: delays[svc.name]?.offDelay ?? 200,
     buttonInput: buttons[svc.name] ?? 0,
-    enabled: svc.enabled !== undefined ? svc.enabled : true
+    // ★ ИСПРАВЛЕНО: было svc.enabled !== undefined ? svc.enabled : true
+    enabled: svc.enabled !== false
   }));
 }
 
@@ -720,8 +713,9 @@ async function loadSettings() {
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
+          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           settings.posts[i].services = settings.posts[i].services.map(s => ({
-            ...s, enabled: s.enable !== undefined ? s.enable : true
+            ...s, enabled: s.enabled !== false
           }));
         }
         await saveSettings(settings);
@@ -770,10 +764,11 @@ function findPostWithCard(cardNumber, excludePostId = null) {
 function findService(postId, name) {
   const p = settings.posts?.[postId];
   if (p && p.services) {
-    return p.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
+    // ★ ИСПРАВЛЕНО: было s.enable !== false
+    return p.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enabled !== false);
   }
   if (settings.services) {
-    return settings.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enable !== false);
+    return settings.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enabled !== false);
   }
   return null;
 }
@@ -900,11 +895,6 @@ function resetPost(postId) {
   publishStatus(postId); publishRelayStatus(postId);
 }
 
-/**
- * ★ Финальный чек по сессии.
- * Ищет последний авансовый чек по этому посту и передаёт его номер
- * в kkm/print как advanceReceiptNumber.
- */
 function printReceipt(postId) {
   const state = getPostState(postId);
   const items = []; let totalCost = 0;
@@ -1294,7 +1284,8 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           dimmerMask: newSettings.dimmerMask ? { ...newSettings.dimmerMask } : {},
           buttonInputs: newSettings.buttonInputs ? { ...newSettings.buttonInputs } : {},
           relayDelays: newSettings.relayDelays ? { ...newSettings.relayDelays } : {},
-          services: services.map(s => ({ ...s, enabled: s.enable !== undefined ? s.enable : true }))
+          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
+          services: services.map(s => ({ ...s, enabled: s.enabled !== false }))
         };
       }
       newSettings.posts = posts;
@@ -1308,8 +1299,9 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
         if (!settings.posts[postId]) settings.posts[postId] = {};
         settings.posts[postId] = { ...settings.posts[postId], ...postData };
         if (settings.posts[postId].services) {
+          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
-            ...s, enabled: s.enable !== undefined ? s.enable : true
+            ...s, enabled: s.enabled !== false
           }));
         }
       }
@@ -1352,7 +1344,6 @@ app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
 });
 
 // ---------- Пополнение поста (АВАНС) ----------
-// POST /api/posts/:postId/topup { amount, paymentMethod }
 app.post('/api/posts/:postId/topup', auth, async (req, res) => {
   const postId = String(req.params.postId);
   const amount = Number(req.body?.amount);
@@ -1371,11 +1362,9 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       return res.status(404).json({ error: `Пост ${postId} не найден` });
     }
 
-    // Обновляем локальное состояние
     addBalance(postId, amount);
     const state = getPostState(postId);
 
-    // ★ Создаём АВАНСОВЫЙ чек
     const receipt = await createReceipt({
       postId:        Number(postId),
       kind:          'advance_post',
@@ -1387,8 +1376,6 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       paymentMethod,
     });
 
-    // ★ Публикуем номер авансового чека в топик поста,
-    //   чтобы ESP32 знал, к какому авансу привязывать финальный чек
     if (mqttClient) {
       mqttClient.publish(
         `posts/${postId}/receipt_number`,
@@ -1913,7 +1900,6 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
   });
 });
 
-// POST /api/receipts — через createReceipt
 app.post('/api/receipts', async (req, res) => {
   try {
     const d = req.body || {};
@@ -1941,7 +1927,6 @@ app.post('/api/receipts', async (req, res) => {
   }
 });
 
-// ---------- Card release ----------
 app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
   const cardNumber = req.params.card.toUpperCase();
   let released = false;
