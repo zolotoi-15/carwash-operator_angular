@@ -2,144 +2,234 @@
 const express = require('express');
 const router = express.Router();
 const ClientCard = require('../models/ClientCard');
-const { topUpById, topUpByNumber } = require('../controllers/cardsController');
-
-
-// ⚠️ Специфичные роуты — ВЫШЕ общих "/:id"
-router.post('/by-number/:number/topup', topUpByNumber);
-router.post('/:id/topup', topUpById);
-
-router.get('/:id', getCardById);
-router.get('/', listCards);
+const CardOperation = require('../models/CardOperation');
 
 // ============================================================
-// Вспомогательное: превращает Mongoose-документ в DTO,
-// который ждёт фронт ({ id, number, name, phone, type, balance })
+// ВАЖНО: специфичные пути — ДО параметрических /:card
 // ============================================================
-function toDto(doc) {
-  if (!doc) return null;
-  const obj = doc.toObject ? doc.toObject({ virtuals: true }) : doc;
-  return {
-    id: String(obj._id || obj.id || ''),
-    number: obj.card || obj.number || '',
-    name: obj.name || '',
-    phone: obj.phone || '',
-    type: obj.type || 'client',
-    balance: Number(obj.balance) || 0,
-    createdAt: obj.createdAt,
-    updatedAt: obj.updatedAt,
-  };
-}
 
-// GET /api/cards/:card — одна карта по номеру
-router.get('/:card', async (req, res) => {
+// ---------- LIST ----------
+router.get('/', async (_req, res) => {
   try {
-    const card = await ClientCard.findOne({
-      card: String(req.params.card).toUpperCase(),
-    });
-    if (!card) return res.status(404).json({ error: 'Карта не найдена' });
-    res.json(toDto(card));
-  } catch (err) {
-    console.error('[GET /api/cards/:card]', err);
-    res.status(500).json({ error: err.message });
+    const cards = await ClientCard.find().sort({ createdAt: -1 });
+    res.json(cards);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// GET /api/cards — список всех карт (+ простой поиск по query)
-router.get('/', async (req, res) => {
+// ---------- SEARCH ----------
+// GET /api/cards/search?q=...
+router.get('/search', async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.json([]);
+  const rx = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
   try {
-    const q = String(req.query.q || '').trim();
-    const filter = q
-      ? {
-          $or: [
-            { card:  { $regex: q, $options: 'i' } },
-            { name:  { $regex: q, $options: 'i' } },
-            { phone: { $regex: q, $options: 'i' } },
-          ],
-        }
-      : {};
-
-    const cards = await ClientCard.find(filter).sort({ createdAt: -1 });
-    res.json(cards.map(toDto));
-  } catch (err) {
-    console.error('[GET /api/cards]', err);
-    res.status(500).json({ error: err.message });
+    const cards = await ClientCard.find({
+      $or: [{ card: rx }, { fullName: rx }, { phone: rx }],
+    }).limit(50);
+    res.json(cards);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/cards — добавить карту
-// Принимает и { number }, и { card } — фронт шлёт number
+// ---------- CREATE ----------
 router.post('/', async (req, res) => {
+  const { card, type, fullName, phone } = req.body || {};
+  if (!card || !type) {
+    return res.status(400).json({ error: 'Поля card и type обязательны' });
+  }
+  if (!['client', 'operator', 'service'].includes(type)) {
+    return res.status(400).json({ error: 'Недопустимый тип карты' });
+  }
   try {
-    const body = req.body || {};
-    const cardNumber = String(body.number || body.card || '').trim().toUpperCase();
-    const type = body.type || 'client';
-    const name = String(body.name || '').trim();
-    const phone = String(body.phone || '').trim();
-
-    if (!cardNumber) {
-      return res.status(400).json({ error: 'Поле "number" обязательно' });
-    }
-    if (!['client', 'operator', 'service'].includes(type)) {
-      return res.status(400).json({ error: 'Недопустимый тип карты' });
-    }
-    if (!/^[0-9A-F]+$/i.test(cardNumber)) {
-      return res.status(400).json({ error: 'Номер карты должен содержать только 0-9 и A-F' });
-    }
-
-    const newCard = await ClientCard.create({
-      card: cardNumber,
-      name,
-      phone,
+    const created = await ClientCard.create({
+      card: String(card).toUpperCase(),
       type,
       balance: 0,
+      fullName: fullName || '',
+      phone: phone || '',
     });
-
-    res.status(201).json(toDto(newCard));
-  } catch (err) {
-    if (err.code === 11000) {
+    res.status(201).json(created);
+  } catch (e) {
+    if (e.code === 11000) {
       return res.status(409).json({ error: 'Карта уже существует' });
     }
-    console.error('[POST /api/cards] error:', err);
-    res.status(400).json({ error: err.message, details: err.errors });
+    res.status(500).json({ error: e.message });
   }
 });
 
-// DELETE /api/cards/:card — удалить по номеру карты
-router.delete('/:card', async (req, res) => {
+// ---------- TOPUP BY NUMBER ----------
+// POST /api/cards/by-number/:number/topup
+router.post('/by-number/:number/topup', async (req, res) => {
+  const num = Number(req.body?.amount);
+  if (!num || num <= 0) {
+    return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
+  }
+  const number = String(req.params.number || '').toUpperCase();
   try {
-    const deleted = await ClientCard.findOneAndDelete({
-      card: String(req.params.card).toUpperCase(),
-    });
-    if (!deleted) return res.status(404).json({ error: 'Карта не найдена' });
-    res.json({ success: true, id: String(deleted._id) });
-  } catch (err) {
-    console.error('[DELETE /api/cards/:card]', err);
-    res.status(500).json({ error: err.message });
+    const card = await ClientCard.findOneAndUpdate(
+      { card: number },
+      { $inc: { balance: num } },
+      { new: true },
+    );
+    if (!card) return res.status(404).json({ error: 'Карта не найдена' });
+
+    await CardOperation.create({
+      card: card.card,
+      type: 'topup',
+      amount: num,
+      balanceAfter: card.balance,
+      operatorName: req.user?.username || null,
+      comment: 'Пополнение по номеру карты',
+    }).catch(() => {});
+
+    if (req.app.locals.publishCardBalanceToPosts) {
+      req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
+    }
+
+    res.json(card);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
-// POST /api/cards/:card/topup — пополнить баланс
+// ---------- TOPUP FROM POST ----------
+// POST /api/cards/:card/topup-from-post
+router.post('/:card/topup-from-post', async (req, res) => {
+  const { postId, amount } = req.body || {};
+  const num = Number(amount);
+  if (!num || num <= 0) {
+    return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
+  }
+  const cardNumber = String(req.params.card || '').toUpperCase();
+  try {
+    const card = await ClientCard.findOneAndUpdate(
+      { card: cardNumber },
+      { $inc: { balance: num } },
+      { new: true },
+    );
+    if (!card) return res.status(404).json({ error: 'Карта не найдена' });
+
+    await CardOperation.create({
+      card: card.card,
+      type: 'topup_from_post',
+      amount: num,
+      balanceAfter: card.balance,
+      postId: postId != null ? String(postId) : null,
+      comment: 'Перенос баланса с поста',
+    }).catch(() => {});
+
+    if (req.app.locals.publishCardBalanceToPosts) {
+      req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
+    }
+
+    console.log(`💳 [Post ${postId ?? '—'}] → карта ${card.card}: +${num} ₽ (итог ${card.balance})`);
+    res.json(card);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- TOPUP (manual) ----------
+// POST /api/cards/:card/topup
 router.post('/:card/topup', async (req, res) => {
   const num = Number(req.body?.amount);
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  const cardNumber = String(req.params.card || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
-      { card: String(req.params.card).toUpperCase() },
+      { card: cardNumber },
       { $inc: { balance: num } },
-      { new: true }
+      { new: true },
     );
     if (!card) return res.status(404).json({ error: 'Карта не найдена' });
+
+    await CardOperation.create({
+      card: card.card,
+      type: 'topup',
+      amount: num,
+      balanceAfter: card.balance,
+      operatorName: req.user?.username || null,
+      comment: 'Ручное пополнение оператором',
+    }).catch(() => {});
 
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
-    res.json(toDto(card));
-  } catch (err) {
-    console.error('[POST /api/cards/:card/topup]', err);
-    res.status(500).json({ error: err.message });
+
+    res.json(card);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- REPORT ----------
+// GET /api/cards/:card/report?from=...&to=...
+router.get('/:card/report', async (req, res) => {
+  const cardNumber = String(req.params.card || '').toUpperCase();
+  const filter = { card: cardNumber };
+  if (req.query.from || req.query.to) {
+    filter.createdAt = {};
+    if (req.query.from) filter.createdAt.$gte = new Date(req.query.from);
+    if (req.query.to) {
+      const to = new Date(req.query.to);
+      to.setHours(23, 59, 59, 999);
+      filter.createdAt.$lte = to;
+    }
+  }
+  try {
+    const operations = await CardOperation.find(filter).sort({ createdAt: -1 });
+    const card = await ClientCard.findOne({ card: cardNumber });
+    const summary = {
+      balance: card?.balance ?? 0,
+      totalTopUps: operations.filter(o => o.amount > 0).reduce((s, o) => s + o.amount, 0),
+      totalCharges: operations.filter(o => o.amount < 0).reduce((s, o) => s + Math.abs(o.amount), 0),
+      operationsCount: operations.length,
+    };
+    res.json({ summary, operations });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- PATCH info ----------
+// PATCH /api/cards/:card
+router.patch('/:card', async (req, res) => {
+  const cardNumber = String(req.params.card || '').toUpperCase();
+  const update = {};
+  if (typeof req.body?.fullName === 'string') update.fullName = req.body.fullName;
+  if (typeof req.body?.phone === 'string') update.phone = req.body.phone;
+  try {
+    const card = await ClientCard.findOneAndUpdate({ card: cardNumber }, update, { new: true });
+    if (!card) return res.status(404).json({ error: 'Карта не найдена' });
+    res.json(card);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ---------- GET / DELETE (параметрические) ----------
+router.get('/:card', async (req, res) => {
+  try {
+    const card = await ClientCard.findOne({ card: req.params.card.toUpperCase() });
+    if (!card) return res.status(404).json({ error: 'Карта не найдена' });
+    res.json(card);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.delete('/:card', async (req, res) => {
+  try {
+    const deleted = await ClientCard.findOneAndDelete({ card: req.params.card.toUpperCase() });
+    if (!deleted) return res.status(404).json({ error: 'Карта не найдена' });
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 

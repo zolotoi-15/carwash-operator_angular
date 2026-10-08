@@ -1,12 +1,14 @@
 {
-  "/api/*": {
+  "/api": {
     "target": "http://localhost:3000",
     "secure": false,
     "changeOrigin": true,
     "logLevel": "debug"
   },
-  "/mqtt": {
+  "/ws": {
     "target": "ws://localhost:3000",
-    "ws": true
+    "ws": true,
+    "secure": false,
+    "changeOrigin": true
   }
 }

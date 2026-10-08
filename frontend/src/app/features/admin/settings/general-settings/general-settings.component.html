@@ -62,89 +62,113 @@
     <div class="section-body">
       <label>Пост:
         <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
-          <option *ngFor="let p of settings.posts" [ngValue]="p.postId">Пост {{ p.postId }}</option>
+          @for (p of settings.posts; track p) {
+            <option [ngValue]="p.postId">Пост {{ p.postId }}</option>
+          }
         </select>
       </label>
 
-      <ng-container *ngIf="ps as current">
-        <div class="service-row" *ngFor="let svc of current.services">
-          <label>{{ svc.name }}:
-            <input type="number" [(ngModel)]="svc.price" />
-          </label>
-        </div>
+      @if (ps; as current) {
+        @for (svc of current.services; track svc) {
+          <div class="service-row">
+            <label>{{ svc.name }}:
+              <input type="number" [(ngModel)]="svc.price" />
+            </label>
+          </div>
+        }
         <button (click)="savePostSettings()">💾 Сохранить</button>
-      </ng-container>
+      }
     </div>
   </details>
 
   <!-- ===== Частоты ===== -->
   <details class="settings-section">
     <summary>⚡ Частота частотника (Гц)</summary>
-    <div class="section-body" *ngIf="ps as current">
-      <div class="service-row" *ngFor="let svc of current.services">
-        <label>{{ svc.name }}:
-          <input type="number" [(ngModel)]="current.vfdFrequencies[svc.name]" />
-        </label>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of current.services; track svc) {
+          <div class="service-row">
+            <label>{{ svc.name }}:
+              <input type="number" [(ngModel)]="current.vfdFrequencies[svc.name]" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
       </div>
-      <button (click)="savePostSettings()">💾 Сохранить</button>
-    </div>
+    }
   </details>
 
   <!-- ===== Реле и диммеры ===== -->
   <details class="settings-section">
     <summary>🔌 Номера реле и диммеры</summary>
-    <div class="section-body" *ngIf="ps as current">
-      <div class="service-row" *ngFor="let svc of current.services">
-        <h4>{{ svc.name }}</h4>
-        <div class="check-row">
-          <span class="row-label">Реле (8 бит):</span>
-          <span class="checks">
-            <label *ngFor="let n of relayNumbers" class="check">
-              <input type="checkbox" [(ngModel)]="current.relayMask[svc.name + '_' + n]" /> {{ n }}
-            </label>
-          </span>
-        </div>
-        <div class="check-row">
-          <span class="row-label">Диммеры (4 бита):</span>
-          <span class="checks">
-            <label *ngFor="let d of dimmers" class="check">
-              <input type="checkbox" [(ngModel)]="current.dimmerMask[svc.name + '_' + d]" /> {{ d }}
-            </label>
-          </span>
-        </div>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of current.services; track svc) {
+          <div class="service-row">
+            <h4>{{ svc.name }}</h4>
+            <div class="check-row">
+              <span class="row-label">Реле (8 бит):</span>
+              <span class="checks">
+                @for (n of relayNumbers; track n) {
+                  <label class="check">
+                    <input type="checkbox" [(ngModel)]="current.relayMask[svc.name + '_' + n]" /> {{ n }}
+                  </label>
+                }
+              </span>
+            </div>
+            <div class="check-row">
+              <span class="row-label">Диммеры (4 бита):</span>
+              <span class="checks">
+                @for (d of dimmers; track d) {
+                  <label class="check">
+                    <input type="checkbox" [(ngModel)]="current.dimmerMask[svc.name + '_' + d]" /> {{ d }}
+                  </label>
+                }
+              </span>
+            </div>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
       </div>
-      <button (click)="savePostSettings()">💾 Сохранить</button>
-    </div>
+    }
   </details>
 
   <!-- ===== Задержки реле ===== -->
   <details class="settings-section">
     <summary>⏱️ Задержки реле (мс)</summary>
-    <div class="section-body" *ngIf="ps as current">
-      <div class="service-row" *ngFor="let svc of current.services">
-        <h4>{{ svc.name }}</h4>
-        <label>On:
-          <input type="number" [(ngModel)]="current.relayDelays[svc.name].onDelay" />
-        </label>
-        <label>Off:
-          <input type="number" [(ngModel)]="current.relayDelays[svc.name].offDelay" />
-        </label>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of current.services; track svc) {
+          <div class="service-row">
+            <h4>{{ svc.name }}</h4>
+            <label>On:
+              <input type="number" [(ngModel)]="current.relayDelays[svc.name].onDelay" />
+            </label>
+            <label>Off:
+              <input type="number" [(ngModel)]="current.relayDelays[svc.name].offDelay" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
       </div>
-      <button (click)="savePostSettings()">💾 Сохранить</button>
-    </div>
+    }
   </details>
 
   <!-- ===== DI кнопок ===== -->
   <details class="settings-section">
     <summary>🔘 Входы кнопок (DI)</summary>
-    <div class="section-body" *ngIf="ps as current">
-      <div class="service-row" *ngFor="let svc of current.services">
-        <label>{{ svc.name }}:
-          <input type="number" [(ngModel)]="current.buttonInputs[svc.name]" />
-        </label>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of current.services; track svc) {
+          <div class="service-row">
+            <label>{{ svc.name }}:
+              <input type="number" [(ngModel)]="current.buttonInputs[svc.name]" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
       </div>
-      <button (click)="savePostSettings()">💾 Сохранить</button>
-    </div>
+    }
   </details>
 
   <!-- ===== ККМ ===== -->
@@ -177,11 +201,13 @@
     <summary>📷 Камеры постов</summary>
     <div class="section-body">
       <p class="hint">Введите URL видеопотока (MJPEG, HLS .m3u8 или RTSP-трансляцию).</p>
-      <div class="service-row" *ngFor="let p of settings.posts">
-        <label>Пост {{ p.postId }}:
-          <input [(ngModel)]="p.cameras['main']" placeholder="http://..." />
-        </label>
-      </div>
+      @for (p of settings.posts; track p) {
+        <div class="service-row">
+          <label>Пост {{ p.postId }}:
+            <input [(ngModel)]="p.cameras['main']" placeholder="http://..." />
+          </label>
+        </div>
+      }
       <button (click)="saveAll()">💾 Сохранить</button>
     </div>
   </details>
@@ -189,31 +215,36 @@
   <!-- ===== Услуги (таблица) ===== -->
   <details class="settings-section">
     <summary>📋 Услуги</summary>
-    <div class="section-body" *ngIf="ps as current">
-      <label>Пост:
-        <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
-          <option *ngFor="let p of settings.posts" [ngValue]="p.postId">Пост {{ p.postId }}</option>
-        </select>
-      </label>
-
-      <table class="services-table">
-        <thead>
-          <tr>
-            <th>Услуга</th>
-            <th>Цена</th>
-            <th>Беспл. время, сек</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr *ngFor="let svc of current.services">
-            <td>{{ svc.name }}</td>
-            <td><input type="number" [(ngModel)]="svc.price" /></td>
-            <td><input type="number" [(ngModel)]="svc.free_time_sec" /></td>
-          </tr>
-        </tbody>
-      </table>
-      <button (click)="savePostSettings()">💾 Сохранить</button>
-    </div>
+    @if (ps; as current) {
+      <div class="section-body">
+        <label>Пост:
+          <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
+            @for (p of settings.posts; track p) {
+              <option [ngValue]="p.postId">Пост {{ p.postId }}</option>
+            }
+          </select>
+        </label>
+        <table class="services-table">
+          <thead>
+            <tr>
+              <th>Услуга</th>
+              <th>Цена</th>
+              <th>Беспл. время, сек</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (svc of current.services; track svc) {
+              <tr>
+                <td>{{ svc.name }}</td>
+                <td><input type="number" [(ngModel)]="svc.price" /></td>
+                <td><input type="number" [(ngModel)]="svc.free_time_sec" /></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+        <button (click)="savePostSettings()">💾 Сохранить</button>
+      </div>
+    }
   </details>
 
   <!-- ===== Отправка ===== -->

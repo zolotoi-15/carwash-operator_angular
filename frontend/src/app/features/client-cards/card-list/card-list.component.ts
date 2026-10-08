@@ -4,12 +4,12 @@ import { FormsModule } from '@angular/forms';
 import { Router } from '@angular/router';
 import { Subscription } from 'rxjs';
 import { ClientCardService } from '../../../core/services/client-card.service';
-import { MqttService, CardScanEvent } from '../../../core/services/mqtt.service';
+import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import {
   ClientCard,
-  CreateClientCardDto,
   CardOperation,
+  CreateClientCardDto,
 } from '../../../core/models/client-card.model';
 
 @Component({
@@ -21,7 +21,7 @@ import {
 })
 export class CardListComponent implements OnInit, OnDestroy {
   private cardService = inject(ClientCardService);
-  private mqtt = inject(MqttService);
+  private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
   private router = inject(Router);
 
@@ -30,13 +30,9 @@ export class CardListComponent implements OnInit, OnDestroy {
   loading = false;
 
   newCard: CreateClientCardDto = {
-    number: '',
-    name: '',
-    phone: '',
-    type: 'client',
+    card: '', type: 'client', fullName: '', phone: '',
   };
 
-  /** ✅ Ключ — string (Mongo ObjectId), а не number */
   topUpAmount: Record<string, number> = {};
 
   reportModalOpen = false;
@@ -44,157 +40,164 @@ export class CardListComponent implements OnInit, OnDestroy {
   reportOperations: CardOperation[] = [];
   reportLoading = false;
 
+  /** 🔙 Возвращено: флаг ожидания сканирования (используется в HTML) */
   waitingScan = false;
-  lastScan: CardScanEvent | null = null;
+
+  /** id последнего поста, откуда пришёл скан (для подсветки) */
+  lastScanPostId: string | null = null;
 
   private subs = new Subscription();
+  private scanTimeout: any = null;
 
   ngOnInit(): void {
     this.loadCards();
 
     this.subs.add(
-      this.mqtt.getCardScanUpdates().subscribe((event: CardScanEvent) => {
-        this.lastScan = event;
-        this.waitingScan = false;
-        this.query = event.card;
-        this.search();
-        const where = event.postId ? ` (пост ${event.postId})` : '';
-        this.notify.success(`💳 Карта ${event.card}${where} считана`);
-      })
+      this.realtime.messages$.subscribe((msg) => this.handleRealtime(msg)),
     );
   }
 
   ngOnDestroy(): void {
+    if (this.scanTimeout) clearTimeout(this.scanTimeout);
     this.subs.unsubscribe();
   }
 
   // ============================================================
-  // Загрузка и поиск
+  // WebSocket-события от backend
+  // ============================================================
+  private handleRealtime(msg: RealtimeMessage): void {
+    // 🔔 Сканирование карты на терминале
+    if (msg.type === 'card-scan') {
+      // Снимаем флаг ожидания — сканирование пришло
+      this.waitingScan = false;
+      if (this.scanTimeout) {
+        clearTimeout(this.scanTimeout);
+        this.scanTimeout = null;
+      }
+
+      const card = (msg.card || '').toUpperCase();
+      const balance = Number(msg.balance || 0);
+      const postId = msg.postId ?? '—';
+      this.lastScanPostId = msg.postId ?? null;
+
+      const idx = this.cards.findIndex(c => c.card === card);
+      if (idx >= 0) {
+        this.cards[idx] = { ...this.cards[idx], balance };
+        this.notify.info(`💳 ${card} (пост ${postId}): ${balance.toFixed(2)} ₽`);
+      } else if (msg.known === false) {
+        this.notify.warning(`Неизвестная карта ${card} (пост ${postId})`);
+      } else {
+        this.loadCards();
+      }
+      return;
+    }
+
+    // Обновление баланса карты
+    if (msg.type === 'card-balance') {
+      const card = (msg.card || '').toUpperCase();
+      const balance = Number(msg.balance || 0);
+      const idx = this.cards.findIndex(c => c.card === card);
+      if (idx >= 0) this.cards[idx] = { ...this.cards[idx], balance };
+      return;
+    }
+
+    // MQTT posts/X/clientcardbalance тоже несёт баланс
+    if (msg.type === 'mqtt' && msg.topic) {
+      const m = msg.topic.match(/^posts\/(\d+)\/clientcardbalance$/);
+      if (!m) return;
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        const card = String(data.card || '').toUpperCase();
+        const balance = Number(data.balance || 0);
+        const idx = this.cards.findIndex(c => c.card === card);
+        if (idx >= 0) this.cards[idx] = { ...this.cards[idx], balance };
+      } catch { /* ignore */ }
+    }
+  }
+
+  // ============================================================
+  // REST
   // ============================================================
   loadCards(): void {
     this.loading = true;
     this.cardService.getCards().subscribe({
-      next: (data: ClientCard[]) => {
-        this.cards = data;
-        this.loading = false;
-      },
-      error: () => {
-        this.notify.error('Не удалось загрузить карты');
-        this.loading = false;
-      },
+      next: (data) => { this.cards = data; this.loading = false; },
+      error: () => { this.notify.error('Не удалось загрузить карты'); this.loading = false; },
     });
   }
 
   search(): void {
     const q = this.query.trim();
-    if (!q) {
-      this.loadCards();
-      return;
-    }
+    if (!q) { this.loadCards(); return; }
     this.loading = true;
     this.cardService.searchCards(q).subscribe({
-      next: (data: ClientCard[]) => {
+      next: (data) => {
         this.cards = data;
         this.loading = false;
         if (!data.length) this.notify.warning(`Карта «${q}» не найдена`);
       },
-      error: () => {
-        this.notify.error('Ошибка поиска');
-        this.loading = false;
-      },
+      error: () => { this.notify.error('Ошибка поиска'); this.loading = false; },
     });
   }
 
-  clearSearch(): void {
-    this.query = '';
-    this.loadCards();
-  }
+  clearSearch(): void { this.query = ''; this.loadCards(); }
 
-  // ============================================================
-  // Создание карты
-  // ============================================================
   addCard(): void {
-    const num = (this.newCard.number || '').trim().toUpperCase();
-    if (!num) {
-      this.notify.warning('Введите номер карты');
-      return;
-    }
-    if (!/^[0-9A-F]+$/i.test(num)) {
-      this.notify.warning('Номер карты: только 0-9 и A-F');
-      return;
-    }
+    const num = (this.newCard.card || '').trim().toUpperCase();
+    if (!num) { this.notify.warning('Введите номер карты'); return; }
+    if (!/^[0-9A-F]+$/i.test(num)) { this.notify.warning('Только 0-9 и A-F'); return; }
 
-    this.cardService
-      .createCard({
-        number: num,
-        name: this.newCard.name?.trim() || undefined,
-        phone: this.newCard.phone?.trim() || undefined,
-        type: this.newCard.type ?? 'client',
-      })
-      .subscribe({
-        next: () => {
-          this.notify.success(`Карта ${num} добавлена`);
-          this.newCard = { number: '', name: '', phone: '', type: 'client' };
-          this.loadCards();
-        },
-        error: (err) => {
-          const msg = err?.error?.error || 'Ошибка добавления';
-          this.notify.error(msg);
-        },
-      });
-  }
-
-  // ============================================================
-  // Пополнение
-  // ============================================================
-  topUp(card: ClientCard): void {
-    const amount = this.topUpAmount[card.id];
-    if (!amount || amount <= 0) {
-      this.notify.warning('Введите сумму');
-      return;
-    }
-    this.cardService.topUp(card.id, { amount }).subscribe({
-      next: (updated: ClientCard) => {
-        this.notify.success(`Карта ${card.number} пополнена на ${amount} ₽`);
-        this.topUpAmount[card.id] = 0;
-        const idx = this.cards.findIndex(c => c.id === card.id);
-        if (idx >= 0) this.cards[idx] = { ...updated };
+    this.cardService.createCard({
+      card: num,
+      type: this.newCard.type,
+      fullName: this.newCard.fullName?.trim() || undefined,
+      phone: this.newCard.phone?.trim() || undefined,
+    }).subscribe({
+      next: () => {
+        this.notify.success(`Карта ${num} добавлена`);
+        this.newCard = { card: '', type: 'client', fullName: '', phone: '' };
+        this.loadCards();
       },
-      error: () => this.notify.error('Ошибка пополнения'),
+      error: (err) => this.notify.error(err?.error?.error || 'Ошибка добавления'),
     });
   }
 
-  // ============================================================
-  // Удаление
-  // ============================================================
+  topUp(card: ClientCard): void {
+    const amount = this.topUpAmount[card.card];
+    if (!amount || amount <= 0) { this.notify.warning('Введите сумму'); return; }
+    this.cardService.topUp(card.card, amount).subscribe({
+      next: (updated) => {
+        this.notify.success(`Карта ${card.card} пополнена на ${amount} ₽`);
+        this.topUpAmount[card.card] = 0;
+        const idx = this.cards.findIndex(c => c.card === card.card);
+        if (idx >= 0) this.cards[idx] = updated;
+      },
+      error: (err) => {
+        const msg = err?.error?.error || err?.message || 'Ошибка пополнения';
+        this.notify.error(msg);
+      },
+    });
+  }
+
   deleteCard(card: ClientCard): void {
-    if (!confirm(`Удалить карту ${card.number}?`)) return;
-    this.cardService.deleteCard(card.id).subscribe({
+    if (!confirm(`Удалить карту ${card.card}?`)) return;
+    this.cardService.deleteCard(card.card).subscribe({
       next: () => {
-        this.notify.success(`Карта ${card.number} удалена`);
-        this.cards = this.cards.filter(c => c.id !== card.id);
+        this.notify.success(`Карта ${card.card} удалена`);
+        this.cards = this.cards.filter((c) => c.card !== card.card);
       },
       error: () => this.notify.error('Ошибка удаления'),
     });
   }
 
-  // ============================================================
-  // Отчёт
-  // ============================================================
   openReport(card: ClientCard): void {
     this.reportCard = card;
     this.reportModalOpen = true;
     this.reportLoading = true;
     this.reportOperations = [];
-    this.cardService.getCardOperations(card.id).subscribe({
-      next: (ops: CardOperation[]) => {
-        this.reportOperations = ops;
-        this.reportLoading = false;
-      },
-      error: () => {
-        this.notify.error('Ошибка отчёта');
-        this.reportLoading = false;
-      },
+    this.cardService.getCardReport(card.card).subscribe({
+      next: (resp) => { this.reportOperations = resp.operations; this.reportLoading = false; },
+      error: () => { this.notify.error('Ошибка отчёта'); this.reportLoading = false; },
     });
   }
 
@@ -205,33 +208,30 @@ export class CardListComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Сканирование карты через MQTT
+  // 🔙 Возвращено: запуск ожидания сканирования
   // ============================================================
+  /**
+   * Инициирует «режим ожидания»: оператор нажимает кнопку,
+   * затем подносит карту к терминалу.
+   * Флаг снимется, когда придёт WebSocket-событие card-scan,
+   * или по таймауту (15 сек).
+   */
   scanCard(): void {
     this.waitingScan = true;
-    this.mqtt.requestCardScan();
-    this.notify.info('Ожидание сканирования...');
-    setTimeout(() => {
+    this.notify.info('Ожидание сканирования на терминале...');
+
+    // Таймаут: если событие не пришло за 15 секунд
+    if (this.scanTimeout) clearTimeout(this.scanTimeout);
+    this.scanTimeout = setTimeout(() => {
       if (this.waitingScan) {
         this.waitingScan = false;
         this.notify.warning('Сканирование не выполнено');
       }
+      this.scanTimeout = null;
     }, 15000);
   }
 
-  // ============================================================
-  // Утилиты
-  // ============================================================
-  formatBalance(value: number): string {
-    return (value ?? 0).toFixed(2);
-  }
+  formatBalance(value: number): string { return (value ?? 0).toFixed(2); }
 
-  /** ✅ Возвращает string (Mongo ObjectId), а не number */
-  trackById(_i: number, item: ClientCard): string {
-    return item.id;
-  }
-
-  goToReportPage(card: ClientCard): void {
-    this.router.navigate(['/client-cards', card.id, 'report']);
-  }
+  trackByCard(_i: number, item: ClientCard): string { return item.card; }
 }

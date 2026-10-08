@@ -1,5 +1,6 @@
 export const environment = {
   ...environment,
   production: true,
-  apiUrl: 'https://api.carwash.example.com/api'
+  apiUrl: '',
+  wsUrl: ''  // или ws://ваш-домен/ws через nginx
 };

@@ -1,20 +1,22 @@
 ﻿import { Component, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { AuthService } from '../../../core/services/auth.service';
 
 @Component({
   selector: 'app-header',
   standalone: true,
-  imports: [CommonModule],
+  imports: [],
   template: `
     <header class="app-header">
-      <div class="user-info" *ngIf="auth.currentUser$() as u">
-        <div class="user-name">{{ u.fullName }}</div>
-        <div class="user-group">{{ u.group?.displayName }}</div>
-      </div>
+      @if (auth.currentUser$(); as u) {
+        <div class="user-info">
+          <div class="user-name">{{ u.fullName }}</div>
+          <div class="user-group">{{ u.group?.displayName }}</div>
+        </div>
+      }
       <button class="logout-btn" (click)="auth.logout()">Выйти</button>
     </header>
-  `,
+    `,
   styles: [`
     .app-header {
       display: flex;

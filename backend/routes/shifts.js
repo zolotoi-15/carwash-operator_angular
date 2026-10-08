@@ -3,22 +3,24 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-function getShiftModel()  { return mongoose.model('Shift'); }
+function getShiftModel()   { return mongoose.model('CashShift'); }
 function getCounterModel() { return mongoose.model('Counter'); }
 
 function mapShift(shift) {
   if (!shift) return null;
   return {
-    _id: shift._id,
-    shiftNumber: shift.shiftNumber,
-    openedAt: shift.openedAt,
-    closedAt: shift.closedAt,
-    openedBy: shift.cashier || 'system',
-    closedBy: shift.closedBy || null,
-    status: shift.shiftOpen ? 'open' : 'closed',
-    autoClosed: !!shift.autoClosed,
+    _id:            shift._id,
+    openedAt:       shift.openedAt,
+    closedAt:       shift.closedAt,
+    openedBy:       shift.openedBy || 'system',
+    closedBy:       shift.closedBy || null,
+    status:         shift.status || 'open',
+    autoClosed:     !!shift.autoClosed,
     openingBalance: shift.openingBalance || 0,
     closingBalance: shift.closingBalance || 0,
+    totalCash:      shift.totalCash || 0,
+    totalCard:      shift.totalCard || 0,
+    totalClientCard: shift.totalClientCard || 0,
   };
 }
 
@@ -26,7 +28,7 @@ function mapShift(shift) {
 router.get('/current', async (_req, res) => {
   try {
     const Shift = getShiftModel();
-    const shift = await Shift.findOne({ shiftOpen: true }).sort({ openedAt: -1 });
+    const shift = await Shift.findOne({ status: 'open' }).sort({ openedAt: -1 });
     res.json(mapShift(shift));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -37,24 +39,17 @@ router.get('/current', async (_req, res) => {
 router.post('/open', async (req, res) => {
   try {
     const Shift = getShiftModel();
-    const Counter = getCounterModel();
 
-    const existing = await Shift.findOne({ shiftOpen: true });
+    const existing = await Shift.findOne({ status: 'open' });
     if (existing) return res.status(409).json({ error: 'Смена уже открыта' });
 
-    const counter = await Counter.findByIdAndUpdate(
-      'shiftNumber',
-      { $inc: { seq: 1 } },
-      { new: true, upsert: true },
-    );
-
     const shift = await Shift.create({
-      shiftNumber: counter.seq,
-      shiftOpen: true,
-      openedAt: new Date(),
-      cashier: req.body.userId || 'system',
+      openedAt:       new Date(),
+      openedBy:       req.body.userId || 'system',
+      status:         'open',
       openingBalance: Number(req.body.openingBalance) || 0,
     });
+
     res.status(201).json(mapShift(shift));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -69,15 +64,15 @@ router.post('/close', async (req, res) => {
 
     let shift;
     if (shiftId) shift = await Shift.findById(shiftId);
-    else shift = await Shift.findOne({ shiftOpen: true });
+    else         shift = await Shift.findOne({ status: 'open' });
 
     if (!shift) return res.status(404).json({ error: 'Смена не найдена' });
-    if (!shift.shiftOpen) return res.json(mapShift(shift));
+    if (shift.status === 'closed') return res.json(mapShift(shift));
 
-    shift.shiftOpen = false;
-    shift.closedAt = new Date();
-    shift.closedBy = userId || 'system';
-    shift.autoClosed = !!auto;
+    shift.status         = 'closed';
+    shift.closedAt       = new Date();
+    shift.closedBy       = userId || 'system';
+    shift.autoClosed     = !!auto;
     shift.closingBalance = Number(closingBalance) || 0;
     await shift.save();
 

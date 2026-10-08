@@ -1,0 +1,12 @@
+@media (max-width: 640px) {
+  .settings-page { padding: 12px; }
+
+  .mqtt-group {
+    padding: 10px 12px;
+
+    label input { max-width: 100%; }
+  }
+
+  .section-body > label input,
+  .section-body > label select { max-width: 100%; }
+}

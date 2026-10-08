@@ -1,7 +1,7 @@
 <div class="dashboard">
-  <p class="welcome" *ngIf="auth.currentUser$() as user">
-    Добро пожаловать, <strong>{{ user.fullName }}</strong>!
-  </p>
+  @if (auth.currentUser$(); as user) {
+   
+  }
 
   <div class="top-row">
     <app-kkm-status></app-kkm-status>
@@ -12,6 +12,8 @@
   <h2 class="section-title">📋 Состояние постов мойки</h2>
 
   <div class="posts-grid">
-    <app-post-card *ngFor="let id of postIds" [postId]="id"></app-post-card>
+    @for (id of postIds; track id) {
+      <app-post-card [postId]="id"></app-post-card>
+    }
   </div>
 </div>

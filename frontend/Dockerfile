@@ -1,29 +1,23 @@
-# Этап 1: Сборка Angular приложения
+# ---------- 1. BUILD ANGULAR ----------
 FROM node:20-alpine AS builder
-
 WORKDIR /app
 
-# Копируем файлы зависимостей
 COPY package*.json ./
+RUN npm ci
 
-# Устанавливаем зависимости
-RUN npm install
-
-# Копируем исходный код
 COPY . .
 
-# Собираем production-версию
+# Прод-сборка. --configuration production использует environment.prod.ts
 RUN npm run build -- --configuration production
 
-# Этап 2: Раздача через Nginx
-FROM nginx:stable-alpine
+# ---------- 2. RUNTIME NGINX ----------
+FROM nginx:1.27-alpine
 
-# Копируем собранные файлы из первого этапа
-COPY --from=builder /app/dist/carwash-operator-angular/browser /usr/share/nginx/html
+# Angular 17+ кладёт билд в dist/<project>/browser
+COPY --from=builder /app/dist/carwash-operator/browser /usr/share/nginx/html
 
-# Копируем конфиг Nginx (создадим ниже)
+# Конфиг nginx с proxy на backend:3000
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 EXPOSE 80
-
 CMD ["nginx", "-g", "daemon off;"]

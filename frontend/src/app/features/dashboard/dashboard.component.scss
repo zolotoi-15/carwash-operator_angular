@@ -1,34 +1,106 @@
-.dashboard { padding: 24px; }
-
-.welcome {
-  font-size: 18px;
-  color: #1e293b;
-  margin-bottom: 24px;
+.dashboard {
+  padding: 0;                /* ← padding перенесён в .app-content */
+  width: 100%;
 }
 
+/* ===== Верхний ряд: три карточки в одну строку во всю ширину ===== */
 .top-row {
   display: grid;
-  grid-template-columns: 1fr 1.5fr 1fr;
-  gap: 16px;
-  margin-bottom: 24px;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+  align-items: stretch;
+  width: 100%;                /* ← во всю ширину родителя */
+  max-width: none;            /* ← никаких ограничений */
+
+  > app-kkm-status,
+  > app-tank-levels,
+  > app-shift-total {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+  }
+
+  > app-kkm-status .card,
+  > app-tank-levels .card,
+  > app-shift-total .card {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
+    padding: 16px 18px;
+    border-radius: 10px;
+  }
+
+  > app-kkm-status .card-title,
+  > app-tank-levels .card-title,
+  > app-shift-total .card-title {
+    margin: 0 0 10px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+    min-height: 20px;
+  }
 }
 
-@media (max-width: 1200px) {
-  .top-row { grid-template-columns: 1fr; }
-}
-
+/* ===== Ниже — сетка постов, ограниченная по ширине ===== */
 .section-title {
-  margin: 0 0 16px;
+  margin: 0 auto 12px;
+  max-width: 1400px;
   color: #334155;
-  font-size: 18px;
+  font-size: 17px;
 }
 
 .posts-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 12px;
+  max-width: 1800px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-@media (max-width: 1400px) { .posts-grid { grid-template-columns: repeat(3, 1fr); } }
-@media (max-width: 1024px) { .posts-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 640px)  { .posts-grid { grid-template-columns: 1fr; } }
+.posts-grid > app-post-card {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+
+/* ===== Адаптив ===== */
+@media (max-width: 1200px) {
+  .top-row {
+    grid-template-columns: 1fr 1fr;
+
+    > app-tank-levels {
+      grid-column: 1 / -1;
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .top-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+
+    > app-tank-levels { grid-column: auto; }
+
+    > app-kkm-status .card,
+    > app-tank-levels .card,
+    > app-shift-total .card {
+      min-height: auto;
+    }
+  }
+}
+
+@media (max-width: 640px) {
+  .section-title { font-size: 16px; margin-bottom: 12px; }
+
+  .posts-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}

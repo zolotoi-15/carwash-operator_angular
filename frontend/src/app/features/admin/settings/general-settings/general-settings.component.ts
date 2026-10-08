@@ -1,151 +1,182 @@
 ﻿import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { FormsModule } from '@angular/forms';
 import {
-  AdminService, GeneralSettings, PostSettings, emptyPostSettings, DEFAULT_MQTT
+  AdminService,
+  GeneralSettings,
+  PostSettings,
+  ServiceConfig,
+  KkmSettings,
+  MqttSettings,
+  emptyGeneralSettings,
+  DEFAULT_MQTT,
 } from '../../../../core/services/admin.service';
-import { MqttService } from '../../../../core/services/mqtt.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 
 @Component({
   selector: 'app-general-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [FormsModule],
   templateUrl: './general-settings.component.html',
-  styleUrls: ['./general-settings.component.scss']
+  styleUrls: ['./general-settings.component.scss'],
 })
 export class GeneralSettingsComponent implements OnInit {
   private admin = inject(AdminService);
-  private mqtt = inject(MqttService);
   private notify = inject(NotificationService);
 
-  settings: GeneralSettings = {
-    posts: [],
-    mqtt: JSON.parse(JSON.stringify(DEFAULT_MQTT)),
-    kkm: { enabled: false, simulate: false, model: '', fiscalShiftNumber: 0, cashierName: '' },
-    numberOfPosts: 8
-  };
+  settings: GeneralSettings = structuredClone(emptyGeneralSettings);
+  loading = false;
+  saving = false;
 
-  selectedPostId: number | null = null;
-  ps: PostSettings | null = null;
+  numberOfPostsOptions = [4, 6, 8, 10, 12];
 
-  readonly relayNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
-  readonly dimmers = ['D1', 'D2', 'D3', 'D4'];
+  /** Массивы для шаблона (реле / диммеры) */
+  relayNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
+  dimmers = [1, 2, 3, 4];
+
+  /** Какой пост сейчас выбран в UI */
+  selectedPostId = 1;
 
   ngOnInit(): void {
+    this.loadSettings();
+  }
+
+  // ============================================================
+  // Геттер текущего поста — используется в HTML как `ps as current`
+  // ============================================================
+  get ps(): PostSettings | undefined {
+    return this.settings.posts.find(p => p.postId === this.selectedPostId);
+  }
+
+  // ============================================================
+  // Реакция на смену поста в селекте
+  // ============================================================
+  onPostChange(postId: number | string): void {
+    this.selectedPostId = Number(postId);
+  }
+
+  // ============================================================
+  // Загрузка
+  // ============================================================
+  loadSettings(): void {
+    this.loading = true;
     this.admin.getSettings().subscribe({
-      next: s => {
-        this.settings = {
-          ...s,
-          posts: (s.posts ?? []).map(p => ({
-            ...emptyPostSettings,
-            ...p,
-            services: p.services ?? [],
-            relayMask: p.relayMask ?? {},
-            vfdFrequencies: p.vfdFrequencies ?? {},
-            dimmerMask: p.dimmerMask ?? {},
-            buttonInputs: p.buttonInputs ?? {},
-            relayDelays: p.relayDelays ?? {},
-            cameras: p.cameras ?? {}
-          }))
-        };
-
-        // Гарантируем relayDelays для каждой услуги
-        this.settings.posts.forEach(p => {
-          p.services.forEach(svc => {
-            if (!p.relayDelays[svc.name]) {
-              p.relayDelays[svc.name] = { onDelay: 0, offDelay: 0 };
-            }
-          });
-        });
-
-        if (this.settings.posts.length) {
-          this.selectedPostId = this.settings.posts[0].postId;
-          this.onPostChange(this.selectedPostId);
+      next: (s) => {
+        this.settings = s;
+        this.loading = false;
+        if (!this.settings.posts.find(p => p.postId === this.selectedPostId)) {
+          this.selectedPostId = this.settings.posts[0]?.postId ?? 1;
         }
       },
-      error: err => {
-        console.error('Ошибка загрузки настроек:', err);
+      error: (err: any) => {
+        console.error('[general-settings] load failed:', err);
         this.notify.error('Не удалось загрузить настройки');
-      }
-    });
-  }
-
-  onPostChange(postId: number): void {
-    const found = this.settings.posts.find(p => p.postId === postId);
-    this.ps = found ? { ...found, services: [...found.services] } : null;
-  }
-
-  saveMqtt(): void {
-    this.admin.updateSettings(this.settings).subscribe({
-      next: saved => {
-        this.settings = saved;
-        this.mqtt.reconnectFromSettings(this.settings.mqtt);
-        this.notify.success('MQTT сохранены, переподключение...');
+        this.loading = false;
       },
-      error: err => {
-        console.error('Ошибка сохранения MQTT:', err);
-        this.notify.error('Не удалось сохранить MQTT');
-      }
     });
   }
 
-  savePostSettings(): void {
-    if (!this.ps) return;
-    // Обновляем локально, потом сохраняем весь settings
-    const idx = this.settings.posts.findIndex(p => p.postId === this.ps!.postId);
-    if (idx >= 0) this.settings.posts[idx] = { ...this.ps };
+  // ============================================================
+  // Сохранение — три публичных метода под три кнопки в HTML
+  // ============================================================
 
-    this.admin.updateSettings(this.settings).subscribe({
-      next: saved => {
-        this.settings = saved;
-        if (this.selectedPostId != null) this.onPostChange(this.selectedPostId);
-        this.notify.success(`Настройки поста ${this.ps!.postId} сохранены`);
-      },
-      error: err => {
-        console.error('Ошибка сохранения поста:', err);
-        this.notify.error('Не удалось сохранить настройки поста');
-      }
-    });
-  }
-
+  /** Общее сохранение (кнопки «Сохранить» в ККМ, камерах) */
   saveAll(): void {
-    this.admin.updateSettings(this.settings).subscribe({
-      next: saved => { this.settings = saved; this.notify.success('Настройки сохранены'); },
-      error: err => { console.error(err); this.notify.error('Ошибка сохранения'); }
-    });
+    this.persist('Настройки сохранены');
   }
 
-  publishConfig(): void {
-    const services = this.settings.posts[0]?.services ?? [];
-    this.mqtt.publishConfig(services);
-    this.notify.success('Конфигурация отправлена');
+  /** Сохранение только MQTT (кнопка в блоке MQTT) */
+  saveMqtt(): void {
+    this.persist('MQTT-настройки сохранены');
   }
 
-  copyFromFirstToAll(): void {
-    const post1 = this.settings.posts[0];
-    if (!post1) return;
-    this.settings.posts = this.settings.posts.map(p => ({
-      ...p,
-      services: JSON.parse(JSON.stringify(post1.services)),
-      relayMask: { ...post1.relayMask },
-      vfdFrequencies: { ...post1.vfdFrequencies },
-      dimmerMask: { ...post1.dimmerMask },
-      buttonInputs: { ...post1.buttonInputs },
-      relayDelays: JSON.parse(JSON.stringify(post1.relayDelays)),
-      cameras: { ...post1.cameras },
-    }));
+  /** Сохранение настроек выбранного поста (кнопки в блоках постов) */
+  savePostSettings(): void {
+    if (!this.ps) {
+      this.notify.warning('Пост не выбран');
+      return;
+    }
+    this.persist(`Настройки поста ${this.ps.postId} сохранены`);
+  }
+
+  /** Единая обёртка — шлёт updateSettings и обновляет состояние */
+  private persist(successMessage: string): void {
+    this.saving = true;
     this.admin.updateSettings(this.settings).subscribe({
-      next: saved => {
-        this.settings = saved;
-        this.notify.success('Настройки скопированы с поста 1');
-        if (this.selectedPostId != null) this.onPostChange(this.selectedPostId);
+      next: (s) => {
+        this.settings = s;
+        this.saving = false;
+        this.notify.success(successMessage);
       },
-      error: err => { console.error(err); this.notify.error('Ошибка копирования'); }
+      error: (err: any) => {
+        console.error('[general-settings] save failed:', err);
+        const msg =
+          err?.error?.error || err?.error?.message || err?.message || 'Ошибка сохранения';
+        this.notify.error(msg);
+        this.saving = false;
+      },
     });
   }
 
-  getServiceNames(): string[] {
-    return this.ps?.services.map(s => s.name) ?? [];
+  // ============================================================
+  // Копирование с поста 1 на все остальные
+  // ============================================================
+  copyFromFirstToAll(): void {
+    const post1 = this.settings.posts?.[0];
+    if (!post1) {
+      this.notify.warning('Пост 1 не найден');
+      return;
+    }
+    const clone = structuredClone(post1);
+    const numberOfPosts = this.settings.numberOfPosts || 8;
+    const newPosts: PostSettings[] = [];
+    for (let i = 1; i <= numberOfPosts; i++) {
+      newPosts.push({ ...structuredClone(clone), postId: i });
+    }
+    this.settings = { ...this.settings, posts: newPosts };
+    this.persist('Настройки скопированы на все посты');
+  }
+
+  // ============================================================
+  // Публикация конфига в посты
+  // ============================================================
+  publishConfig(): void {
+    this.admin.publishConfig().subscribe({
+      next: () => this.notify.success('Конфиг опубликован во все посты'),
+      error: (err: any) => {
+        console.error('[general-settings] publishConfig failed:', err);
+        this.notify.error('Не удалось опубликовать конфиг');
+      },
+    });
+  }
+
+  // ============================================================
+  // MQTT / KKM — геттеры, если понадобятся в шаблоне
+  // ============================================================
+  get mqtt(): MqttSettings {
+    return this.settings.mqtt ?? DEFAULT_MQTT;
+  }
+
+  get kkm(): KkmSettings {
+    return this.settings.kkm ?? emptyGeneralSettings.kkm;
+  }
+
+  // ============================================================
+  // Услуги (на случай кнопок «+/-» — сейчас в HTML их нет,
+  // но пусть будут, чтобы не терять функциональность)
+  // ============================================================
+  addService(postId: number): void {
+    const post = this.settings.posts.find(p => p.postId === postId);
+    if (!post) return;
+    post.services = [
+      ...post.services,
+      { name: 'Новая услуга', price: 0, free_time_sec: 0, enabled: true } as ServiceConfig,
+    ];
+  }
+
+  removeService(postId: number, index: number): void {
+    const post = this.settings.posts.find(p => p.postId === postId);
+    if (!post) return;
+    post.services.splice(index, 1);
   }
 }

@@ -1,5 +1,5 @@
 ﻿import { Component, OnInit, inject } from '@angular/core';
-import { CommonModule } from '@angular/common';
+
 import { FormsModule } from '@angular/forms';
 import { GroupService } from '../../../../core/services/group.service';
 import { PermissionService } from '../../../../core/services/permission.service';
@@ -17,29 +17,41 @@ const RL: Record<string,string> = {
 const AL: Record<string,string> = { read: 'Чтение', write: 'Запись', update: 'Изменение', delete: 'Удаление' };
 
 @Component({
-  selector: 'app-permission-editor', standalone: true, imports: [CommonModule, FormsModule],
+  selector: 'app-permission-editor', standalone: true, imports: [FormsModule],
   template: `<div>
-    <h1>🔐 Права доступа</h1>
-    <div style="margin-bottom:20px">
-      <label>Группа: </label>
-      <select [(ngModel)]="selectedGroupId" (ngModelChange)="onChange($event)" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;min-width:240px">
-        <option [ngValue]="null">— выберите —</option>
-        <option *ngFor="let g of groups" [ngValue]="g.id">{{g.displayName}}</option>
-      </select>
-    </div>
-    <div *ngIf="selectedGroupId && !isDev">
-      <table style="width:100%;background:#fff;border-collapse:collapse">
-        <thead><tr style="background:#f8fafc"><th style="padding:12px;text-align:left">Ресурс</th><th *ngFor="let a of actions" style="padding:12px">{{al[a]}}</th></tr></thead>
-        <tbody><tr *ngFor="let r of resources"><td style="padding:12px">{{rl[r]}}</td>
-          <td *ngFor="let a of actions" style="padding:12px;text-align:center"><input type="checkbox" [checked]="isChecked(r,a)" (change)="toggle(r,a,$event)"/></td>
-        </tr></tbody>
+      <h1>🔐 Права доступа</h1>
+      <div style="margin-bottom:20px">
+        <label>Группа: </label>
+        <select [(ngModel)]="selectedGroupId" (ngModelChange)="onChange($event)" style="padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;min-width:240px">
+          <option [ngValue]="null">— выберите —</option>
+          @for (g of groups; track g) {
+            <option [ngValue]="g.id">{{g.displayName}}</option>
+          }
+        </select>
+      </div>
+      @if (selectedGroupId && !isDev) {
+        <div>
+          <table style="width:100%;background:#fff;border-collapse:collapse">
+            <thead><tr style="background:#f8fafc"><th style="padding:12px;text-align:left">Ресурс</th>@for (a of actions; track a) {
+            <th style="padding:12px">{{al[a]}}</th>
+          }</tr></thead>
+          <tbody>@for (r of resources; track r) {
+            <tr><td style="padding:12px">{{rl[r]}}</td>
+            @for (a of actions; track a) {
+              <td style="padding:12px;text-align:center"><input type="checkbox" [checked]="isChecked(r,a)" (change)="toggle(r,a,$event)"/></td>
+            }
+          </tr>
+        }</tbody>
       </table>
       <button (click)="save()" style="margin-top:20px;background:#0ea5e9;color:#fff;padding:12px 24px;border:none;border-radius:6px;cursor:pointer">💾 Сохранить</button>
     </div>
-    <div *ngIf="isDev" style="background:#dbeafe;color:#1e40af;padding:16px;border-radius:8px;margin-top:20px">
-      ℹ️ Группа «Разработчик» имеет полный доступ. Права не редактируются.
-    </div>
-  </div>`
+    }
+    @if (isDev) {
+      <div style="background:#dbeafe;color:#1e40af;padding:16px;border-radius:8px;margin-top:20px">
+        ℹ️ Группа «Разработчик» имеет полный доступ. Права не редактируются.
+      </div>
+    }
+    </div>`
 })
 export class PermissionEditorComponent implements OnInit {
   private gs = inject(GroupService);
