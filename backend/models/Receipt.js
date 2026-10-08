@@ -3,22 +3,42 @@ const mongoose = require('mongoose');
 
 const serviceLineSchema = new mongoose.Schema({
   name:           { type: String, default: '' },
-  pricePerSecond: { type: Number, default: 0 },
   seconds:        { type: Number, default: 0 },
-  total:          { type: Number, default: 0 },
+  cost:           { type: Number, default: 0 },
+  pricePerSecond: { type: Number, default: 0 },
+  discount:        { type: Number, default: 0 },
+  discountPercent: { type: Number, default: 0 },
 }, { _id: false });
 
 const receiptSchema = new mongoose.Schema({
   receiptNumber: { type: Number, default: 0, index: true },
-  postId:        { type: Number, required: true, index: true },
-  date:          { type: Date,   default: Date.now, index: true },
-  total:         { type: Number, default: 0 },
-  services:      { type: [serviceLineSchema], default: [] },
-  fiscal:        { type: Boolean, default: false },
+  postId:        { type: Number, default: 0, index: true },
+  timestamp:     { type: Date,   default: Date.now, index: true },
+
+  operation:     { type: String, default: 'sell' },   // 'sell' | 'topup_card' | 'topup_post' | ...
+  kind:          { type: String, default: 'session' }, // 'session' | 'topup_card' | 'topup_post'
+
+  items:         { type: [serviceLineSchema], default: [] },
+  totalCost:     { type: Number, default: 0 },
+  balanceAfter:  { type: Number, default: 0 },
+
+  paymentMethod: { type: String, default: null, index: true }, // 'cash' | 'card_terminal' | 'client_card'
+  discountTotal: { type: Number, default: 0 },
+
+  fiscalSent:            { type: Boolean, default: false },
+  fiscalUuid:            { type: String,  default: null },
+  fiscalDocumentNumber:  { type: Number,  default: null },
+  fiscalSign:            { type: String,  default: null },
+
+  correctionInfo: {
+    type:       { type: String, enum: ['self', 'instruction', null], default: null },
+    baseDate:   { type: Date,   default: null },
+    baseNumber: { type: String, default: null },
+  },
 }, { timestamps: true });
 
-// составные индексы — под частые запросы отчётов
-receiptSchema.index({ postId: 1, date: -1 });
-receiptSchema.index({ date: -1 });
+receiptSchema.index({ postId: 1, timestamp: -1 });
+receiptSchema.index({ kind: 1, timestamp: -1 });
+receiptSchema.index({ paymentMethod: 1, timestamp: -1 });
 
 module.exports = mongoose.model('Receipt', receiptSchema);
