@@ -1,6 +1,26 @@
 <div class="settings-page">
   <h2>⚙️ Панель администратора</h2>
 
+<!-- ===== Количество постов ===== -->
+  <details class="settings-section" open>
+    <summary>🔢 Количество постов</summary>
+    <div class="section-body">
+      <label>Постов на дашборде:
+        <select
+          [(ngModel)]="settings.numberOfPosts"
+          (ngModelChange)="onNumberOfPostsChange($event)">
+          @for (n of numberOfPostsOptions; track n) {
+            <option [ngValue]="n">{{ n }} постов</option>
+          }
+        </select>
+      </label>
+      <p class="hint">
+        Используется для дашборда и во всех разделах, где настраиваются посты
+        (цены, частоты, реле, задержки, кнопки, камеры, услуги).
+      </p>
+    </div>
+  </details>
+  
   <!-- ===== MQTT ===== -->
   <details class="settings-section" open>
     <summary>📡 Настройки MQTT</summary>
