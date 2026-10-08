@@ -118,6 +118,14 @@
       @if (!reportLoading && !reportOperations.length) {
         <div class="empty">Операций нет</div>
       }
+	  @if (paymentDialogOpen) {
+  <app-payment-method-dialog
+    [amount]="paymentDialogAmount"
+    [title]="'Пополнение карты ' + paymentDialogCard"
+    (selected)="onPaymentSelected($event)"
+    (cancelled)="onPaymentCancelled()">
+  </app-payment-method-dialog>
+}
     </div>
     <div class="modal-footer">
       <button class="btn btn-secondary" (click)="closeReport()">Закрыть</button>
