@@ -30,7 +30,7 @@
       <thead>
         <tr>
           <th>Номер карты</th><th>ФИО</th><th>Телефон</th>
-          <th>Тип</th><th>Баланс</th><th>Пополнение</th><th>Действия</th>
+          <th>Тип</th><th>Баланс</th><th>Пополнение (аванс)</th><th>Действия</th>
         </tr>
       </thead>
       <tbody>
@@ -106,8 +106,8 @@
                     [class.badge-charge]="op.type === 'charge'"
                     [class.badge-refund]="op.type === 'refund'">
                     {{
-                      op.type === 'topup' ? 'Пополнение'
-                      : op.type === 'topup_from_post' ? 'С поста'
+                      op.type === 'topup' ? 'Аванс: пополнение'
+                      : op.type === 'topup_from_post' ? 'Аванс: с поста'
                       : op.type === 'charge' ? 'Списание'
                       : op.type === 'refund' ? 'Возврат'
                       : op.type
