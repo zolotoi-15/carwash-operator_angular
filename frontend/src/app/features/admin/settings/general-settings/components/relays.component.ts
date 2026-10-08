@@ -1,8 +1,10 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../core/services/admin.service';
+import { AdminService } from '../../../../../core/services/admin.service';
+import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
+import { Subject, takeUntil } from 'rxjs';
 
 @Component({
   selector: 'app-relays',
@@ -51,74 +53,71 @@ import { AdminService } from '../../../core/services/admin.service';
     .loading { text-align: center; color: #666; }
   `]
 })
-export class RelaysComponent implements OnInit {
+export class RelaysComponent implements OnInit, OnDestroy {
   form!: FormGroup;
   serviceKeys: string[] = [];
   relayNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
-  dimmerNumbers = [1, 2, 3, 4]; // 4 диммера
-  selectedPost: number = 1;
+  dimmerNumbers = [1, 2, 3, 4];
+  selectedPost = 1;
   postIds: number[] = [];
+  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder
-  ) { }
+    private fb: FormBuilder,
+    private settingsUpdate: SettingsUpdateService
+  ) {}
 
-  ngOnInit() {
-    this.admin.getSettings().subscribe(settings => {
-      const count = settings.numberOfPosts || 8;
+  ngOnInit(): void {
+    this.admin.getSettings().subscribe(s => {
+      const count = s.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
       this.loadPostSettings();
     });
+
+    this.settingsUpdate.settingsUpdated$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.loadPostSettings());
   }
 
-  loadPostSettings() {
-    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
-      const services = postSettings.services || [];
-      this.serviceKeys = services.map(s => s.name);
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
 
-      const currentMask = postSettings.relayMask || {};
-      const currentDimmer = postSettings.dimmerMask || {};
+  loadPostSettings(): void {
+    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
+      const services = ps.services || [];
+      this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
+
+      const currentMask = ps.relayMask || {};
+      const currentDimmer = ps.dimmerMask || {};
       const group: any = {};
       this.serviceKeys.forEach(name => {
         const mask = currentMask[name] || 0;
         const dimmer = currentDimmer[name] || 0;
         const controls: any = {};
-        for (let r = 1; r <= 8; r++) {
-          controls['relay' + r] = [!!(mask & (1 << (r - 1)))];
-        }
-        for (let d = 1; d <= 4; d++) {
-          controls['dimmer' + d] = [!!(dimmer & (1 << (d - 1)))];
-        }
+        for (let r = 1; r <= 8; r++) controls['relay' + r] = [!!(mask & (1 << (r - 1)))];
+        for (let d = 1; d <= 4; d++) controls['dimmer' + d] = [!!(dimmer & (1 << (d - 1)))];
         group[name] = this.fb.group(controls);
       });
       this.form = this.fb.group(group);
     });
   }
 
-  save() {
+  save(): void {
     const raw = this.form.value;
     const relayMask: any = {};
     const dimmerMask: any = {};
     this.serviceKeys.forEach(name => {
       const group = raw[name];
-      let mask = 0;
-      let dimmer = 0;
-      for (let r = 1; r <= 8; r++) {
-        if (group['relay' + r]) {
-          mask |= (1 << (r - 1));
-        }
-      }
-      for (let d = 1; d <= 4; d++) {
-        if (group['dimmer' + d]) {
-          dimmer |= (1 << (d - 1));
-        }
-      }
+      let mask = 0, dimmer = 0;
+      for (let r = 1; r <= 8; r++) if (group['relay' + r]) mask |= (1 << (r - 1));
+      for (let d = 1; d <= 4; d++) if (group['dimmer' + d]) dimmer |= (1 << (d - 1));
       relayMask[name] = mask;
       dimmerMask[name] = dimmer;
     });
-    this.admin.updatePostSettings(this.selectedPost, { relayMask, dimmerMask }).subscribe(() => {
-      alert('Настройки реле и диммеров для поста ' + this.selectedPost + ' сохранены');
-    });
+    this.admin.updatePostSettings(this.selectedPost, { relayMask, dimmerMask })
+      .subscribe(() => alert('Настройки реле и диммеров для поста ' + this.selectedPost + ' сохранены'));
   }
 }
