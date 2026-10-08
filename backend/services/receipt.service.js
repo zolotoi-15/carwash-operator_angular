@@ -1,10 +1,6 @@
 // backend/services/receipt.service.js
 const Receipt = require('../models/Receipt');
 
-/**
- * Контекст, который прокидывает server.js, чтобы не тянуть циклические зависимости.
- * server.js при старте вызывает initReceiptService({ Counter, Shift, broadcastShiftTotal, publishKkmStatus })
- */
 let ctx = {
   Counter: null,
   Shift: null,
@@ -30,9 +26,11 @@ async function getNextReceiptNumber() {
  * Создаёт чек в БД. Автоматически открывает смену при необходимости.
  *
  * @param {Object} p
- * @param {Number} p.postId            — 0 для пополнения карты, >0 для поста
- * @param {String} p.kind              — 'session' | 'topup_card' | 'topup_post'
+ * @param {Number} p.postId            — 0 для карты клиента, >0 для поста
+ * @param {String} p.kind              — 'session' | 'advance_card' | 'advance_post' | 'final' | ...
  * @param {String} p.operation         — 'sell' | 'topup' | ...
+ * @param {Boolean} p.isAdvance        — true для авансовых чеков
+ * @param {Number} [p.advanceReceiptNumber] — для финального чека: номер авансового
  * @param {Array}  p.items             — [{ name, seconds, cost, pricePerSecond, discount, discountPercent }]
  * @param {Number} p.totalCost
  * @param {Number} p.balanceAfter
@@ -73,6 +71,8 @@ async function createReceipt(p) {
     timestamp:     ts,
     operation:     p.operation || 'sell',
     kind:          p.kind || 'session',
+    isAdvance:     !!p.isAdvance,
+    advanceReceiptNumber: p.advanceReceiptNumber ?? null,
     items:         roundedItems,
     totalCost:     Math.round(totalCost * 100) / 100,
     balanceAfter:  Math.round((Number(p.balanceAfter) || 0) * 100) / 100,
@@ -81,6 +81,14 @@ async function createReceipt(p) {
     correctionInfo: p.correctionInfo || null,
     fiscalSent:    false,
   });
+
+  // Если это финальный чек и передан номер аванса — закрываем аванс ссылкой
+  if (p.kind === 'final' && p.advanceReceiptNumber) {
+    await Receipt.updateOne(
+      { receiptNumber: p.advanceReceiptNumber, isAdvance: true },
+      { $set: { finalReceiptNumber: receipt.receiptNumber } },
+    ).catch(() => {});
+  }
 
   try { await ctx.broadcastShiftTotal(); } catch { /* ignore */ }
 
