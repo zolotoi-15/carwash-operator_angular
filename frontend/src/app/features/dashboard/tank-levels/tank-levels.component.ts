@@ -11,71 +11,8 @@ interface Tank { key: string; label: string; level: number; }
   selector: 'app-tank-levels',
   standalone: true,
   imports: [CommonModule],
-  template: `
-    <div class="card">
-      <h3 class="card-title">🛢️ Уровни воды и химии</h3>
-      <div class="tanks">
-        @for (t of tanks; track t) {
-          <div class="tank">
-            <div class="tank-bar">
-              <div class="tank-fill" [style.height.%]="t.level"></div>
-            </div>
-            <div class="tank-percent">{{ t.level }}%</div>
-            <div class="tank-label">{{ t.label }}</div>
-          </div>
-        }
-      </div>
-    </div>
-  `,
-  styles: [`
-    :host {
-      display: flex;
-      width: 100%;
-      min-width: 0;
-      height: 100%;
-    }
-    .card {
-      flex: 1;
-      width: 100%;
-      height: 100%;
-      box-sizing: border-box;
-      background: #1e293b;
-      color: #e2e8f0;
-      border-radius: 10px;
-      padding: 16px 18px;
-      display: flex;
-      flex-direction: column;
-    }
-    .card-title { margin: 0 0 12px; font-size: 15px; color: #fff; font-weight: 600; }
-    .tanks {
-      flex: 1; width: 100%;
-      display: flex; justify-content: space-around;
-      align-items: flex-end; gap: 12px; min-height: 140px; padding-top: 8px;
-    }
-    .tank {
-      flex: 1; min-width: 0; height: 100%;
-      display: flex; flex-direction: column;
-      align-items: center; justify-content: flex-end;
-    }
-    .tank-bar {
-      width: 100%; max-width: 48px; flex: 1;
-      background: rgba(255,255,255,0.08);
-      border-radius: 6px; overflow: hidden;
-      display: flex; align-items: flex-end; margin-bottom: 6px;
-    }
-    .tank-fill {
-      width: 100%;
-      background: linear-gradient(to top, #38bdf8, #0ea5e9);
-      transition: height 0.3s ease;
-    }
-    .tank-percent { margin-top: 4px; font-size: 12px; font-weight: 600; color: #fff; line-height: 1; }
-    .tank-label { margin-top: 2px; font-size: 11px; color: #94a3b8; text-align: center; line-height: 1; }
-    @media (max-width: 520px) {
-      .tank-bar { max-width: 36px; }
-      .tank-percent { font-size: 11px; }
-      .tank-label { font-size: 10px; }
-    }
-  `]
+  templateUrl: './tank-levels.component.html',
+  styleUrls: ['./tank-levels.component.scss'],
 })
 export class TankLevelsComponent implements OnInit, OnDestroy {
   private realtime = inject(RealtimeService);
@@ -99,7 +36,7 @@ export class TankLevelsComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Обработка сообщений от RealtimeService
+  // Обработка сообщений RealtimeService
   // ============================================================
   private handleRealtime(msg: RealtimeMessage): void {
     // 1. Снапшот при подключении: settings.tankLevels
@@ -121,7 +58,7 @@ export class TankLevelsComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // 3. Совместимость: posts/<id>/status с полем data.tanks
+    // 3. Совместимость: posts/<id>/status с полем tanks
     if (/^posts\/\d+\/status$/.test(msg.topic)) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -130,7 +67,7 @@ export class TankLevelsComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // 4. Общая конфигурация system/config — тоже может нести tankLevels
+    // 4. system/config — тоже может нести tankLevels
     if (msg.topic === 'system/config') {
       try {
         const cfg = JSON.parse(msg.payload || '{}');
