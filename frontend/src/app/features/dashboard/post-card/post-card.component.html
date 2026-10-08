@@ -86,3 +86,12 @@
       (topUp)="handleTopUp($event)">
     </app-receipt-modal>
   }
+  @if (showPaymentDialog) {
+  <app-payment-method-dialog
+    [amount]="pendingTopUpAmount"
+    [title]="'Пополнение поста ' + postId"
+    (selected)="onPaymentSelected($event)"
+    (cancelled)="onPaymentCancelled()">
+  </app-payment-method-dialog>
+}
+  
