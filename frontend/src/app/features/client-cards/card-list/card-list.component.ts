@@ -1,3 +1,4 @@
+// frontend/src/app/features/client-cards/card-list/card-list.component.ts
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -165,7 +166,7 @@ export class CardListComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Пополнение с диалогом выбора способа оплаты
+  // Пополнение карты — аванс, с диалогом выбора способа оплаты
   // ============================================================
   topUp(card: ClientCard): void {
     const amount = this.topUpAmount[card.card];
@@ -190,7 +191,7 @@ export class CardListComponent implements OnInit, OnDestroy {
         const label = method === 'cash' ? 'нал.' : 'безнал.';
         const receipt = (updated as any)?.receiptNumber;
         this.notify.success(
-          `Карта ${pending.card.card} пополнена на ${pending.amount} ₽ (${label})` +
+          `Карта ${pending.card.card}: аванс +${pending.amount} ₽ (${label})` +
           (receipt ? `, чек №${receipt}` : ''),
         );
         this.topUpAmount[pending.card.card] = 0;
