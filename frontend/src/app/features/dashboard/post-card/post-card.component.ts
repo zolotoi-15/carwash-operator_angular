@@ -18,6 +18,13 @@ interface CardScanFlash {
   timestamp: number;
 }
 
+/** ★ Тип активной услуги, приходящей из DashboardComponent */
+export interface ActiveService {
+  name: string;
+  price: number;
+  free_time_sec: number;
+}
+
 @Component({
   selector: 'app-post-card',
   standalone: true,
@@ -32,6 +39,9 @@ interface CardScanFlash {
 })
 export class PostCardComponent implements OnInit, OnDestroy {
   @Input() postId!: number;
+
+  /** ★ Активные услуги, приходят из DashboardComponent (зависят от блока «Услуги») */
+  @Input() activeServices: ActiveService[] = [];
 
   private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
@@ -48,7 +58,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
   sum = 0;
   lastSeen: number | null = null;
 
-  /** Номер текущего авансового чека по этому посту (приходит из posts/<id>/receipt_number) */
+  /** Номер текущего авансового чека по этому посту */
   currentAdvanceReceiptNumber: number | null = null;
 
   // ============================================================
@@ -57,7 +67,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
   topUpAmount: number | null = null;
   showTopUpModal = false;
 
-  /** Диалог выбора способа оплаты */
   showPaymentDialog = false;
   pendingTopUpAmount = 0;
 
@@ -68,10 +77,10 @@ export class PostCardComponent implements OnInit, OnDestroy {
   cardFlashVisible = false;
   private flashTimeout: any = null;
 
-  readonly functions = [
-    'Вода', 'Пена', 'Воск', 'Тефлон', 'Антимошка',
-    'Шампунь', 'Турбо', 'Пылесос', 'Воздух', 'Пауза',
-  ];
+  /** ★ Кнопки программ теперь вычисляются из activeServices */
+  get functions(): string[] {
+    return (this.activeServices || []).map(s => s.name);
+  }
 
   private subs = new Subscription();
 
@@ -112,7 +121,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (msg.type !== 'mqtt') return;
     const topic = msg.topic || '';
 
-    // posts/<id>/lwt
     if (topic === `posts/${postIdStr}/lwt`) {
       const online = (msg.payload || '').trim().toLowerCase() === 'online';
       this.online = online;
@@ -120,7 +128,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/status
     if (topic === `posts/${postIdStr}/status`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -129,7 +136,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/status_relay
     if (topic === `posts/${postIdStr}/status_relay`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -143,7 +149,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/clientcardbalance
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -153,7 +158,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // ★ posts/<id>/receipt_number — номер авансового чека
     if (topic === `posts/${postIdStr}/receipt_number`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
