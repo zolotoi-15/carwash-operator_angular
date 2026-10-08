@@ -32,6 +32,13 @@
       <span>🧼 Активная функция:</span>
       <span class="value">{{ activeFunction || '-' }}</span>
     </div>
+    <!-- ★ Номер текущего авансового чека -->
+    @if (currentAdvanceReceiptNumber) {
+      <div class="info-row">
+        <span>🧾 Аванс №:</span>
+        <span class="value mono">{{ currentAdvanceReceiptNumber }}</span>
+      </div>
+    }
   </div>
 
   <!-- Кнопки программ -->
@@ -78,7 +85,7 @@
 
   </div>
 
-  <!-- Модалка пополнения с чеками — вне .post-card, чтобы не обрезалась overflow -->
+  <!-- Модалка пополнения с чеками -->
   @if (showTopUpModal) {
     <app-receipt-modal
       [postId]="postId"
@@ -86,12 +93,13 @@
       (topUp)="handleTopUp($event)">
     </app-receipt-modal>
   }
+
+  <!-- ★ Диалог выбора способа оплаты — вне .post-card, чтобы не обрезался overflow -->
   @if (showPaymentDialog) {
-  <app-payment-method-dialog
-    [amount]="pendingTopUpAmount"
-    [title]="'Пополнение поста ' + postId"
-    (selected)="onPaymentSelected($event)"
-    (cancelled)="onPaymentCancelled()">
-  </app-payment-method-dialog>
-}
-  
+    <app-payment-method-dialog
+      [amount]="pendingTopUpAmount"
+      [title]="'Пополнение поста ' + postId"
+      (selected)="onPaymentSelected($event)"
+      (cancelled)="onPaymentCancelled()">
+    </app-payment-method-dialog>
+  }
