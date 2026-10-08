@@ -17,7 +17,6 @@ const Receipt = require('./models/Receipt');
 const { initReceiptService, createReceipt } = require('./services/receipt.service');
 require('dotenv').config();
 
-// URL драйвера ККТ (HTTP-bridge на :5001)
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
 // ============================================================
@@ -190,6 +189,8 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/clientcard');
     mqttClient.subscribe('posts/+/receipt');
     mqttClient.subscribe('posts/+/lwt');
+    // ★ Подписка на номер авансового чека от поста (если прошивка его публикует)
+    mqttClient.subscribe('posts/+/receipt_number');
     if (settings.posts) publishConfigToAllPosts();
   });
 
@@ -216,18 +217,20 @@ function connectMqtt(settings) {
         const totalCost = items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
 
         await createReceipt({
-          postId:         receiptData.postId || 0,
-          kind:           receiptData.kind || 'session',
-          operation:      receiptData.operation || 'sell',
+          postId:        receiptData.postId || 0,
+          kind:          receiptData.kind || 'session',
+          operation:     receiptData.operation || 'sell',
+          isAdvance:     !!receiptData.isAdvance,
+          advanceReceiptNumber: receiptData.advanceReceiptNumber ?? null,
           items,
-          totalCost:      Math.round(totalCost * 10) / 10,
-          balanceAfter:   receiptData.balance || 0,
-          paymentMethod:  receiptData.paymentMethod || null,
-          discountTotal:  receiptData.discountTotal || 0,
+          totalCost:     Math.round(totalCost * 10) / 10,
+          balanceAfter:  receiptData.balance || 0,
+          paymentMethod: receiptData.paymentMethod || null,
+          discountTotal: receiptData.discountTotal || 0,
           correctionInfo: receiptData.correctionInfo || null,
-          timestamp:      receiptData.timestamp,
+          timestamp:     receiptData.timestamp,
         });
-        console.log(`✅ Чек сохранён (postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'})`);
+        console.log(`✅ Чек сохранён (postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'}, adv=${receiptData.advanceReceiptNumber || '—'})`);
       } catch (err) {
         console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
       }
@@ -468,8 +471,6 @@ const userSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true }
 }, { timestamps: true });
 
-// ⚠️ receiptSchema удалена — используется ./models/Receipt.js
-
 const counterSchema = new mongoose.Schema({ _id: String, seq: { type: Number, default: 0 } });
 
 const shiftSchema = new mongoose.Schema({
@@ -502,13 +503,11 @@ const settingSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', userSchema);
-// ⚠️ Receipt импортируется из ./models/Receipt.js
 const Counter = mongoose.model('Counter', counterSchema);
 const Shift = mongoose.model('Shift', shiftSchema);
 const FiscalRegistration = mongoose.model('FiscalRegistration', fiscalRegistrationSchema);
 const Setting = mongoose.model('Setting', settingSchema);
 
-// Инициализация receipt.service — прокидываем зависимости
 initReceiptService({
   Counter,
   Shift,
@@ -582,7 +581,6 @@ function publishConfigToAllPosts() {
   console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
 
-// ---------- ★ ОПРОС ДРАЙВЕРА ККТ ----------
 async function fetchKkmStatusFromDriver() {
   try {
     const r = await axios.get(`${KKM_DRIVER_URL}/status`, { timeout: 2000 });
@@ -612,24 +610,16 @@ async function publishKkmStatus() {
       settings.kkmManual.cashierName = driverData.cashierName;
       changed = true;
     }
-    if (changed) {
-      saveSettings(settings).catch(() => {});
-    }
+    if (changed) saveSettings(settings).catch(() => {});
   }
 
   const payload = JSON.stringify({
     ready:              driverData ? !!driverData.ready       : true,
     connected:          driverData ? !!driverData.connected   : false,
     paper:              driverData ? !!driverData.paper       : true,
-    kkNumber:           driverData?.kkNumber
-                          || settings.kkmManual.kkNumber
-                          || '',
-    shiftNumber:        driverData?.shiftNumber
-                          ?? settings.kkmManual.fiscalShiftNumber
-                          ?? 0,
-    cashier:            driverData?.cashierName
-                          || settings.kkmManual.cashierName
-                          || 'Оператор',
+    kkNumber:           driverData?.kkNumber || settings.kkmManual.kkNumber || '',
+    shiftNumber:        driverData?.shiftNumber ?? settings.kkmManual.fiscalShiftNumber ?? 0,
+    cashier:            driverData?.cashierName || settings.kkmManual.cashierName || 'Оператор',
     shiftOpened:        !!shift,
     shiftOpenedAt:      shift?.openedAt || null,
     shiftAutoCloseAt:   shift?.autoCloseAt || null,
@@ -910,6 +900,11 @@ function resetPost(postId) {
   publishStatus(postId); publishRelayStatus(postId);
 }
 
+/**
+ * ★ Финальный чек по сессии.
+ * Ищет последний авансовый чек по этому посту и передаёт его номер
+ * в kkm/print как advanceReceiptNumber.
+ */
 function printReceipt(postId) {
   const state = getPostState(postId);
   const items = []; let totalCost = 0;
@@ -924,14 +919,42 @@ function printReceipt(postId) {
     }
   }
   if (!items.length || totalCost < 0.01) return;
-  mqttClient.publish('kkm/print', JSON.stringify({
-    postId: parseInt(postId), timestamp: new Date().toISOString(),
-    operation: 'Чек по сессии', kind: 'session',
-    items, balance: Math.round(state.balance * 100) / 100
-  }), { qos: 1 });
-  state.servicesUsage = {};
-  state.receiptCount++;
-  publishStatus(postId);
+
+  const balanceAfter = Math.round(state.balance * 100) / 100;
+
+  Receipt.findOne({ postId: Number(postId), isAdvance: true })
+    .sort({ timestamp: -1 })
+    .lean()
+    .then(advance => {
+      const advanceReceiptNumber = advance?.receiptNumber || null;
+      mqttClient.publish('kkm/print', JSON.stringify({
+        postId: parseInt(postId),
+        timestamp: new Date().toISOString(),
+        operation: 'Финальный чек по сессии',
+        kind: 'final',
+        isAdvance: false,
+        advanceReceiptNumber,
+        items,
+        balance: balanceAfter,
+      }), { qos: 1 });
+      state.servicesUsage = {};
+      state.receiptCount++;
+      publishStatus(postId);
+    })
+    .catch(err => {
+      console.error(`[Post ${postId}] printReceipt: ${err.message}`);
+      mqttClient.publish('kkm/print', JSON.stringify({
+        postId: parseInt(postId),
+        timestamp: new Date().toISOString(),
+        operation: 'Финальный чек по сессии',
+        kind: 'final',
+        items,
+        balance: balanceAfter,
+      }), { qos: 1 });
+      state.servicesUsage = {};
+      state.receiptCount++;
+      publishStatus(postId);
+    });
 }
 
 const programNamesRu = {
@@ -961,7 +984,7 @@ async function getNextShiftNumber() {
 }
 
 // ============================================================
-// Смена: авто-открытие / авто-закрытие
+// Смена
 // ============================================================
 function getShiftAutoCloseAt(openedAt) {
   const dt = new Date(openedAt);
@@ -1091,7 +1114,6 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
   }
 };
 
-// Прокидываем createReceipt и addBalance в routes/cards.js
 app.locals.createReceipt = createReceipt;
 app.locals.addBalance = (postId, amount) => addBalance(String(postId), amount);
 
@@ -1329,7 +1351,7 @@ app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   }
 });
 
-// ---------- Пополнение поста с чеком ----------
+// ---------- Пополнение поста (АВАНС) ----------
 // POST /api/posts/:postId/topup { amount, paymentMethod }
 app.post('/api/posts/:postId/topup', auth, async (req, res) => {
   const postId = String(req.params.postId);
@@ -1349,21 +1371,39 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       return res.status(404).json({ error: `Пост ${postId} не найден` });
     }
 
-    // Обновляем локальное состояние (и ESP32 получит команду ниже)
+    // Обновляем локальное состояние
     addBalance(postId, amount);
     const state = getPostState(postId);
 
+    // ★ Создаём АВАНСОВЫЙ чек
     const receipt = await createReceipt({
       postId:        Number(postId),
-      kind:          'topup_post',
+      kind:          'advance_post',
       operation:     'topup',
-      items:         [{ name: 'Пополнение поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
+      isAdvance:     true,
+      items:         [{ name: 'Аванс: пополнение поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
       totalCost:     amount,
       balanceAfter:  state.balance,
       paymentMethod,
     });
 
+    // ★ Публикуем номер авансового чека в топик поста,
+    //   чтобы ESP32 знал, к какому авансу привязывать финальный чек
     if (mqttClient) {
+      mqttClient.publish(
+        `posts/${postId}/receipt_number`,
+        JSON.stringify({
+          receiptNumber: receipt.receiptNumber,
+          kind: 'advance_post',
+          isAdvance: true,
+          amount,
+          paymentMethod,
+          balanceAfter: state.balance,
+          timestamp: new Date().toISOString(),
+        }),
+        { qos: 1, retain: true },
+      );
+
       mqttClient.publish(
         `posts/${postId}/command`,
         JSON.stringify({ command: `add_balance ${amount}` }),
@@ -1378,6 +1418,8 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       balance: state.balance,
       paymentMethod,
       receiptNumber: receipt.receiptNumber,
+      kind: 'advance_post',
+      isAdvance: true,
     });
   } catch (err) {
     console.error('Ошибка пополнения поста:', err.message);
@@ -1826,6 +1868,8 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
       postId,
       paymentMethod: pm,
       kind:          r.kind || 'session',
+      isAdvance:     !!r.isAdvance,
+      advanceReceiptNumber: r.advanceReceiptNumber ?? null,
       total:         Math.round(totalCost * 100) / 100,
       items,
     };
@@ -1880,6 +1924,8 @@ app.post('/api/receipts', async (req, res) => {
       postId:        d.postId,
       kind:          d.kind || 'session',
       operation:     d.operation || 'sell',
+      isAdvance:     !!d.isAdvance,
+      advanceReceiptNumber: d.advanceReceiptNumber ?? null,
       items:         d.items,
       totalCost:     d.totalCost,
       balanceAfter:  d.balance,
