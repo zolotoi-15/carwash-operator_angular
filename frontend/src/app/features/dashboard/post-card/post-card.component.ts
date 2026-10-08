@@ -48,6 +48,9 @@ export class PostCardComponent implements OnInit, OnDestroy {
   sum = 0;
   lastSeen: number | null = null;
 
+  /** Номер текущего авансового чека по этому посту (приходит из posts/<id>/receipt_number) */
+  currentAdvanceReceiptNumber: number | null = null;
+
   // ============================================================
   // Пополнение
   // ============================================================
@@ -109,6 +112,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (msg.type !== 'mqtt') return;
     const topic = msg.topic || '';
 
+    // posts/<id>/lwt
     if (topic === `posts/${postIdStr}/lwt`) {
       const online = (msg.payload || '').trim().toLowerCase() === 'online';
       this.online = online;
@@ -116,6 +120,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // posts/<id>/status
     if (topic === `posts/${postIdStr}/status`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -124,6 +129,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // posts/<id>/status_relay
     if (topic === `posts/${postIdStr}/status_relay`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -137,11 +143,26 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // posts/<id>/clientcardbalance
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
         if (typeof data.balance === 'number') this.balance = data.balance;
         if (data.card) this.showCardFlash(String(data.card));
+      } catch { /* ignore */ }
+      return;
+    }
+
+    // ★ posts/<id>/receipt_number — номер авансового чека
+    if (topic === `posts/${postIdStr}/receipt_number`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        if (typeof data.receiptNumber === 'number') {
+          this.currentAdvanceReceiptNumber = data.receiptNumber;
+        }
+        if (typeof data.balanceAfter === 'number') {
+          this.balance = data.balanceAfter;
+        }
       } catch { /* ignore */ }
       return;
     }
@@ -199,7 +220,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
   closeTopUpModal(): void { this.showTopUpModal = false; }
 
   // ============================================================
-  // Пополнение поста — через диалог оплаты + POST /api/posts/:id/topup
+  // Пополнение поста — аванс
   // ============================================================
   quickTopUp(): void {
     const amount = Number(this.topUpAmount) || 0;
@@ -208,7 +229,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
     this.showPaymentDialog = true;
   }
 
-  /** Вызывается из app-receipt-modal */
   handleTopUp({ postId, amount }: { postId: number; amount: number }): void {
     if (amount <= 0) return;
     this.pendingTopUpAmount = amount;
@@ -249,9 +269,14 @@ export class PostCardComponent implements OnInit, OnDestroy {
       })
       .then((data) => {
         if (typeof data.balance === 'number') this.balance = data.balance;
+        if (typeof data.receiptNumber === 'number') {
+          this.currentAdvanceReceiptNumber = data.receiptNumber;
+        }
         const label = paymentMethod === 'cash' ? 'нал.' : 'безнал.';
-        const receipt = data.receiptNumber ? `, чек №${data.receiptNumber}` : '';
-        this.notify.success(`Пост ${postId}: +${amount} ₽ (${label})${receipt}`);
+        const receipt = data.receiptNumber ? `, авансовый чек №${data.receiptNumber}` : '';
+        this.notify.success(
+          `Пост ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
+        );
       })
       .catch((err) => {
         this.notify.error(`Пополнение не выполнено: ${err.message}`);
