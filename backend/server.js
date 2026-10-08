@@ -564,12 +564,23 @@ function buildServicesPayloadForPost(postId) {
   }));
 }
 
+// ★ ОБНОВЛЕНО: добавлены отладочные логи
 function publishConfigToAllPosts() {
-  if (!mqttClient) return;
+  if (!mqttClient) {
+    console.warn('❌ publishConfigToAllPosts: mqttClient НЕ подключён');
+    return;
+  }
+  if (!mqttClient.connected) {
+    console.warn('❌ publishConfigToAllPosts: mqttClient есть, но не connected');
+    return;
+  }
   const n = settings.numberOfPosts || 8;
+  console.log(`📤 publishConfigToAllPosts: публикуем в ${n} постов`);
   for (let i = 1; i <= n; i++) {
-    mqttClient.publish(`posts/${i}/config`,
-      JSON.stringify({ services: buildServicesPayloadForPost(i) }), { qos: 1, retain: true });
+    const payload = buildServicesPayloadForPost(i);
+    const json = JSON.stringify({ services: payload });
+    console.log(`   posts/${i}/config → ${json.slice(0, 200)}${json.length > 200 ? '…' : ''}`);
+    mqttClient.publish(`posts/${i}/config`, json, { qos: 1, retain: true });
   }
   console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
@@ -713,7 +724,7 @@ async function loadSettings() {
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
-          // ★ ИСПРАВЛЕНО
+          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           settings.posts[i].services = settings.posts[i].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
@@ -764,7 +775,7 @@ function findPostWithCard(cardNumber, excludePostId = null) {
 function findService(postId, name) {
   const p = settings.posts?.[postId];
   if (p && p.services) {
-    // ★ ИСПРАВЛЕНО
+    // ★ ИСПРАВЛЕНО: было s.enable !== false
     return p.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enabled !== false);
   }
   if (settings.services) {
@@ -1282,6 +1293,7 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           dimmerMask: newSettings.dimmerMask ? { ...newSettings.dimmerMask } : {},
           buttonInputs: newSettings.buttonInputs ? { ...newSettings.buttonInputs } : {},
           relayDelays: newSettings.relayDelays ? { ...newSettings.relayDelays } : {},
+          // ★ ИСПРАВЛЕНО
           services: services.map(s => ({ ...s, enabled: s.enabled !== false }))
         };
       }
@@ -1296,6 +1308,7 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
         if (!settings.posts[postId]) settings.posts[postId] = {};
         settings.posts[postId] = { ...settings.posts[postId], ...postData };
         if (settings.posts[postId].services) {
+          // ★ ИСПРАВЛЕНО
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
@@ -1313,8 +1326,14 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
 });
 
 app.post('/api/publish-config', auth, adminOnly, (_req, res) => {
-  try { publishConfigToAllPosts(); res.json({ ok: true }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    console.log('📥 POST /api/publish-config получен');
+    publishConfigToAllPosts();
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('❌ /api/publish-config:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ---------- Команды постов ----------
