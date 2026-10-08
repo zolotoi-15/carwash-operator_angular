@@ -1,0 +1,15 @@
+<div class="card">
+  <h3 class="card-title">🛢️ Уровни воды и химии</h3>
+
+  <div class="tanks">
+    @for (t of tanks; track t.key) {
+      <div class="tank">
+        <div class="tank-bar">
+          <div class="tank-fill" [style.height.%]="t.level"></div>
+        </div>
+        <div class="tank-percent">{{ t.level }}%</div>
+        <div class="tank-label">{{ t.label }}</div>
+      </div>
+    }
+  </div>
+</div>
