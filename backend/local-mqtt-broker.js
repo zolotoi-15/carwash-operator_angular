@@ -17,12 +17,13 @@ const SUBSCRIBE_TOPICS = [
 
 const FORWARD_UP_TOPICS = [
   /\/command$/,              // posts/N/command — управление постом
+  /\/config$/,               // ★ posts/N/config — конфигурация услуг
   /^kkm\/print$/,            // печать чека
   /^card-reader\/command$/,  // команда сканеру
-  /\/clientcardbalance$/,    // ← NEW: баланс карты для терминала
-  /\/message$/,              // ← NEW: сообщение на экран поста
-  /\/status_relay$/,         // ← NEW: состояние реле
-  /^system\/config$/         // ← NEW: общая конфигурация
+  /\/clientcardbalance$/,    // баланс карты для терминала
+  /\/message$/,              // сообщение на экран поста
+  /\/status_relay$/,         // состояние реле
+  /^system\/config$/         // общая конфигурация
 ];
 
 const DEFAULTS = {
