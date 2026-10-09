@@ -1,7 +1,7 @@
 <div class="settings-page">
   <h2>⚙️ Панель администратора</h2>
 
-<!-- ===== Количество постов ===== -->
+  <!-- ===== Количество постов ===== -->
   <details class="settings-section" open>
     <summary>🔢 Количество постов</summary>
     <div class="section-body">
@@ -20,7 +20,7 @@
       </p>
     </div>
   </details>
-  
+
   <!-- ===== MQTT ===== -->
   <details class="settings-section" open>
     <summary>📡 Настройки MQTT</summary>
@@ -162,10 +162,14 @@
           <div class="service-row">
             <h4>{{ svc.name }}</h4>
             <label>On:
-              <input type="number" [(ngModel)]="current.relayDelays[svc.name].onDelay" />
+              <input type="number"
+                [ngModel]="getDelay(current, svc.name, 'onDelay')"
+                (ngModelChange)="setDelay(current, svc.name, 'onDelay', $event)" />
             </label>
             <label>Off:
-              <input type="number" [(ngModel)]="current.relayDelays[svc.name].offDelay" />
+              <input type="number"
+                [ngModel]="getDelay(current, svc.name, 'offDelay')"
+                (ngModelChange)="setDelay(current, svc.name, 'offDelay', $event)" />
             </label>
           </div>
         }

@@ -17,9 +17,11 @@ export interface ServiceConfig {
 export interface PostSettings {
   postId: number;
   services: ServiceConfig[];
-  relayMask: Record<string, boolean>;
+  /** Маска реле. Может быть числом (битовая маска) или boolean (для отдельных бит). */
+  relayMask: Record<string, number | boolean>;
   vfdFrequencies: Record<string, number>;
-  dimmerMask: Record<string, boolean>;
+  /** Маска диммеров. Может быть числом или boolean. */
+  dimmerMask: Record<string, number | boolean>;
   buttonInputs: Record<string, number>;
   relayDelays: Record<string, { onDelay: number; offDelay: number }>;
   cameras: Record<string, string>;
@@ -142,14 +144,30 @@ export class AdminService {
         enabled: svc.enabled !== false,
       }));
 
+      // ★ Нормализация карт: у каждой услуги должна быть запись во всех картах.
+      // Это защищает шаблон от ошибок вида "Cannot read properties of undefined".
+      const relayMask      = pd.relayMask      || {};
+      const vfdFrequencies = pd.vfdFrequencies || {};
+      const dimmerMask     = pd.dimmerMask     || {};
+      const buttonInputs   = pd.buttonInputs   || {};
+      const relayDelays    = pd.relayDelays    || {};
+
+      for (const svc of services) {
+        if (relayMask[svc.name]      === undefined) relayMask[svc.name]      = 0;
+        if (vfdFrequencies[svc.name] === undefined) vfdFrequencies[svc.name] = 40;
+        if (dimmerMask[svc.name]     === undefined) dimmerMask[svc.name]     = 0;
+        if (buttonInputs[svc.name]   === undefined) buttonInputs[svc.name]   = 0;
+        if (relayDelays[svc.name]    === undefined) relayDelays[svc.name]    = { onDelay: 100, offDelay: 200 };
+      }
+
       posts.push({
         postId,
         services,
-        relayMask: pd.relayMask || {},
-        vfdFrequencies: pd.vfdFrequencies || {},
-        dimmerMask: pd.dimmerMask || {},
-        buttonInputs: pd.buttonInputs || {},
-        relayDelays: pd.relayDelays || {},
+        relayMask,
+        vfdFrequencies,
+        dimmerMask,
+        buttonInputs,
+        relayDelays,
         cameras: pd.cameras || {},
       });
     }
@@ -193,21 +211,64 @@ export class AdminService {
 
   // ------- UI → server -------
 
+  /**
+   * ★ Пересчитывает числовые маски реле/диммеров из галочек вида "Имя_1", "Имя_2", …
+   *   Это нужно, потому что UI отображает каждый бит отдельным чекбоксом,
+   *   а на бэкенд (и в MQTT posts/N/config) должна уходить итоговая числовая маска.
+   */
+  private rebuildMasks(post: PostSettings): void {
+    const relayMask  = post.relayMask  || (post.relayMask  = {});
+    const dimmerMask = post.dimmerMask || (post.dimmerMask = {});
+
+    for (const svc of post.services) {
+      // Реле: 8 бит
+      let relay = 0;
+      let hasRelayBit = false;
+      for (let r = 1; r <= 8; r++) {
+        const key = `${svc.name}_${r}`;
+        const v = relayMask[key];
+        if (v === true)  { relay |= (1 << (r - 1)); hasRelayBit = true; }
+        if (v === false) { hasRelayBit = true; }
+      }
+      if (hasRelayBit) {
+        relayMask[svc.name] = relay;
+      }
+
+      // Диммеры: 4 бита
+      let dimmer = 0;
+      let hasDimmerBit = false;
+      for (let d = 1; d <= 4; d++) {
+        const key = `${svc.name}_${d}`;
+        const v = dimmerMask[key];
+        if (v === true)  { dimmer |= (1 << (d - 1)); hasDimmerBit = true; }
+        if (v === false) { hasDimmerBit = true; }
+      }
+      if (hasDimmerBit) {
+        dimmerMask[svc.name] = dimmer;
+      }
+    }
+  }
+
   private toServer(settings: GeneralSettings): any {
     const postsObj: any = {};
+
     settings.posts.forEach(p => {
+      // ★ Пересчитываем числовые маски из галочек ПЕРЕД сериализацией
+      this.rebuildMasks(p);
+
       const prices: any = {};
       p.services.forEach(svc => {
         prices[svc.name] = svc.price;
       });
+
       postsObj[p.postId] = {
         prices,
-        relayMask: p.relayMask,
+        relayMask:      p.relayMask,
         vfdFrequencies: p.vfdFrequencies,
-        dimmerMask: p.dimmerMask,
-        buttonInputs: p.buttonInputs,
-        relayDelays: p.relayDelays,
-        cameras: p.cameras,
+        dimmerMask:     p.dimmerMask,
+        buttonInputs:   p.buttonInputs,
+        relayDelays:    p.relayDelays,
+        cameras:        p.cameras,
         services: p.services.map(s => ({
           name: s.name,
           price: s.price,
