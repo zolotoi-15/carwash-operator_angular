@@ -219,7 +219,7 @@ export class LocalPostService {
   }
 
   // ---- Баланс ----
-  addBalance(postId: string, amount: number) {
+  /*addBalance(postId: string, amount: number) {
     if (!this.isPostOffline(postId)) {
       console.warn(`❌ Пост ${postId}: ESP32 online — пополнение запрещено`);
       return;
@@ -230,7 +230,7 @@ export class LocalPostService {
     this.emitUpdate(postId);
     this.publishRelayStatus(postId);
     this.publishState(postId);
-  }
+  }*/
 
   // ---- Запуск программы ----
   startProgram(postId: string, programName: string) {
