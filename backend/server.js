@@ -542,14 +542,31 @@ let settings = {
 // ============================================================
 function buildServicesPayloadForPost(postId) {
   const p = settings.posts?.[postId] || {};
-  // ★ Только активные услуги
-  const services = (p.services || []).filter(svc => svc.enabled !== false);
   const prices = p.prices || {};
   const relayMask = p.relayMask || {};
   const vfd = p.vfdFrequencies || {};
   const dimmer = p.dimmerMask || {};
   const buttons = p.buttonInputs || {};
   const delays = p.relayDelays || {};
+
+  // ★ Список услуг: берём p.services; если пуст — восстанавливаем из карт
+  let services = p.services || [];
+
+  if (!services.length) {
+    const names = new Set([
+      ...Object.keys(prices),
+      ...Object.keys(relayMask).filter(k => !k.includes('_')),
+      ...Object.keys(buttons).filter(k => !k.includes('_')),
+    ]);
+    services = [...names].map(name => ({
+      name,
+      price: prices[name] ?? 0,
+      free_time_sec: 0,
+      enabled: true,
+    }));
+  }
+
+  // ★ ФИЛЬТР УБРАН — уходят ВСЕ услуги
   return services.map(svc => ({
     name: svc.name,
     price: prices[svc.name] ?? svc.price ?? 0,
@@ -560,10 +577,10 @@ function buildServicesPayloadForPost(postId) {
     onDelay: delays[svc.name]?.onDelay ?? 100,
     offDelay: delays[svc.name]?.offDelay ?? 200,
     buttonInput: buttons[svc.name] ?? 0,
-    enabled: true,
+    // ★ enabled: true оставляем
+    enabled: svc.enabled !== false,
   }));
 }
-
 // ★ ОБНОВЛЕНО: добавлены отладочные логи
 function publishConfigToAllPosts() {
   if (!mqttClient) {
@@ -578,9 +595,10 @@ function publishConfigToAllPosts() {
   console.log(`📤 publishConfigToAllPosts: публикуем в ${n} постов`);
   for (let i = 1; i <= n; i++) {
     const payload = buildServicesPayloadForPost(i);
-    const json = JSON.stringify({ services: payload });
-    console.log(`   posts/${i}/config → ${json.slice(0, 200)}${json.length > 200 ? '…' : ''}`);
-    mqttClient.publish(`posts/${i}/config`, json, { qos: 1, retain: true });
+    const names = payload.map(s => s.name).join(', ');
+    console.log(`   posts/${i}/config → ${payload.length} услуг: ${names}`);
+    mqttClient.publish(`posts/${i}/config`,
+      JSON.stringify({ services: payload }), { qos: 1, retain: true });
   }
   console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
@@ -692,6 +710,8 @@ async function loadSettings() {
       console.log('Настройки созданы в БД');
     } else {
       settings = doc.value;
+	  console.log('[loadSettings] posts[1].services:',
+  JSON.stringify(settings.posts?.['1']?.services?.map(s => ({ n: s.name, e: s.enabled }))));
       if (!settings.posts) {
         const n = settings.numberOfPosts || 8;
         const posts = {};
@@ -726,8 +746,8 @@ async function loadSettings() {
           }
           // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           settings.posts[i].services = settings.posts[i].services.map(s => ({
-            ...s, enabled: s.enabled !== false
-          }));
+  ...s, enabled: s.enabled !== false
+}));
         }
         await saveSettings(settings);
       }
