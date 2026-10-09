@@ -1397,7 +1397,7 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       return res.status(404).json({ error: `Пост ${postId} не найден` });
     }
 
-   // addBalance(postId, amount);
+    addBalance(postId, amount);
     const state = getPostState(postId);
 
     const receipt = await createReceipt({
