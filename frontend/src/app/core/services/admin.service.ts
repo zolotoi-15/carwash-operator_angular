@@ -145,7 +145,6 @@ export class AdminService {
       }));
 
       // ★ Нормализация карт: у каждой услуги должна быть запись во всех картах.
-      // Это защищает шаблон от ошибок вида "Cannot read properties of undefined".
       const relayMask      = pd.relayMask      || {};
       const vfdFrequencies = pd.vfdFrequencies || {};
       const dimmerMask     = pd.dimmerMask     || {};
@@ -213,8 +212,6 @@ export class AdminService {
 
   /**
    * ★ Пересчитывает числовые маски реле/диммеров из галочек вида "Имя_1", "Имя_2", …
-   *   Это нужно, потому что UI отображает каждый бит отдельным чекбоксом,
-   *   а на бэкенд (и в MQTT posts/N/config) должна уходить итоговая числовая маска.
    */
   private rebuildMasks(post: PostSettings): void {
     const relayMask  = post.relayMask  || (post.relayMask  = {});
@@ -273,6 +270,7 @@ export class AdminService {
           name: s.name,
           price: s.price,
           free_time_sec: s.free_time_sec ?? 0,
+          // ★ enabled: true оставляем как есть (по умолчанию true)
           enabled: s.enabled !== false,
         })),
       };
