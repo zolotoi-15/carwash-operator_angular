@@ -71,6 +71,7 @@
           "builder": "@angular/build:dev-server",
           "options": {
             "buildTarget": "carwash-operator-angular:build",
+			
             "proxyConfig": "proxy.conf.json"
           },
           "configurations": {
