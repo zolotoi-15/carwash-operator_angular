@@ -413,7 +413,7 @@ export class LocalPostService {
         totalCash: totalCash,
         cashierName: 'Оператор (локально)',
         receiptNumber: Date.now() % 1000000,
-        operation: 'Автоматический чек',
+        operation: 'Финальный чек (локальный)',
         timestamp: new Date(),
         balance: state.balance,
       };
@@ -425,7 +425,7 @@ export class LocalPostService {
         totalCash: totalCash,
         items: localItems,
         timestamp: new Date().toISOString(),
-        operation: 'Автоматический чек (локальный)',
+        operation: 'Финальный чек (локальный)',
       });
     }
 
@@ -533,12 +533,11 @@ export class LocalPostService {
           );
           this.emitUpdate(postId);
         }
+        // ★ Баланс обнулен - завершаем программу и печатаем финальный чек
         this.stopProgram(postId, true);
       }
     }, this.TICK_INTERVAL_MS);
   }
-
-
 
   private publishRelayStatus(postId: string) {
     if (!this.isPostOffline(postId)) return;
