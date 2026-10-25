@@ -161,9 +161,12 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (topic === `posts/${postIdStr}/receipt_number`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
-        if (typeof data.receiptNumber === 'number') {
-          this.currentAdvanceReceiptNumber = data.receiptNumber;
+        
+        // ⭐ ИСПРАВЛЕНИЕ: Разрешаем принимать null или 0, чтобы сбрасывать номер
+        if (data.receiptNumber !== undefined) {
+          this.currentAdvanceReceiptNumber = data.receiptNumber ? Number(data.receiptNumber) : null;
         }
+        
         if (typeof data.balanceAfter === 'number') {
           this.balance = data.balanceAfter;
         }
@@ -187,6 +190,11 @@ export class PostCardComponent implements OnInit, OnDestroy {
     this.activeFunction = raw === '-' ? '' : raw;
 
     if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
+
+    // ⭐ ИСПРАВЛЕНИЕ: Если пост свободен (busy = false) и баланс <= 0, сбрасываем номер аванса
+    if (this.busy === false && this.balance <= 0) {
+      this.currentAdvanceReceiptNumber = null;
+    }
   }
 
   // ============================================================
@@ -210,9 +218,24 @@ export class PostCardComponent implements OnInit, OnDestroy {
   // ============================================================
   // Команды
   // ============================================================
-  stop(): void { this.sendCommand('stop'); }
+  
+  // ⭐ ИСПРАВЛЕНИЕ: Добавлен сброс номера аванса и активной функции при стопе
+  stop(): void { 
+    this.sendCommand('stop'); 
+    this.currentAdvanceReceiptNumber = null;
+    this.activeFunction = '';
+  }
+
   pause(): void { this.sendCommand('pause'); }
-  reset(): void { this.sendCommand('reset'); }
+
+  // ⭐ ИСПРАВЛЕНИЕ: Добавлен сброс номера аванса, баланса и активной функции при сбросе
+  reset(): void { 
+    this.sendCommand('reset'); 
+    this.currentAdvanceReceiptNumber = null;
+    this.activeFunction = '';
+    this.balance = 0;
+  }
+
   printReceipt(): void { this.sendCommand('print_receipt'); }
 
   activateFunction(programName: string): void {

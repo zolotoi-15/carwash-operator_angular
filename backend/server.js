@@ -266,15 +266,11 @@ function connectMqtt(settings) {
         const data = JSON.parse(payload);
         if (!postsState[postId]) postsState[postId] = {};
         const state = postsState[postId];
-        
-        const wasBusy = state.busy; // Запоминаем предыдущее состояние
-
         const cc = state.clientCard;
         const ccb = state.clientCardBalance;
         const cct = state.clientCardType;
         const newEspBalance = typeof data.balance === 'number' ? data.balance : null;
         const lastEspBalance = typeof state._lastEspBalance === 'number' ? state._lastEspBalance : null;
-        
         if (cc && newEspBalance !== null && lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
           const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
           const cardBal = typeof ccb === 'number' ? ccb : 0;
@@ -282,19 +278,12 @@ function connectMqtt(settings) {
             debitCardForPost(postId, delta).catch((e) => console.warn(`[Post ${postId}] debit: ${e.message}`));
           }
         }
-        
         Object.assign(state, data, { lastSeen: Date.now() });
-        
         state.clientCard = cc;
         state.clientCardBalance = ccb;
         state.clientCardType = cct;
         state._lastEspBalance = newEspBalance;
         if (cc) state.balance = typeof ccb === 'number' ? ccb : 0;
-
-        // ★ Проверка на завершение сессии: был занят, стал свободен, баланс 0
-        if (wasBusy === true && data.busy === false && data.balance === 0) {
-          printReceipt(postId);
-        }
       } catch { /* ignore */ }
     }
 
@@ -937,7 +926,6 @@ function resetPost(postId) {
   publishStatus(postId); publishRelayStatus(postId);
 }
 
-// ★ ОБНОВЛЕНО: Доработана печать финального чека (учет аванса и отсутствия детализации)
 function printReceipt(postId) {
   const state = getPostState(postId);
   const items = []; 
@@ -956,14 +944,13 @@ function printReceipt(postId) {
 
   const balanceAfter = Math.round(state.balance * 100) / 100;
 
-  // Находим последний незакрытый авансовый чек
   Receipt.findOne({ postId: Number(postId), isAdvance: true, finalReceiptNumber: null })
     .sort({ timestamp: -1 })
     .lean()
     .then(advance => {
       const advanceReceiptNumber = advance?.receiptNumber || null;
       
-      // Если нет детализации (items), но есть аванс - печатаем чек по сумме аванса
+      // Если items пуст, но есть аванс
       if ((!items.length || totalCost < 0.01) && advance) {
         mqttClient.publish('kkm/print', JSON.stringify({
           postId: parseInt(postId),
@@ -985,7 +972,6 @@ function printReceipt(postId) {
 
       if (!items.length || totalCost < 0.01) return;
 
-      // Если детализация есть - печатаем обычный финальный чек
       mqttClient.publish('kkm/print', JSON.stringify({
         postId: parseInt(postId),
         timestamp: new Date().toISOString(),
@@ -1009,7 +995,6 @@ function printReceipt(postId) {
       console.error(`[Post ${postId}] printReceipt: ${err.message}`);
     });
 }
-
 const programNamesRu = {
   water: 'Вода', foam: 'Пена', wax: 'Воск', teflon: 'Тефлон',
   osmosis: 'Осмос', hotWater: 'Горячая вода',
@@ -1431,8 +1416,7 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       return res.status(404).json({ error: `Пост ${postId} не найден` });
     }
 
-    // ★ Оставляем addBalance — он один раз добавит и опубликует posts/N/status
-    addBalance(postId, amount);
+   // addBalance(postId, amount);
     const state = getPostState(postId);
 
     const receipt = await createReceipt({
@@ -1447,7 +1431,6 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
     });
 
     if (mqttClient) {
-      // ★ Публикуем receipt_number (нужен для печати чека)
       mqttClient.publish(
         `posts/${postId}/receipt_number`,
         JSON.stringify({
@@ -1462,12 +1445,11 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
         { qos: 1, retain: true },
       );
 
-      // ★ УБИРАЕМ публикацию posts/N/command { add_balance } — иначе сервер сам себя удвоит
-      // mqttClient.publish(
-      //   `posts/${postId}/command`,
-      //   JSON.stringify({ command: `add_balance ${amount}` }),
-      //   { qos: 1 },
-      // );
+      mqttClient.publish(
+        `posts/${postId}/command`,
+        JSON.stringify({ command: `add_balance ${amount}` }),
+        { qos: 1 },
+      );
     }
 
     res.json({

@@ -32,6 +32,8 @@
       <span>🧼 Активная функция:</span>
       <span class="value">{{ activeFunction || '-' }}</span>
     </div>
+    
+    <!-- Блок скроется автоматически, когда currentAdvanceReceiptNumber станет null -->
     @if (currentAdvanceReceiptNumber) {
       <div class="info-row">
         <span>🧾 Аванс №:</span>
