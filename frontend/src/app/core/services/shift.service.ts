@@ -1,9 +1,10 @@
-import { Injectable, inject, OnDestroy } from '@angular/core';
+import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable, BehaviorSubject } from 'rxjs';
 import { tap } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
 
+// ✅ CashShift определён в shift.model.ts
 import { CashShift } from '../models/shift.model';
 
 export interface ShiftTotal {
@@ -28,6 +29,7 @@ export class ShiftService {
   private shiftTotalSubject = new BehaviorSubject<ShiftTotal>({ total: 0, count: 0 });
   private currentShiftSubject = new BehaviorSubject<CashShift | null>(null);
 
+  /** Номер смены, который видел клиент — для детекции auto-rotation */
   private lastKnownShiftNumber: number | null = null;
   private watchTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -57,7 +59,7 @@ export class ShiftService {
 
   closeShift(): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/kkm/close-shift`, {})
-      .pipe(tap(() => this.currentShiftSubject.next(null)));
+      .pipe(tap(() => this.currentShiftSubject.next(null)));   // ← сбрасываем UI
   }
 
   xReport(): Observable<any> {
@@ -92,10 +94,17 @@ export class ShiftService {
   // ============================================================
   // Авто-детекция переключения смены на сервере
   // ============================================================
+  /**
+   * Фоновый опрос /api/kkm/current-shift.
+   * Если shiftNumber изменился — сервер выполнил auto-rotation
+   * (closeExpiredShiftIfNeeded). Перезагружаем страницу:
+   * после reload APP_INITIALIZER → AuthService.restoreSession()
+   * поднимет пользователя из localStorage, повторной аутентификации не будет.
+   */
   startAutoShiftWatch(intervalMs = 30_000): void {
     this.stopAutoShiftWatch();
 
-    // первичная синхронизация
+    // Первичная синхронизация — запоминаем текущий номер без reload
     this.http.get<CurrentShiftResponse>(`${this.apiUrl}/kkm/current-shift`).subscribe({
       next: s => {
         if (s?.exists && s.shiftNumber != null) {
@@ -109,17 +118,22 @@ export class ShiftService {
       this.http.get<CurrentShiftResponse>(`${this.apiUrl}/kkm/current-shift`).subscribe({
         next: s => {
           if (!s?.exists || s.shiftNumber == null) return;
+
           if (this.lastKnownShiftNumber == null) {
             this.lastKnownShiftNumber = s.shiftNumber;
             return;
           }
+
           if (s.shiftNumber !== this.lastKnownShiftNumber) {
+            console.log(
+              `[ShiftService] Auto-rotation detected: ` +
+              `${this.lastKnownShiftNumber} → ${s.shiftNumber}. Reloading…`
+            );
             this.stopAutoShiftWatch();
-            // reload - пользователь останется залогинен (JWT в localStorage)
             window.location.reload();
           }
         },
-        error: () => { /* network hiccup */ },
+        error: () => { /* временный сбой сети — просто пропускаем тик */ },
       });
     }, intervalMs);
   }
