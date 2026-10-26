@@ -1,4 +1,9 @@
-import { ApplicationConfig, provideZoneChangeDetection, APP_INITIALIZER, importProvidersFrom } from '@angular/core';
+import {
+  ApplicationConfig,
+  provideZoneChangeDetection,
+  APP_INITIALIZER,
+  importProvidersFrom,
+} from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { JwtModule } from '@auth0/angular-jwt';
@@ -11,6 +16,7 @@ export function tokenGetter() {
   return localStorage.getItem('carwash_auth_token');
 }
 
+/** Гарантирует, что сигналы AuthService будут заполнены ДО первой проверки AuthGuard */
 export function initAuth(auth: AuthService) {
   return () => auth.restoreSession();
 }
