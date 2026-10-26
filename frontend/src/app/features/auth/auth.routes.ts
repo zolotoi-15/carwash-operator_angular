@@ -6,7 +6,3 @@ export const AUTH_ROUTES: Routes = [
   { path: 'logout', component: LogoutComponent }
 ];
 
-export const AUTH_ROUTES: Routes = [
-  { path: 'login', component: LoginComponent },
-  { path: 'logout', component: LogoutComponent }
-];
