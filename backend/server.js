@@ -1285,7 +1285,13 @@ app.post('/api/login', async (req, res) => {
     valid = bcrypt.compareSync(password, user.passwordHash || user.password);
   }
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-  const token = jwt.sign({ username, role: user.role }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '24h' });
+  // ★ ИЗМЕНЕНО: срок жизни токена увеличен с 24h до 30d,
+  //   чтобы сессия переживала auto-rotation смены (каждые 24 ч) без ре-login.
+  const token = jwt.sign(
+    { username, role: user.role },
+    process.env.JWT_SECRET || 'secretkey',
+    { expiresIn: '30d' }
+  );
   res.json({ token, role: user.role });
 });
 
@@ -1537,7 +1543,9 @@ app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
   res.json(settings.kkmManual);
 });
 
-app.get('/api/kkm/current-shift', auth, adminOnly, async (_req, res) => {
+// ★ ИЗМЕНЕНО: adminOnly снят — эндпоинт нужен оператору
+//   для фонового поллинга при детекции auto-rotation смены.
+app.get('/api/kkm/current-shift', auth, async (_req, res) => {
   await closeExpiredShiftIfNeeded();
   const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
   if (!shift) return res.json({ exists: false });
@@ -1551,7 +1559,8 @@ app.get('/api/kkm/current-shift', auth, adminOnly, async (_req, res) => {
   });
 });
 
-app.get('/api/kkm/shift-status', auth, adminOnly, async (_req, res) => {
+// ★ ИЗМЕНЕНО: adminOnly снят — эндпоинт нужен оператору.
+app.get('/api/kkm/shift-status', auth, async (_req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   res.json({ shiftOpen: !!shift });
 });
