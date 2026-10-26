@@ -1,14 +1,23 @@
-import { ApplicationConfig, provideZoneChangeDetection } from '@angular/core';
+import {
+  ApplicationConfig,
+  provideZoneChangeDetection,
+  APP_INITIALIZER,
+  importProvidersFrom,
+} from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { JwtModule } from '@auth0/angular-jwt';
-import { importProvidersFrom } from '@angular/core';
 
 import { routes } from './app.routes';
 import { authInterceptor } from './core/interceptors/auth.interceptor';
+import { AuthService } from './core/services/auth.service';
 
 export function tokenGetter() {
   return localStorage.getItem('carwash_auth_token');
+}
+
+export function initAuth(auth: AuthService) {
+  return () => auth.restoreSession();
 }
 
 export const appConfig: ApplicationConfig = {
@@ -21,5 +30,11 @@ export const appConfig: ApplicationConfig = {
         config: { tokenGetter },
       }),
     ),
+    {
+      provide: APP_INITIALIZER,
+      useFactory: initAuth,
+      deps: [AuthService],
+      multi: true,
+    },
   ],
 };
