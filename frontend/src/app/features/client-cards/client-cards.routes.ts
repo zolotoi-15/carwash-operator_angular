@@ -1,5 +1,4 @@
-﻿// src/app/features/client-cards/client-cards.routes.ts
-import { Routes } from '@angular/router';
+﻿import { Routes } from '@angular/router';
 import { AuthGuard } from '../../core/guards/auth.guard';
 import { PermissionGuard } from '../../core/guards/permission.guard';
 import { ResourceType } from '../../core/models/resource.enum';
