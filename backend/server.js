@@ -20,6 +20,20 @@ require('dotenv').config();
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
 // ============================================================
+// ★ НОВОЕ: единый фильтр чеков для отчётов.
+//   В отчёты попадают ТОЛЬКО чеки полного расчёта (final/session),
+//   но НЕ авансы / пополнения поста (advance_post).
+// ============================================================
+const REPORT_RECEIPT_FILTER = {
+  kind: { $ne: 'advance_post' },
+  isAdvance: { $ne: true },
+};
+
+function reportReceiptsQuery(range = {}) {
+  return { ...range, ...REPORT_RECEIPT_FILTER };
+}
+
+// ============================================================
 // WebSocket
 // ============================================================
 const app = express();
@@ -58,7 +72,10 @@ wss.on('connection', async (ws) => {
   try {
     const currentShift = await Shift.findOne({ shiftOpen: true });
     if (currentShift) {
-      const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
+      // ★ Фильтруем авансы
+      const receipts = await Receipt.find(reportReceiptsQuery({
+        timestamp: { $gte: currentShift.openedAt }
+      }));
       const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
       ws.send(JSON.stringify({
         type: 'mqtt',
@@ -426,7 +443,10 @@ function connectMqtt(settings) {
         if (!from || !to) return;
         const start = new Date(from);
         const end = new Date(to);
-        const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+        // ★ Фильтруем авансы
+        const receipts = await Receipt.find(
+          reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+        ).sort({ timestamp: -1 });
         const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
         const translatedReceipts = receipts.map(r => ({
           ...r.toObject(), items: translateReceiptItems(r.items)
@@ -549,7 +569,6 @@ function buildServicesPayloadForPost(postId) {
   const buttons = p.buttonInputs || {};
   const delays = p.relayDelays || {};
 
-  // ★ Список услуг: берём p.services; если пуст — восстанавливаем из карт
   let services = p.services || [];
 
   if (!services.length) {
@@ -566,7 +585,6 @@ function buildServicesPayloadForPost(postId) {
     }));
   }
 
-  // ★ ФИЛЬТР УБРАН — уходят ВСЕ услуги
   return services.map(svc => ({
     name: svc.name,
     price: prices[svc.name] ?? svc.price ?? 0,
@@ -577,11 +595,10 @@ function buildServicesPayloadForPost(postId) {
     onDelay: delays[svc.name]?.onDelay ?? 100,
     offDelay: delays[svc.name]?.offDelay ?? 200,
     buttonInput: buttons[svc.name] ?? 0,
-    // ★ enabled: true оставляем
     enabled: svc.enabled !== false,
   }));
 }
-// ★ ОБНОВЛЕНО: добавлены отладочные логи
+
 function publishConfigToAllPosts() {
   if (!mqttClient) {
     console.warn('❌ publishConfigToAllPosts: mqttClient НЕ подключён');
@@ -661,7 +678,10 @@ async function broadcastShiftTotal() {
     broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
     return;
   }
-  const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(reportReceiptsQuery({
+    timestamp: { $gte: currentShift.openedAt }
+  }));
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   const payload = JSON.stringify({ total, count: receipts.length });
   if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
@@ -710,8 +730,8 @@ async function loadSettings() {
       console.log('Настройки созданы в БД');
     } else {
       settings = doc.value;
-	  console.log('[loadSettings] posts[1].services:',
-  JSON.stringify(settings.posts?.['1']?.services?.map(s => ({ n: s.name, e: s.enabled }))));
+      console.log('[loadSettings] posts[1].services:',
+        JSON.stringify(settings.posts?.['1']?.services?.map(s => ({ n: s.name, e: s.enabled }))));
       if (!settings.posts) {
         const n = settings.numberOfPosts || 8;
         const posts = {};
@@ -744,10 +764,9 @@ async function loadSettings() {
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
-          // ★ ИСПРАВЛЕНО: было s.enable !== undefined ? s.enable : true
           settings.posts[i].services = settings.posts[i].services.map(s => ({
-  ...s, enabled: s.enabled !== false
-}));
+            ...s, enabled: s.enabled !== false
+          }));
         }
         await saveSettings(settings);
       }
@@ -795,7 +814,6 @@ function findPostWithCard(cardNumber, excludePostId = null) {
 function findService(postId, name) {
   const p = settings.posts?.[postId];
   if (p && p.services) {
-    // ★ ИСПРАВЛЕНО: было s.enable !== false
     return p.services.find(s => s.name.toLowerCase() === name.toLowerCase() && s.enabled !== false);
   }
   if (settings.services) {
@@ -928,9 +946,9 @@ function resetPost(postId) {
 
 function printReceipt(postId) {
   const state = getPostState(postId);
-  const items = []; 
+  const items = [];
   let totalCost = 0;
-  
+
   for (const [name, usage] of Object.entries(state.servicesUsage)) {
     if (usage.seconds > 0.001) {
       items.push({
@@ -949,8 +967,7 @@ function printReceipt(postId) {
     .lean()
     .then(advance => {
       const advanceReceiptNumber = advance?.receiptNumber || null;
-      
-      // Если items пуст, но есть аванс
+
       if ((!items.length || totalCost < 0.01) && advance) {
         mqttClient.publish('kkm/print', JSON.stringify({
           postId: parseInt(postId),
@@ -962,7 +979,7 @@ function printReceipt(postId) {
           items: [{ name: 'Услуги мойки (аванс)', seconds: 0, cost: advance.totalCost, pricePerSecond: 0 }],
           balance: balanceAfter,
         }), { qos: 1 });
-        
+
         Receipt.updateOne({ _id: advance._id }, { $set: { finalReceiptNumber: 0 } }).catch(() => {});
         state.servicesUsage = {};
         state.receiptCount++;
@@ -982,11 +999,11 @@ function printReceipt(postId) {
         items,
         balance: balanceAfter,
       }), { qos: 1 });
-      
+
       if (advance) {
         Receipt.updateOne({ _id: advance._id }, { $set: { finalReceiptNumber: 0 } }).catch(() => {});
       }
-      
+
       state.servicesUsage = {};
       state.receiptCount++;
       publishStatus(postId);
@@ -1042,9 +1059,10 @@ async function closeExpiredShiftIfNeeded() {
   shift.closedAt = closedAt;
   shift.autoClosed = true;
 
-  const receipts = await Receipt.find({
+  // ★ Фильтруем авансы из Z-отчёта
+  const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: shift.openedAt, $lte: closedAt }
-  });
+  }));
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   shift.zReport = {
     total,
@@ -1285,8 +1303,7 @@ app.post('/api/login', async (req, res) => {
     valid = bcrypt.compareSync(password, user.passwordHash || user.password);
   }
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-  // ★ ИЗМЕНЕНО: срок жизни токена увеличен с 24h до 30d,
-  //   чтобы сессия переживала auto-rotation смены (каждые 24 ч) без ре-login.
+  // ★ Изменено: срок жизни токена 30 дней, чтобы пережить auto-rotation смены
   const token = jwt.sign(
     { username, role: user.role },
     process.env.JWT_SECRET || 'secretkey',
@@ -1338,7 +1355,6 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           dimmerMask: newSettings.dimmerMask ? { ...newSettings.dimmerMask } : {},
           buttonInputs: newSettings.buttonInputs ? { ...newSettings.buttonInputs } : {},
           relayDelays: newSettings.relayDelays ? { ...newSettings.relayDelays } : {},
-          // ★ ИСПРАВЛЕНО
           services: services.map(s => ({ ...s, enabled: s.enabled !== false }))
         };
       }
@@ -1353,7 +1369,6 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
         if (!settings.posts[postId]) settings.posts[postId] = {};
         settings.posts[postId] = { ...settings.posts[postId], ...postData };
         if (settings.posts[postId].services) {
-          // ★ ИСПРАВЛЕНО
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
@@ -1422,7 +1437,6 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       return res.status(404).json({ error: `Пост ${postId} не найден` });
     }
 
-   // addBalance(postId, amount);
     const state = getPostState(postId);
 
     const receipt = await createReceipt({
@@ -1543,8 +1557,7 @@ app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
   res.json(settings.kkmManual);
 });
 
-// ★ ИЗМЕНЕНО: adminOnly снят — эндпоинт нужен оператору
-//   для фонового поллинга при детекции auto-rotation смены.
+// ★ Изменено: снят adminOnly — нужно оператору для поллинга смены
 app.get('/api/kkm/current-shift', auth, async (_req, res) => {
   await closeExpiredShiftIfNeeded();
   const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
@@ -1559,7 +1572,7 @@ app.get('/api/kkm/current-shift', auth, async (_req, res) => {
   });
 });
 
-// ★ ИЗМЕНЕНО: adminOnly снят — эндпоинт нужен оператору.
+// ★ Изменено: снят adminOnly — нужно оператору
 app.get('/api/kkm/shift-status', auth, async (_req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   res.json({ shiftOpen: !!shift });
@@ -1598,9 +1611,10 @@ app.post('/api/kkm/close-shift', auth, adminOnly, async (_req, res) => {
   shift.closedAt = closedAt;
   shift.autoClosed = false;
 
-  const receipts = await Receipt.find({
+  // ★ Фильтруем авансы из Z-отчёта
+  const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: shift.openedAt, $lte: closedAt }
-  });
+  }));
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   shift.zReport = {
     total,
@@ -1619,7 +1633,10 @@ app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
 
-  const receipts = await Receipt.find({ timestamp: { $gte: shift.openedAt } });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(reportReceiptsQuery({
+    timestamp: { $gte: shift.openedAt }
+  }));
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
 
   shift.xReports.push({
@@ -1637,9 +1654,10 @@ app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
   if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
 
   const closedAt = new Date();
-  const receipts = await Receipt.find({
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: currentShift.openedAt, $lte: closedAt }
-  });
+  }));
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
 
   currentShift.zReport = {
@@ -1677,7 +1695,10 @@ app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.k
 app.get('/api/shift-total', auth, adminOnly, async (_req, res) => {
   const currentShift = await Shift.findOne({ shiftOpen: true });
   if (!currentShift) return res.json({ total: 0, count: 0 });
-  const receipts = await Receipt.find({ timestamp: { $gte: currentShift.openedAt } });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(reportReceiptsQuery({
+    timestamp: { $gte: currentShift.openedAt }
+  }));
   res.json({ total: receipts.reduce((s, r) => s + (r.totalCost || 0), 0), count: receipts.length });
 });
 
@@ -1781,7 +1802,10 @@ app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'Некорректные from/to' });
   }
 
-  let receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+  // ★ Фильтруем авансы
+  let receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: -1 });
   receipts = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
 
@@ -1796,7 +1820,10 @@ app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
   const date = new Date(req.params.date);
   const start = new Date(date); start.setHours(0, 0, 0, 0);
   const end   = new Date(date); end.setHours(23, 59, 59, 999);
-  const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
@@ -1804,7 +1831,10 @@ app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
 app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - 7); start.setHours(0, 0, 0, 0);
-  const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
@@ -1812,7 +1842,10 @@ app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
 app.get('/api/reports/month', auth, adminOnly, async (_req, res) => {
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - 30); start.setHours(0, 0, 0, 0);
-  const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
@@ -1822,7 +1855,10 @@ app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
   if (!currentShift) return res.json({ totalSum: 0, count: 0, receipts: [] });
   const start = new Date(currentShift.openedAt);
   const end = new Date();
-  const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
@@ -1837,7 +1873,10 @@ app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'Некорректные from/to' });
   }
 
-  const receipts = await Receipt.find({ timestamp: { $gte: start, $lte: end } }).sort({ timestamp: -1 });
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
   const summary = {
     totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
@@ -1858,9 +1897,10 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'Некорректные from/to' });
   }
 
-  const receipts = await Receipt.find({
-    timestamp: { $gte: start, $lte: end }
-  }).sort({ timestamp: 1 }).lean();
+  // ★ Фильтруем авансы
+  const receipts = await Receipt.find(
+    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
+  ).sort({ timestamp: 1 }).lean();
 
   const PAY_LABELS = {
     cash:          'Наличные',
