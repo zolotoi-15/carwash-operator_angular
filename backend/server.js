@@ -19,11 +19,6 @@ require('dotenv').config();
 
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
-// ============================================================
-// ★ НОВОЕ: единый фильтр чеков для отчётов.
-//   В отчёты попадают ТОЛЬКО чеки полного расчёта (final/session),
-//   но НЕ авансы / пополнения поста (advance_post).
-// ============================================================
 const REPORT_RECEIPT_FILTER = {
   kind: { $ne: 'advance_post' },
   isAdvance: { $ne: true },
@@ -72,7 +67,6 @@ wss.on('connection', async (ws) => {
   try {
     const currentShift = await Shift.findOne({ shiftOpen: true });
     if (currentShift) {
-      // ★ Фильтруем авансы
       const receipts = await Receipt.find(reportReceiptsQuery({
         timestamp: { $gte: currentShift.openedAt }
       }));
@@ -220,12 +214,17 @@ function connectMqtt(settings) {
       timestamp: Date.now(),
     });
 
-    if (topic === 'kkm/print' || /^posts\/[^/]+\/receipt$/.test(topic)) {
+    if (topic === 'kkm/print') {
       try {
         const receiptData = JSON.parse(payload);
         if (!receiptData.postId) {
           const m = topic.match(/^posts\/(\d+)\//);
           if (m) receiptData.postId = parseInt(m[1], 10);
+        }
+
+        if (receiptData.skipDbCreation) {
+          console.log(`🖨️ kkm/print (печать без записи в БД): №${receiptData.receiptNumber} postId=${receiptData.postId}`);
+          return;
         }
 
         const items = Array.isArray(receiptData.items) ? receiptData.items : [];
@@ -245,9 +244,141 @@ function connectMqtt(settings) {
           correctionInfo: receiptData.correctionInfo || null,
           timestamp:     receiptData.timestamp,
         });
-        console.log(`✅ Чек сохранён (postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'}, adv=${receiptData.advanceReceiptNumber || '—'})`);
+        console.log(`✅ Чек сохранён (kkm/print fallback, postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'}, adv=${receiptData.advanceReceiptNumber || '—'})`);
       } catch (err) {
-        console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
+        console.error(`Ошибка сохранения чека из kkm/print:`, err.message);
+      }
+    }
+
+    if (/^posts\/[^/]+\/receipt$/.test(topic)) {
+      try {
+        const receiptData = JSON.parse(payload);
+        const rPostId = String(receiptData.postId);
+        const rState = getPostState(rPostId);
+
+        if (rState._espOfflineAtStart) {
+          console.log(`[Post ${rPostId}] ℹ️ ESP32 был offline при старте — игнорируем чек ESP32`);
+          return;
+        }
+        if (rState._finalReceiptSentByEsp) {
+          console.log(`[Post ${rPostId}] ℹ️ Чек ESP32 уже применён в этой сессии`);
+          return;
+        }
+
+        // ⭐ CAPTURE state SYNCHRONOUSLY до любых await — иначе clientcard: NULL затрёт данные
+        const capturedClientCard = rState.clientCard;
+        const capturedInitialBalance = rState._clientCardInitialBalance || 0;
+
+        rState._finalReceiptSentByEsp = true;
+        rState._receiptWaitStarted = false;
+
+        (async () => {
+          const advances = await Receipt.find({ postId: Number(rPostId), isAdvance: true, finalReceiptNumber: null })
+            .sort({ timestamp: -1 }).lean();
+          const newestAdvance = advances[0];
+          const advanceReceiptNumber = newestAdvance?.receiptNumber || null;
+          const advanceAmount = newestAdvance?.totalCost || 0;
+          const advancePaymentMethod = newestAdvance?.paymentMethod || null;
+
+          let items = (receiptData.items || []).map(it => ({
+            name: it.name || it.program || '?',
+            seconds: Number(it.seconds) || 0,
+            cost: Number(it.cost) || 0,
+            pricePerSecond: Number(it.pricePerSecond) || 0,
+          }));
+
+          let totalCost = Math.round(items.reduce((s, i) => s + i.cost, 0) * 100) / 100;
+
+          if (advanceAmount > 0.01 && items.length > 0) {
+            const discrepancy = Math.round((advanceAmount - totalCost) * 100) / 100;
+            if (discrepancy > 0.001) {
+              items[items.length - 1].cost = Math.round((items[items.length - 1].cost + discrepancy) * 100) / 100;
+              totalCost = advanceAmount;
+              console.log(`[Post ${rPostId}] ⚖️ Доводим до аванса: +${discrepancy} ₽`);
+            }
+          }
+
+          if (items.length === 0 && advanceAmount > 0) {
+            items = [{ name: 'Услуги мойки (аванс)', seconds: 0, cost: advanceAmount, pricePerSecond: 0 }];
+            totalCost = advanceAmount;
+          }
+          if (items.length === 0) return;
+
+          // ⭐ ОПРЕДЕЛЯЕМ СПОСОБ ОПЛАТЫ
+          // Приоритет: clientCard > advance > ESP32-report
+          let paymentMethod = advancePaymentMethod;
+          let cardNumber = null;
+          let initialBalance = 0;
+          let remainingBalance = 0;
+
+          if (capturedClientCard) {
+            const card = await ClientCard.findOne({ card: capturedClientCard });
+            if (card) {
+              paymentMethod = 'client_card';
+              cardNumber = card.card;
+              initialBalance = capturedInitialBalance;
+              remainingBalance = card.balance;
+            }
+          } else if (receiptData.paymentMethod && receiptData.paymentMethod !== 'unknown') {
+            paymentMethod = receiptData.paymentMethod;
+          }
+
+          const finalReceipt = await createReceipt({
+            postId: Number(rPostId),
+            kind: 'final',
+            operation: 'sell',
+            isAdvance: false,
+            advanceReceiptNumber,
+            items,
+            totalCost,
+            balanceAfter: 0,
+            paymentMethod: paymentMethod,
+            timestamp: new Date(),
+          });
+          const finalNumber = finalReceipt.receiptNumber;
+          console.log(`[Post ${rPostId}] 💾 Финальный чек (ESP32) создан в БД: №${finalNumber} (adv=${advanceReceiptNumber}, payment=${paymentMethod || '—'})`);
+
+          if (advances.length) {
+            await Receipt.updateMany(
+              { _id: { $in: advances.map(a => a._id) } },
+              { $set: { finalReceiptNumber: finalNumber } }
+            );
+          }
+
+          const qrPayload = JSON.stringify({
+            postId: Number(rPostId),
+            timestamp: new Date().toISOString(),
+            operation: 'Финальный чек по сессии (ESP32)',
+            kind: 'final',
+            isAdvance: false,
+            advanceReceiptNumber,
+            advanceAmount,
+            receiptNumber: finalNumber,
+            totalPaid: advanceAmount,
+            totalCash: totalCost,
+            items,
+            balance: 0,
+            source: 'esp32',
+            paymentMethod: paymentMethod,
+            cardNumber: cardNumber,
+            initialBalance: initialBalance,
+            remainingBalance: remainingBalance,
+          });
+          mqttClient.publish(`posts/${rPostId}/receipt/qr`, qrPayload, { qos: 1 });
+          mqttClient.publish('kkm/print', JSON.stringify({
+            ...JSON.parse(qrPayload),
+            skipDbCreation: true,
+          }), { qos: 1 });
+
+          rState.servicesUsage = {};
+          rState.receiptCount++;
+          publishStatus(rPostId);
+          console.log(`[Post ${rPostId}] 📤 QR + печать отправлены с номером №${finalNumber}`);
+        })().catch(err => {
+          console.error(`[Post ${rPostId}] Ошибка обработки чека ESP32: ${err.message}`);
+        });
+      } catch (err) {
+        console.warn(`⚠️ Ошибка парсинга чека от ESP32: ${err.message}`);
       }
     }
 
@@ -402,6 +533,7 @@ function connectMqtt(settings) {
         state.clientCardBalance = clientCard.balance;
         state.clientCardType = clientCard.type;
         state.balance = clientCard.balance;
+        state._clientCardInitialBalance = clientCard.balance;
 
         mqttClient.publish(`posts/${postId}/clientcardbalance`,
           JSON.stringify({ card: clientCard.card, balance: clientCard.balance, type: clientCard.type }),
@@ -443,7 +575,6 @@ function connectMqtt(settings) {
         if (!from || !to) return;
         const start = new Date(from);
         const end = new Date(to);
-        // ★ Фильтруем авансы
         const receipts = await Receipt.find(
           reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
         ).sort({ timestamp: -1 });
@@ -678,7 +809,6 @@ async function broadcastShiftTotal() {
     broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
     return;
   }
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: currentShift.openedAt }
   }));
@@ -795,7 +925,8 @@ function getPostState(postId) {
   if (!postsState[postId]) {
     postsState[postId] = {
       busy: false, paused: false, balance: 0, currentProgram: null,
-      elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null
+      elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null,
+      online: false, _espOfflineAtStart: false, _finalReceiptSentByEsp: false, _receiptWaitStarted: false
     };
   }
   return postsState[postId];
@@ -902,7 +1033,7 @@ function handleProgram(postId, programName) {
   if (state.balance < pricePerSec && state.balance < 0.01) return;
   if (state.timer) clearInterval(state.timer);
   state.busy = true; state.paused = false; state.currentProgram = service.name;
-  state.elapsedSec = 0; state.servicesUsage = {};
+  state.elapsedSec = 0;
   startTimer(postId);
   publishStatus(postId); publishRelayStatus(postId);
 }
@@ -929,8 +1060,18 @@ function togglePause(postId) {
 
 function addBalance(postId, amount) {
   const state = getPostState(postId);
+  const wasZero = state.balance < 0.01;
   state.balance = Math.round((state.balance + amount) * 100) / 100;
   state.totalPaid = Math.round((state.totalPaid + amount) * 100) / 100;
+  if (wasZero) {
+    state.servicesUsage = {};
+    state.receiptCount = 0;
+    state.elapsedSec = 0;
+    state._espOfflineAtStart = state.online === false;
+    state._finalReceiptSentByEsp = false;
+    state._receiptWaitStarted = false;
+    console.log(`[Post ${postId}] 🆕 Новая сессия (espOfflineAtStart=${state._espOfflineAtStart})`);
+  }
   publishStatus(postId);
 }
 
@@ -939,12 +1080,40 @@ function resetPost(postId) {
   if (state.timer) clearInterval(state.timer);
   postsState[postId] = {
     busy: false, paused: false, balance: 0, currentProgram: null,
-    elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null
+    elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null,
+    online: state.online || false,
+    _espOfflineAtStart: false, _finalReceiptSentByEsp: false, _receiptWaitStarted: false
   };
   publishStatus(postId); publishRelayStatus(postId);
 }
 
 function printReceipt(postId) {
+  const state = getPostState(postId);
+
+  if (!state._espOfflineAtStart && !state._finalReceiptSentByEsp && !state._receiptWaitStarted) {
+    state._receiptWaitStarted = true;
+    console.log(`[Post ${postId}] ⏳ Ждём чек от ESP32 (2.5с)...`);
+    setTimeout(() => {
+      state._receiptWaitStarted = false;
+      if (!state._finalReceiptSentByEsp) {
+        console.warn(`[Post ${postId}] ⏰ ESP32 не прислал чек — используем данные бэкенда`);
+        _doPrintReceiptFromBackend(postId).catch(err =>
+          console.error(`[Post ${postId}] Ошибка backend-чека: ${err.message}`));
+      }
+    }, 2500);
+    return;
+  }
+
+  if (state._finalReceiptSentByEsp) {
+    console.log(`[Post ${postId}] ℹ️ Чек ESP32 уже применён, пропускаем backend-печать`);
+    return;
+  }
+
+  _doPrintReceiptFromBackend(postId).catch(err =>
+    console.error(`[Post ${postId}] Ошибка backend-чека: ${err.message}`));
+}
+
+async function _doPrintReceiptFromBackend(postId) {
   const state = getPostState(postId);
   const items = [];
   let totalCost = 0;
@@ -962,56 +1131,101 @@ function printReceipt(postId) {
 
   const balanceAfter = Math.round(state.balance * 100) / 100;
 
-  Receipt.findOne({ postId: Number(postId), isAdvance: true, finalReceiptNumber: null })
-    .sort({ timestamp: -1 })
-    .lean()
-    .then(advance => {
-      const advanceReceiptNumber = advance?.receiptNumber || null;
+  const advances = await Receipt.find({ postId: Number(postId), isAdvance: true, finalReceiptNumber: null })
+    .sort({ timestamp: -1 }).lean();
+  const newestAdvance = advances[0];
+  const advanceReceiptNumber = newestAdvance?.receiptNumber || null;
+  const advanceAmount = newestAdvance?.totalCost || 0;
+  const advancePaymentMethod = newestAdvance?.paymentMethod || null;
 
-      if ((!items.length || totalCost < 0.01) && advance) {
-        mqttClient.publish('kkm/print', JSON.stringify({
-          postId: parseInt(postId),
-          timestamp: new Date().toISOString(),
-          operation: 'Финальный чек по авансу',
-          kind: 'final',
-          isAdvance: false,
-          advanceReceiptNumber,
-          items: [{ name: 'Услуги мойки (аванс)', seconds: 0, cost: advance.totalCost, pricePerSecond: 0 }],
-          balance: balanceAfter,
-        }), { qos: 1 });
+  // ⭐ Сначала получаем аванс, потом определяем способ оплаты
+  let paymentMethod = advancePaymentMethod;
+  let cardNumber = null;
+  let initialBalance = 0;
+  let remainingBalance = 0;
 
-        Receipt.updateOne({ _id: advance._id }, { $set: { finalReceiptNumber: 0 } }).catch(() => {});
-        state.servicesUsage = {};
-        state.receiptCount++;
-        publishStatus(postId);
-        return;
-      }
+  if (state.clientCard) {
+    const card = await ClientCard.findOne({ card: state.clientCard });
+    if (card) {
+      paymentMethod = 'client_card';
+      cardNumber = card.card;
+      initialBalance = state._clientCardInitialBalance || 0;
+      remainingBalance = card.balance;
+    }
+  }
 
-      if (!items.length || totalCost < 0.01) return;
+  if (balanceAfter < 0.01 && advanceAmount > 0.01 && items.length > 0) {
+    const sumItems = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
+    const discrepancy = Math.round((advanceAmount - sumItems) * 100) / 100;
+    if (discrepancy > 0.001) {
+      items[items.length - 1].cost = Math.round((items[items.length - 1].cost + discrepancy) * 100) / 100;
+      console.log(`[Post ${postId}] ⚖️ Доводим до аванса: +${discrepancy} ₽`);
+    }
+    totalCost = advanceAmount;
+  } else {
+    totalCost = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
+  }
 
-      mqttClient.publish('kkm/print', JSON.stringify({
-        postId: parseInt(postId),
-        timestamp: new Date().toISOString(),
-        operation: 'Финальный чек по сессии',
-        kind: 'final',
-        isAdvance: false,
-        advanceReceiptNumber,
-        items,
-        balance: balanceAfter,
-      }), { qos: 1 });
+  let finalItems = items;
+  if ((!items.length || totalCost < 0.01) && advanceReceiptNumber) {
+    finalItems = [{ name: 'Услуги мойки (аванс)', seconds: 0, cost: advanceAmount, pricePerSecond: 0 }];
+    totalCost = advanceAmount;
+  }
+  if (!finalItems.length) return;
 
-      if (advance) {
-        Receipt.updateOne({ _id: advance._id }, { $set: { finalReceiptNumber: 0 } }).catch(() => {});
-      }
+  const finalReceipt = await createReceipt({
+    postId: Number(postId),
+    kind: 'final',
+    operation: 'sell',
+    isAdvance: false,
+    advanceReceiptNumber,
+    items: finalItems,
+    totalCost,
+    balanceAfter,
+    paymentMethod: paymentMethod,
+    timestamp: new Date(),
+  });
+  const finalNumber = finalReceipt.receiptNumber;
+  console.log(`[Post ${postId}] 💾 Финальный чек создан в БД: №${finalNumber} (adv=${advanceReceiptNumber}, payment=${paymentMethod || '—'})`);
 
-      state.servicesUsage = {};
-      state.receiptCount++;
-      publishStatus(postId);
-    })
-    .catch(err => {
-      console.error(`[Post ${postId}] printReceipt: ${err.message}`);
-    });
+  if (advances.length) {
+    await Receipt.updateMany(
+      { _id: { $in: advances.map(a => a._id) } },
+      { $set: { finalReceiptNumber: finalNumber } }
+    );
+  }
+
+  const qrPayload = JSON.stringify({
+    postId: parseInt(postId),
+    timestamp: new Date().toISOString(),
+    operation: 'Финальный чек по сессии',
+    kind: 'final',
+    isAdvance: false,
+    advanceReceiptNumber,
+    advanceAmount,
+    receiptNumber: finalNumber,
+    totalPaid: advanceAmount,
+    totalCash: totalCost,
+    items: finalItems,
+    balance: balanceAfter,
+    source: 'backend',
+    paymentMethod: paymentMethod,
+    cardNumber: cardNumber,
+    initialBalance: initialBalance,
+    remainingBalance: remainingBalance,
+  });
+  mqttClient.publish(`posts/${postId}/receipt/qr`, qrPayload, { qos: 1 });
+  mqttClient.publish('kkm/print', JSON.stringify({
+    ...JSON.parse(qrPayload),
+    skipDbCreation: true,
+  }), { qos: 1 });
+
+  state.servicesUsage = {};
+  state.receiptCount++;
+  publishStatus(postId);
+  console.log(`[Post ${postId}] 📤 QR + печать отправлены с номером №${finalNumber}`);
 }
+
 const programNamesRu = {
   water: 'Вода', foam: 'Пена', wax: 'Воск', teflon: 'Тефлон',
   osmosis: 'Осмос', hotWater: 'Горячая вода',
@@ -1059,7 +1273,6 @@ async function closeExpiredShiftIfNeeded() {
   shift.closedAt = closedAt;
   shift.autoClosed = true;
 
-  // ★ Фильтруем авансы из Z-отчёта
   const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: shift.openedAt, $lte: closedAt }
   }));
@@ -1303,7 +1516,6 @@ app.post('/api/login', async (req, res) => {
     valid = bcrypt.compareSync(password, user.passwordHash || user.password);
   }
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-  // ★ Изменено: срок жизни токена 30 дней, чтобы пережить auto-rotation смены
   const token = jwt.sign(
     { username, role: user.role },
     process.env.JWT_SECRET || 'secretkey',
@@ -1439,6 +1651,8 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
 
     const state = getPostState(postId);
 
+    const expectedNewBalance = Math.round((state.balance + amount) * 100) / 100;
+
     const receipt = await createReceipt({
       postId:        Number(postId),
       kind:          'advance_post',
@@ -1446,7 +1660,7 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       isAdvance:     true,
       items:         [{ name: 'Аванс: пополнение поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
       totalCost:     amount,
-      balanceAfter:  state.balance,
+      balanceAfter:  expectedNewBalance,
       paymentMethod,
     });
 
@@ -1459,7 +1673,7 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
           isAdvance: true,
           amount,
           paymentMethod,
-          balanceAfter: state.balance,
+          balanceAfter: expectedNewBalance,
           timestamp: new Date().toISOString(),
         }),
         { qos: 1, retain: true },
@@ -1476,7 +1690,7 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
       ok: true,
       postId: Number(postId),
       amount,
-      balance: state.balance,
+      balance: expectedNewBalance,
       paymentMethod,
       receiptNumber: receipt.receiptNumber,
       kind: 'advance_post',
@@ -1557,7 +1771,6 @@ app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
   res.json(settings.kkmManual);
 });
 
-// ★ Изменено: снят adminOnly — нужно оператору для поллинга смены
 app.get('/api/kkm/current-shift', auth, async (_req, res) => {
   await closeExpiredShiftIfNeeded();
   const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
@@ -1572,7 +1785,6 @@ app.get('/api/kkm/current-shift', auth, async (_req, res) => {
   });
 });
 
-// ★ Изменено: снят adminOnly — нужно оператору
 app.get('/api/kkm/shift-status', auth, async (_req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   res.json({ shiftOpen: !!shift });
@@ -1611,7 +1823,6 @@ app.post('/api/kkm/close-shift', auth, adminOnly, async (_req, res) => {
   shift.closedAt = closedAt;
   shift.autoClosed = false;
 
-  // ★ Фильтруем авансы из Z-отчёта
   const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: shift.openedAt, $lte: closedAt }
   }));
@@ -1633,7 +1844,6 @@ app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
   const shift = await Shift.findOne({ shiftOpen: true });
   if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
 
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: shift.openedAt }
   }));
@@ -1654,7 +1864,6 @@ app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
   if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
 
   const closedAt = new Date();
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: currentShift.openedAt, $lte: closedAt }
   }));
@@ -1695,7 +1904,6 @@ app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.k
 app.get('/api/shift-total', auth, adminOnly, async (_req, res) => {
   const currentShift = await Shift.findOne({ shiftOpen: true });
   if (!currentShift) return res.json({ total: 0, count: 0 });
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(reportReceiptsQuery({
     timestamp: { $gte: currentShift.openedAt }
   }));
@@ -1802,7 +2010,6 @@ app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'Некорректные from/to' });
   }
 
-  // ★ Фильтруем авансы
   let receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: -1 });
@@ -1820,7 +2027,6 @@ app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
   const date = new Date(req.params.date);
   const start = new Date(date); start.setHours(0, 0, 0, 0);
   const end   = new Date(date); end.setHours(23, 59, 59, 999);
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: -1 });
@@ -1831,7 +2037,6 @@ app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
 app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - 7); start.setHours(0, 0, 0, 0);
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: -1 });
@@ -1842,7 +2047,6 @@ app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
 app.get('/api/reports/month', auth, adminOnly, async (_req, res) => {
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - 30); start.setHours(0, 0, 0, 0);
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: -1 });
@@ -1855,7 +2059,6 @@ app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
   if (!currentShift) return res.json({ totalSum: 0, count: 0, receipts: [] });
   const start = new Date(currentShift.openedAt);
   const end = new Date();
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: -1 });
@@ -1873,7 +2076,6 @@ app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'Некорректные from/to' });
   }
 
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: -1 });
@@ -1897,7 +2099,6 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
     return res.status(400).json({ error: 'Некорректные from/to' });
   }
 
-  // ★ Фильтруем авансы
   const receipts = await Receipt.find(
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: 1 }).lean();
