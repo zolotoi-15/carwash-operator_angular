@@ -129,7 +129,9 @@ echo.
 :: 7. Angular Frontend
 :: ============================================================
 echo [7/8] Starting Angular Frontend...
-start "CarWash Frontend" cmd /k "cd /d %FRONTEND% && ng serve --host 0.0.0.0"
+
+:: ⭐ ИСПРАВЛЕНИЕ: Добавлен лимит памяти (NODE_OPTIONS), чтобы ng serve не зависал
+start "CarWash Frontend" cmd /k "cd /d %FRONTEND% && set NODE_OPTIONS=--max_old_space_size=8192 && ng serve --host 0.0.0.0"
 
 call :WaitForPort 4200 "Angular Dev Server" 30
 echo.
