@@ -1,8 +1,9 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { Observable, of } from 'rxjs';
-import { map } from 'rxjs/operators';
+import { Observable, of, switchMap } from 'rxjs';
+import { map, tap } from 'rxjs/operators';
 import { environment } from '../../../environments/environment';
+import { SettingsUpdateService } from './settings-update.service';
 
 // ================= МОДЕЛИ =================
 
@@ -16,9 +17,11 @@ export interface ServiceConfig {
 export interface PostSettings {
   postId: number;
   services: ServiceConfig[];
-  relayMask: Record<string, boolean>;
+  /** Маска реле. Может быть числом (битовая маска) или boolean (для отдельных бит). */
+  relayMask: Record<string, number | boolean>;
   vfdFrequencies: Record<string, number>;
-  dimmerMask: Record<string, boolean>;
+  /** Маска диммеров. Может быть числом или boolean. */
+  dimmerMask: Record<string, number | boolean>;
   buttonInputs: Record<string, number>;
   relayDelays: Record<string, { onDelay: number; offDelay: number }>;
   cameras: Record<string, string>;
@@ -53,7 +56,6 @@ export interface RemoteMqttSettings {
 export interface MqttSettings {
   local: LocalMqttSettings;
   remote: RemoteMqttSettings;
-  /** Прямой URL брокера (для совместимости со старой конфигурацией). */
   brokerUrl?: string;
 }
 
@@ -116,6 +118,7 @@ export const emptyGeneralSettings: GeneralSettings = {
 @Injectable({ providedIn: 'root' })
 export class AdminService {
   private http = inject(HttpClient);
+  private settingsUpdate = inject(SettingsUpdateService);
   private apiUrl = `${environment.apiUrl}`;
 
   // ------- server → UI -------
@@ -128,6 +131,7 @@ export class AdminService {
       const postId = Number(postIdStr);
       const pd = pdRaw || {};
       const prices = pd.prices || {};
+
       const services: ServiceConfig[] = (pd.services || []).map((svc: any) => ({
         name: svc.name,
         price:
@@ -137,24 +141,38 @@ export class AdminService {
             ? prices[svc.name]
             : 0,
         free_time_sec: svc.free_time_sec ?? 0,
-        enabled: svc.enabled !== undefined ? svc.enabled : svc.enable !== false,
+        enabled: svc.enabled !== false,
       }));
+
+      // ★ Нормализация карт: у каждой услуги должна быть запись во всех картах.
+      const relayMask      = pd.relayMask      || {};
+      const vfdFrequencies = pd.vfdFrequencies || {};
+      const dimmerMask     = pd.dimmerMask     || {};
+      const buttonInputs   = pd.buttonInputs   || {};
+      const relayDelays    = pd.relayDelays    || {};
+
+      for (const svc of services) {
+        if (relayMask[svc.name]      === undefined) relayMask[svc.name]      = 0;
+        if (vfdFrequencies[svc.name] === undefined) vfdFrequencies[svc.name] = 40;
+        if (dimmerMask[svc.name]     === undefined) dimmerMask[svc.name]     = 0;
+        if (buttonInputs[svc.name]   === undefined) buttonInputs[svc.name]   = 0;
+        if (relayDelays[svc.name]    === undefined) relayDelays[svc.name]    = { onDelay: 100, offDelay: 200 };
+      }
 
       posts.push({
         postId,
         services,
-        relayMask: pd.relayMask || {},
-        vfdFrequencies: pd.vfdFrequencies || {},
-        dimmerMask: pd.dimmerMask || {},
-        buttonInputs: pd.buttonInputs || {},
-        relayDelays: pd.relayDelays || {},
+        relayMask,
+        vfdFrequencies,
+        dimmerMask,
+        buttonInputs,
+        relayDelays,
         cameras: pd.cameras || {},
       });
     }
 
     posts.sort((a, b) => a.postId - b.postId);
 
-    // MQTT — нормализуем (новый формат { local, remote }, старый { brokerUrl })
     const mqttRaw = data?.mqtt || {};
     let mqtt: MqttSettings;
     if (mqttRaw.local || mqttRaw.remote) {
@@ -192,38 +210,77 @@ export class AdminService {
 
   // ------- UI → server -------
 
+  /**
+   * ★ Пересчитывает числовые маски реле/диммеров из галочек вида "Имя_1", "Имя_2", …
+   */
+  private rebuildMasks(post: PostSettings): void {
+    const relayMask  = post.relayMask  || (post.relayMask  = {});
+    const dimmerMask = post.dimmerMask || (post.dimmerMask = {});
+
+    for (const svc of post.services) {
+      // Реле: 8 бит
+      let relay = 0;
+      let hasRelayBit = false;
+      for (let r = 1; r <= 8; r++) {
+        const key = `${svc.name}_${r}`;
+        const v = relayMask[key];
+        if (v === true)  { relay |= (1 << (r - 1)); hasRelayBit = true; }
+        if (v === false) { hasRelayBit = true; }
+      }
+      if (hasRelayBit) {
+        relayMask[svc.name] = relay;
+      }
+
+      // Диммеры: 4 бита
+      let dimmer = 0;
+      let hasDimmerBit = false;
+      for (let d = 1; d <= 4; d++) {
+        const key = `${svc.name}_${d}`;
+        const v = dimmerMask[key];
+        if (v === true)  { dimmer |= (1 << (d - 1)); hasDimmerBit = true; }
+        if (v === false) { hasDimmerBit = true; }
+      }
+      if (hasDimmerBit) {
+        dimmerMask[svc.name] = dimmer;
+      }
+    }
+  }
+
   private toServer(settings: GeneralSettings): any {
-    // 1) posts: массив → объект-словарь
     const postsObj: any = {};
+
     settings.posts.forEach(p => {
+      // ★ Пересчитываем числовые маски из галочек ПЕРЕД сериализацией
+      this.rebuildMasks(p);
+
       const prices: any = {};
       p.services.forEach(svc => {
         prices[svc.name] = svc.price;
       });
+
       postsObj[p.postId] = {
         prices,
-        relayMask: p.relayMask,
+        relayMask:      p.relayMask,
         vfdFrequencies: p.vfdFrequencies,
-        dimmerMask: p.dimmerMask,
-        buttonInputs: p.buttonInputs,
-        relayDelays: p.relayDelays,
-        cameras: p.cameras,
+        dimmerMask:     p.dimmerMask,
+        buttonInputs:   p.buttonInputs,
+        relayDelays:    p.relayDelays,
+        cameras:        p.cameras,
         services: p.services.map(s => ({
           name: s.name,
           price: s.price,
           free_time_sec: s.free_time_sec ?? 0,
+          // ★ enabled: true оставляем как есть (по умолчанию true)
           enabled: s.enabled !== false,
         })),
       };
     });
 
-    // 2) mqtt: отправляем { local, remote } — server.js это понимает
     const mqtt = {
       local: settings.mqtt?.local ?? DEFAULT_MQTT.local,
       remote: settings.mqtt?.remote ?? DEFAULT_MQTT.remote,
     };
 
-    // 3) kkm: приводим UI-поля к серверным
     const kkmFromUi = settings.kkm || {};
     const kkm = {
       enabled: !!kkmFromUi.enabled,
@@ -256,35 +313,64 @@ export class AdminService {
     const body = this.toServer(settings);
     return this.http
       .put<any>(`${this.apiUrl}/settings`, body)
-      .pipe(map(data => this.fromServer(data)));
+      .pipe(
+        map(data => this.fromServer(data)),
+        tap(() => this.settingsUpdate.notifySettingsUpdated())
+      );
   }
 
-  /** Публикация текущего конфига во все посты через MQTT (POST /api/publish-config) */
   publishConfig(): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/publish-config`, {});
   }
 
-  updatePostSettings(postId: number, ps: PostSettings): Observable<PostSettings> {
-    return of(ps);
+  getPostSettings(postId: number): Observable<PostSettings> {
+    return this.getSettings().pipe(
+      map(settings => {
+        const post = settings.posts.find(p => p.postId === postId);
+        if (!post) throw new Error(`Пост ${postId} не найден`);
+        return post;
+      })
+    );
+  }
+
+  updatePostSettings(postId: number, ps: Partial<PostSettings>): Observable<PostSettings> {
+    return this.getSettings().pipe(
+      map(settings => {
+        const idx = settings.posts.findIndex(p => p.postId === postId);
+        if (idx === -1) throw new Error(`Пост ${postId} не найден`);
+        settings.posts[idx] = { ...settings.posts[idx], ...ps };
+        return settings;
+      }),
+      switchMap(updated => this.updateSettings(updated)),
+      map(settings => {
+        const post = settings.posts.find(p => p.postId === postId);
+        if (!post) throw new Error(`Пост ${postId} не найден после обновления`);
+        return post;
+      })
+    );
   }
 
   copySettingsFromPost1ToAll(): Observable<void> {
-    return of(void 0);
+    return this.getSettings().pipe(
+      map(settings => {
+        const post1 = settings.posts.find(p => p.postId === 1);
+        if (!post1) throw new Error('Пост 1 не найден');
+        const count = settings.numberOfPosts || 8;
+        const newPosts: PostSettings[] = [];
+        for (let i = 1; i <= count; i++) {
+          newPosts.push({ ...structuredClone(post1), postId: i });
+        }
+        return { ...settings, posts: newPosts };
+      }),
+      switchMap(updated => this.updateSettings(updated)),
+      map(() => void 0)
+    );
   }
 }
 
-/**
- * Строит WebSocket-URL MQTT из настроек.
- * Приоритет: brokerUrl → local (host + portWs + path).
- * Возвращает '' если собрать не удалось.
- */
 export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
   if (!mqtt) return '';
-
-  if (mqtt.brokerUrl && mqtt.brokerUrl.trim()) {
-    return mqtt.brokerUrl.trim();
-  }
-
+  if (mqtt.brokerUrl && mqtt.brokerUrl.trim()) return mqtt.brokerUrl.trim();
   const local = mqtt.local;
   if (local && local.host) {
     const port = local.portWs || 8083;
@@ -292,6 +378,5 @@ export function buildBrokerUrl(mqtt?: MqttSettings | null): string {
     if (!path.startsWith('/')) path = '/' + path;
     return `ws://${local.host}:${port}${path}`;
   }
-
   return '';
 }

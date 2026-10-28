@@ -1,7 +1,13 @@
 // src/app/core/services/realtime.service.ts
 import { Injectable, OnDestroy } from '@angular/core';
-import { BehaviorSubject, Subject, ReplaySubject } from 'rxjs';
+import { BehaviorSubject, ReplaySubject } from 'rxjs';
 import { environment } from '../../../environments/environment';
+
+export interface RealtimeSettings {
+  tankLevels?: Record<string, number>;
+  numberOfPosts?: number;
+  [key: string]: any;
+}
 
 export interface RealtimeMessage {
   type: 'snapshot' | 'mqtt' | 'card-scan' | 'card-balance' | 'card-created';
@@ -13,8 +19,8 @@ export interface RealtimeMessage {
   cardType?: string;
   known?: boolean;
   error?: string;
-  posts?: any;
-  settings?: any;
+  posts?: Record<string, any>;
+  settings?: RealtimeSettings;
   timestamp: number;
 }
 
@@ -22,9 +28,7 @@ export interface RealtimeMessage {
 export class RealtimeService implements OnDestroy {
   private ws?: WebSocket;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
- // private messagesSubject = new Subject<RealtimeMessage>();
   private messagesSubject = new ReplaySubject<RealtimeMessage>(100);
-
   private connectedSubject = new BehaviorSubject<boolean>(false);
 
   messages$ = this.messagesSubject.asObservable();
@@ -35,11 +39,11 @@ export class RealtimeService implements OnDestroy {
   }
 
   private connect(): void {
-  const explicit = (environment.wsUrl || '').trim();
-  const url = explicit
-    ? explicit
-    : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
-  console.log('[Realtime] connecting to', url);
+    const explicit = (environment.wsUrl || '').trim();
+    const url = explicit
+      ? explicit
+      : `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+    console.log('[Realtime] connecting to', url);
 
     try {
       this.ws = new WebSocket(url);

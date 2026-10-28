@@ -1,6 +1,26 @@
 <div class="settings-page">
   <h2>⚙️ Панель администратора</h2>
 
+  <!-- ===== Количество постов ===== -->
+  <details class="settings-section" open>
+    <summary>🔢 Количество постов</summary>
+    <div class="section-body">
+      <label>Постов на дашборде:
+        <select
+          [(ngModel)]="settings.numberOfPosts"
+          (ngModelChange)="onNumberOfPostsChange($event)">
+          @for (n of numberOfPostsOptions; track n) {
+            <option [ngValue]="n">{{ n }} постов</option>
+          }
+        </select>
+      </label>
+      <p class="hint">
+        Используется для дашборда и во всех разделах, где настраиваются посты
+        (цены, частоты, реле, задержки, кнопки, камеры, услуги).
+      </p>
+    </div>
+  </details>
+
   <!-- ===== MQTT ===== -->
   <details class="settings-section" open>
     <summary>📡 Настройки MQTT</summary>
@@ -62,14 +82,14 @@
     <div class="section-body">
       <label>Пост:
         <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
-          @for (p of settings.posts; track p) {
+          @for (p of settings.posts; track p.postId) {
             <option [ngValue]="p.postId">Пост {{ p.postId }}</option>
           }
         </select>
       </label>
 
       @if (ps; as current) {
-        @for (svc of current.services; track svc) {
+        @for (svc of activeServices(current); track svc.name) {
           <div class="service-row">
             <label>{{ svc.name }}:
               <input type="number" [(ngModel)]="svc.price" />
@@ -86,7 +106,7 @@
     <summary>⚡ Частота частотника (Гц)</summary>
     @if (ps; as current) {
       <div class="section-body">
-        @for (svc of current.services; track svc) {
+        @for (svc of activeServices(current); track svc.name) {
           <div class="service-row">
             <label>{{ svc.name }}:
               <input type="number" [(ngModel)]="current.vfdFrequencies[svc.name]" />
@@ -103,7 +123,7 @@
     <summary>🔌 Номера реле и диммеры</summary>
     @if (ps; as current) {
       <div class="section-body">
-        @for (svc of current.services; track svc) {
+        @for (svc of activeServices(current); track svc.name) {
           <div class="service-row">
             <h4>{{ svc.name }}</h4>
             <div class="check-row">
@@ -138,14 +158,18 @@
     <summary>⏱️ Задержки реле (мс)</summary>
     @if (ps; as current) {
       <div class="section-body">
-        @for (svc of current.services; track svc) {
+        @for (svc of activeServices(current); track svc.name) {
           <div class="service-row">
             <h4>{{ svc.name }}</h4>
             <label>On:
-              <input type="number" [(ngModel)]="current.relayDelays[svc.name].onDelay" />
+              <input type="number"
+                [ngModel]="getDelay(current, svc.name, 'onDelay')"
+                (ngModelChange)="setDelay(current, svc.name, 'onDelay', $event)" />
             </label>
             <label>Off:
-              <input type="number" [(ngModel)]="current.relayDelays[svc.name].offDelay" />
+              <input type="number"
+                [ngModel]="getDelay(current, svc.name, 'offDelay')"
+                (ngModelChange)="setDelay(current, svc.name, 'offDelay', $event)" />
             </label>
           </div>
         }
@@ -159,7 +183,7 @@
     <summary>🔘 Входы кнопок (DI)</summary>
     @if (ps; as current) {
       <div class="section-body">
-        @for (svc of current.services; track svc) {
+        @for (svc of activeServices(current); track svc.name) {
           <div class="service-row">
             <label>{{ svc.name }}:
               <input type="number" [(ngModel)]="current.buttonInputs[svc.name]" />
@@ -201,7 +225,7 @@
     <summary>📷 Камеры постов</summary>
     <div class="section-body">
       <p class="hint">Введите URL видеопотока (MJPEG, HLS .m3u8 или RTSP-трансляцию).</p>
-      @for (p of settings.posts; track p) {
+      @for (p of settings.posts; track p.postId) {
         <div class="service-row">
           <label>Пост {{ p.postId }}:
             <input [(ngModel)]="p.cameras['main']" placeholder="http://..." />
@@ -213,36 +237,60 @@
   </details>
 
   <!-- ===== Услуги (таблица) ===== -->
-  <details class="settings-section">
+  <details class="settings-section" open>
     <summary>📋 Услуги</summary>
     @if (ps; as current) {
       <div class="section-body">
         <label>Пост:
           <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
-            @for (p of settings.posts; track p) {
+            @for (p of settings.posts; track p.postId) {
               <option [ngValue]="p.postId">Пост {{ p.postId }}</option>
             }
           </select>
         </label>
+
         <table class="services-table">
           <thead>
             <tr>
+              <th style="width:60px">Вкл.</th>
               <th>Услуга</th>
-              <th>Цена</th>
-              <th>Беспл. время, сек</th>
+              <th style="width:120px">Цена</th>
+              <th style="width:140px">Беспл. время, сек</th>
+              <th style="width:60px"></th>
             </tr>
           </thead>
           <tbody>
-            @for (svc of current.services; track svc) {
+            @for (svc of current.services; track svc.name; let i = $index) {
               <tr>
-                <td>{{ svc.name }}</td>
-                <td><input type="number" [(ngModel)]="svc.price" /></td>
-                <td><input type="number" [(ngModel)]="svc.free_time_sec" /></td>
+                <td>
+                  <input type="checkbox" [(ngModel)]="svc.enabled" />
+                </td>
+                <td>
+                  <input type="text" [(ngModel)]="svc.name" class="svc-name" />
+                </td>
+                <td>
+                  <input type="number" [(ngModel)]="svc.price" />
+                </td>
+                <td>
+                  <input type="number" [(ngModel)]="svc.free_time_sec" />
+                </td>
+                <td>
+                  <button type="button" class="remove-btn" (click)="removeService(current.postId, i)" title="Удалить">✕</button>
+                </td>
+              </tr>
+            }
+            @if (current.services.length === 0) {
+              <tr>
+                <td colspan="5" class="empty-row">Нет услуг. Нажмите «Добавить услугу».</td>
               </tr>
             }
           </tbody>
         </table>
-        <button (click)="savePostSettings()">💾 Сохранить</button>
+
+        <div class="services-actions">
+          <button type="button" class="add-btn" (click)="addService(current.postId)">➕ Добавить услугу</button>
+          <button type="button" class="save-btn" (click)="savePostSettings()">💾 Сохранить</button>
+        </div>
       </div>
     }
   </details>

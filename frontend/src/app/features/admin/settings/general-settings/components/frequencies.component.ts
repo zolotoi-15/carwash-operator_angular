@@ -1,8 +1,10 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../core/services/admin.service';
+import { AdminService } from '../../../../../core/services/admin.service';
+import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
+import { Subject, takeUntil } from 'rxjs';
 
 @Component({
   selector: 'app-frequencies',
@@ -37,43 +39,49 @@ import { AdminService } from '../../../core/services/admin.service';
     .loading { text-align: center; color: #666; }
   `]
 })
-export class FrequenciesComponent implements OnInit {
+export class FrequenciesComponent implements OnInit, OnDestroy {
   form!: FormGroup;
   serviceKeys: string[] = [];
-  selectedPost: number = 1;
+  selectedPost = 1;
   postIds: number[] = [];
+  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder
-  ) { }
+    private fb: FormBuilder,
+    private settingsUpdate: SettingsUpdateService
+  ) {}
 
-  ngOnInit() {
-    this.admin.getSettings().subscribe(settings => {
-      const count = settings.numberOfPosts || 8;
+  ngOnInit(): void {
+    this.admin.getSettings().subscribe(s => {
+      const count = s.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
       this.loadPostSettings();
     });
+
+    this.settingsUpdate.settingsUpdated$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.loadPostSettings());
   }
 
-  loadPostSettings() {
-    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
-      const services = postSettings.services || [];
-      this.serviceKeys = services.map(s => s.name);
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
 
-      const currentFreq = postSettings.vfdFrequencies || {};
+  loadPostSettings(): void {
+    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
+      const services = ps.services || [];
+      this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
+      const currentFreq = ps.vfdFrequencies || {};
       const group: any = {};
-      this.serviceKeys.forEach(name => {
-        group[name] = [currentFreq[name] || 40];
-      });
+      this.serviceKeys.forEach(name => { group[name] = [currentFreq[name] || 40]; });
       this.form = this.fb.group(group);
     });
   }
 
-  save() {
-    const vfdFrequencies = this.form.value;
-    this.admin.updatePostSettings(this.selectedPost, { vfdFrequencies }).subscribe(() => {
-      alert('Частоты для поста ' + this.selectedPost + ' сохранены');
-    });
+  save(): void {
+    this.admin.updatePostSettings(this.selectedPost, { vfdFrequencies: this.form.value })
+      .subscribe(() => alert('Частоты для поста ' + this.selectedPost + ' сохранены'));
   }
 }

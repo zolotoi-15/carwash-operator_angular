@@ -1,6 +1,6 @@
 <div class="dashboard">
   @if (auth.currentUser$(); as user) {
-   
+    <!-- можно добавить приветствие -->
   }
 
   <div class="top-row">
@@ -13,7 +13,10 @@
 
   <div class="posts-grid">
     @for (id of postIds; track id) {
-      <app-post-card [postId]="id"></app-post-card>
+      <app-post-card
+        [postId]="id"
+        [activeServices]="activeServicesByPost[id] || []">
+      </app-post-card>
     }
   </div>
 </div>

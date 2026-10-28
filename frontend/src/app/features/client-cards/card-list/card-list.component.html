@@ -30,7 +30,7 @@
       <thead>
         <tr>
           <th>Номер карты</th><th>ФИО</th><th>Телефон</th>
-          <th>Тип</th><th>Баланс</th><th>Пополнение</th><th>Действия</th>
+          <th>Тип</th><th>Баланс</th><th>Пополнение (аванс)</th><th>Действия</th>
         </tr>
       </thead>
       <tbody>
@@ -71,12 +71,14 @@
 @if (reportModalOpen) {
   <div class="modal-backdrop" (click)="closeReport()"></div>
 }
+
 @if (reportModalOpen && reportCard) {
   <div class="modal">
     <div class="modal-header">
       <h3>Отчёт по карте {{ reportCard.card }}</h3>
       <button class="modal-close" (click)="closeReport()">✕</button>
     </div>
+
     <div class="modal-body">
       <div class="report-summary">
         <div><strong>ФИО:</strong> {{ reportCard.fullName || '—' }}</div>
@@ -84,12 +86,16 @@
         <div><strong>Тип:</strong> {{ reportCard.type }}</div>
         <div><strong>Текущий баланс:</strong> {{ formatBalance(reportCard.balance) }} ₽</div>
       </div>
+
       @if (reportLoading) {
         <div class="empty">Загрузка операций...</div>
       }
+
       @if (!reportLoading && reportOperations.length) {
         <table class="report-table">
-          <thead><tr><th>Дата</th><th>Тип</th><th>Сумма</th><th>Описание</th></tr></thead>
+          <thead>
+            <tr><th>Дата</th><th>Тип</th><th>Сумма</th><th>Описание</th></tr>
+          </thead>
           <tbody>
             @for (op of reportOperations; track op) {
               <tr>
@@ -100,11 +106,11 @@
                     [class.badge-charge]="op.type === 'charge'"
                     [class.badge-refund]="op.type === 'refund'">
                     {{
-                    op.type === 'topup' ? 'Пополнение'
-                    : op.type === 'topup_from_post' ? 'С поста'
-                    : op.type === 'charge' ? 'Списание'
-                    : op.type === 'refund' ? 'Возврат'
-                    : op.type
+                      op.type === 'topup' ? 'Аванс: пополнение'
+                      : op.type === 'topup_from_post' ? 'Аванс: с поста'
+                      : op.type === 'charge' ? 'Списание'
+                      : op.type === 'refund' ? 'Возврат'
+                      : op.type
                     }}
                   </span>
                 </td>
@@ -115,12 +121,24 @@
           </tbody>
         </table>
       }
+
       @if (!reportLoading && !reportOperations.length) {
         <div class="empty">Операций нет</div>
       }
     </div>
+
     <div class="modal-footer">
       <button class="btn btn-secondary" (click)="closeReport()">Закрыть</button>
     </div>
   </div>
+}
+
+<!-- ★ Диалог выбора способа оплаты — на верхнем уровне, вне модалки отчёта -->
+@if (paymentDialogOpen) {
+  <app-payment-method-dialog
+    [amount]="paymentDialogAmount"
+    [title]="'Пополнение карты ' + paymentDialogCard"
+    (selected)="onPaymentSelected($event)"
+    (cancelled)="onPaymentCancelled()">
+  </app-payment-method-dialog>
 }

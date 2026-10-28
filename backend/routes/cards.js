@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const ClientCard = require('../models/ClientCard');
 const CardOperation = require('../models/CardOperation');
+const { createReceipt } = require('../services/receipt.service');
 
 // ============================================================
 // ВАЖНО: специфичные пути — ДО параметрических /:card
@@ -19,7 +20,6 @@ router.get('/', async (_req, res) => {
 });
 
 // ---------- SEARCH ----------
-// GET /api/cards/search?q=...
 router.get('/search', async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json([]);
@@ -60,13 +60,19 @@ router.post('/', async (req, res) => {
   }
 });
 
-// ---------- TOPUP BY NUMBER ----------
-// POST /api/cards/by-number/:number/topup
+// ---------- TOPUP BY NUMBER (аванс) ----------
+// POST /api/cards/by-number/:number/topup  { amount, paymentMethod }
 router.post('/by-number/:number/topup', async (req, res) => {
   const num = Number(req.body?.amount);
+  const paymentMethod = req.body?.paymentMethod || null;
+
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
   const number = String(req.params.number || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
@@ -82,27 +88,43 @@ router.post('/by-number/:number/topup', async (req, res) => {
       amount: num,
       balanceAfter: card.balance,
       operatorName: req.user?.username || null,
-      comment: 'Пополнение по номеру карты',
+      comment: 'Аванс: пополнение карты по номеру',
     }).catch(() => {});
+
+    const receipt = await createReceipt({
+      postId:        0,
+      kind:          'advance_card',
+      operation:     'topup',
+      isAdvance:     true,
+      items:         [{ name: 'Аванс: пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
 
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
 
-    res.json(card);
+    res.json({ ...card.toObject(), receiptNumber: receipt.receiptNumber, isAdvance: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ---------- TOPUP FROM POST ----------
-// POST /api/cards/:card/topup-from-post
+// ---------- TOPUP FROM POST (аванс) ----------
+// POST /api/cards/:card/topup-from-post  { postId, amount, paymentMethod }
 router.post('/:card/topup-from-post', async (req, res) => {
-  const { postId, amount } = req.body || {};
+  const { postId, amount, paymentMethod } = req.body || {};
   const num = Number(amount);
+
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
   const cardNumber = String(req.params.card || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
@@ -118,27 +140,44 @@ router.post('/:card/topup-from-post', async (req, res) => {
       amount: num,
       balanceAfter: card.balance,
       postId: postId != null ? String(postId) : null,
-      comment: 'Перенос баланса с поста',
+      comment: 'Аванс: перенос с поста',
     }).catch(() => {});
+
+    const receipt = await createReceipt({
+      postId:        Number(postId) || 0,
+      kind:          'advance_card',
+      operation:     'topup',
+      isAdvance:     true,
+      items:         [{ name: 'Аванс: пополнение карты с поста', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
 
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
 
-    console.log(`💳 [Post ${postId ?? '—'}] → карта ${card.card}: +${num} ₽ (итог ${card.balance})`);
-    res.json(card);
+    console.log(`💳 [Post ${postId ?? '—'}] → карта ${card.card}: аванс +${num} ₽ (итог ${card.balance}), чек №${receipt.receiptNumber}`);
+    res.json({ ...card.toObject(), receiptNumber: receipt.receiptNumber, isAdvance: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-// ---------- TOPUP (manual) ----------
-// POST /api/cards/:card/topup
+// ---------- TOPUP (manual, аванс) ----------
+// POST /api/cards/:card/topup  { amount, paymentMethod }
 router.post('/:card/topup', async (req, res) => {
   const num = Number(req.body?.amount);
+  const paymentMethod = req.body?.paymentMethod || null;
+
   if (!num || num <= 0) {
     return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   }
+  if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
+    return res.status(400).json({ error: 'Недопустимый способ оплаты' });
+  }
+
   const cardNumber = String(req.params.card || '').toUpperCase();
   try {
     const card = await ClientCard.findOneAndUpdate(
@@ -154,21 +193,31 @@ router.post('/:card/topup', async (req, res) => {
       amount: num,
       balanceAfter: card.balance,
       operatorName: req.user?.username || null,
-      comment: 'Ручное пополнение оператором',
+      comment: 'Аванс: ручное пополнение оператором',
     }).catch(() => {});
+
+    const receipt = await createReceipt({
+      postId:        0,
+      kind:          'advance_card',
+      operation:     'topup',
+      isAdvance:     true,
+      items:         [{ name: 'Аванс: пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
 
     if (req.app.locals.publishCardBalanceToPosts) {
       req.app.locals.publishCardBalanceToPosts(card.card).catch(() => {});
     }
 
-    res.json(card);
+    res.json({ ...card.toObject(), receiptNumber: receipt.receiptNumber, isAdvance: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 // ---------- REPORT ----------
-// GET /api/cards/:card/report?from=...&to=...
 router.get('/:card/report', async (req, res) => {
   const cardNumber = String(req.params.card || '').toUpperCase();
   const filter = { card: cardNumber };
@@ -197,7 +246,6 @@ router.get('/:card/report', async (req, res) => {
 });
 
 // ---------- PATCH info ----------
-// PATCH /api/cards/:card
 router.patch('/:card', async (req, res) => {
   const cardNumber = String(req.params.card || '').toUpperCase();
   const update = {};
@@ -212,7 +260,7 @@ router.patch('/:card', async (req, res) => {
   }
 });
 
-// ---------- GET / DELETE (параметрические) ----------
+// ---------- GET / DELETE ----------
 router.get('/:card', async (req, res) => {
   try {
     const card = await ClientCard.findOne({ card: req.params.card.toUpperCase() });

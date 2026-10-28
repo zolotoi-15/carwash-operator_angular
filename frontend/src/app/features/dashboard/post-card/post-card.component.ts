@@ -7,6 +7,10 @@ import { Subscription } from 'rxjs';
 import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
 import { NotificationService } from '../../../core/services/notification.service';
 import { ReceiptModalComponent } from '../receipt-modal/receipt-modal.component';
+import {
+  PaymentMethodDialogComponent,
+  PaymentMethod,
+} from '../../../shared/components/payment-method-dialog/payment-method-dialog.component';
 
 interface CardScanFlash {
   card: string;
@@ -14,15 +18,30 @@ interface CardScanFlash {
   timestamp: number;
 }
 
+/** ★ Тип активной услуги, приходящей из DashboardComponent */
+export interface ActiveService {
+  name: string;
+  price: number;
+  free_time_sec: number;
+}
+
 @Component({
   selector: 'app-post-card',
   standalone: true,
-  imports: [CommonModule, FormsModule, ReceiptModalComponent],
+  imports: [
+    CommonModule,
+    FormsModule,
+    ReceiptModalComponent,
+    PaymentMethodDialogComponent,
+  ],
   templateUrl: './post-card.component.html',
   styleUrls: ['./post-card.component.scss'],
 })
 export class PostCardComponent implements OnInit, OnDestroy {
   @Input() postId!: number;
+
+  /** ★ Активные услуги, приходят из DashboardComponent (зависят от блока «Услуги») */
+  @Input() activeServices: ActiveService[] = [];
 
   private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
@@ -39,11 +58,17 @@ export class PostCardComponent implements OnInit, OnDestroy {
   sum = 0;
   lastSeen: number | null = null;
 
+  /** Номер текущего авансового чека по этому посту */
+  currentAdvanceReceiptNumber: number | null = null;
+
   // ============================================================
   // Пополнение
   // ============================================================
   topUpAmount: number | null = null;
   showTopUpModal = false;
+
+  showPaymentDialog = false;
+  pendingTopUpAmount = 0;
 
   // ============================================================
   // Flash при сканировании карты
@@ -52,10 +77,10 @@ export class PostCardComponent implements OnInit, OnDestroy {
   cardFlashVisible = false;
   private flashTimeout: any = null;
 
-  readonly functions = [
-    'Вода', 'Пена', 'Воск', 'Тефлон', 'Антимошка',
-    'Шампунь', 'Турбо', 'Пылесос', 'Воздух', 'Пауза',
-  ];
+  /** ★ Кнопки программ теперь вычисляются из activeServices */
+  get functions(): string[] {
+    return (this.activeServices || []).map(s => s.name);
+  }
 
   private subs = new Subscription();
 
@@ -76,31 +101,26 @@ export class PostCardComponent implements OnInit, OnDestroy {
   private handleRealtime(msg: RealtimeMessage): void {
     const postIdStr = String(this.postId);
 
-    // ---------- 1. Snapshot при подключении ----------
     if (msg.type === 'snapshot') {
       const state = msg.posts?.[postIdStr];
       if (state) this.applyState(state);
       return;
     }
 
-    // ---------- 2. Сканирование карты (от backend) ----------
     if (msg.type === 'card-scan' && String(msg.postId) === postIdStr) {
       this.showCardFlash(msg.card || '');
       return;
     }
 
-    // ---------- 3. Обновление баланса карты (от backend) ----------
     if (msg.type === 'card-balance' && String(msg.postId) === postIdStr) {
       if (typeof msg.balance === 'number') this.balance = msg.balance;
       if (msg.card) this.showCardFlash(String(msg.card));
       return;
     }
 
-    // ---------- 4. Трансляция MQTT ----------
     if (msg.type !== 'mqtt') return;
     const topic = msg.topic || '';
 
-    // posts/<id>/lwt
     if (topic === `posts/${postIdStr}/lwt`) {
       const online = (msg.payload || '').trim().toLowerCase() === 'online';
       this.online = online;
@@ -108,7 +128,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/status
     if (topic === `posts/${postIdStr}/status`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -117,7 +136,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/status_relay
     if (topic === `posts/${postIdStr}/status_relay`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -131,7 +149,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // posts/<id>/clientcardbalance
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
@@ -140,16 +157,29 @@ export class PostCardComponent implements OnInit, OnDestroy {
       } catch { /* ignore */ }
       return;
     }
+
+    if (topic === `posts/${postIdStr}/receipt_number`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        
+        // ⭐ ИСПРАВЛЕНИЕ: Разрешаем принимать null или 0, чтобы сбрасывать номер
+        if (data.receiptNumber !== undefined) {
+          this.currentAdvanceReceiptNumber = data.receiptNumber ? Number(data.receiptNumber) : null;
+        }
+        
+        if (typeof data.balanceAfter === 'number') {
+          this.balance = data.balanceAfter;
+        }
+      } catch { /* ignore */ }
+      return;
+    }
   }
 
-  /** Применить состояние из snapshot или posts/<id>/status */
   private applyState(d: any): void {
-    // 🔥 online — читаем из snapshot и status
     if (typeof d.online === 'boolean') {
       this.online = d.online;
       this.esp32Connected = d.online;
     }
-
     if (typeof d.busy === 'boolean') this.busy = d.busy;
     if (typeof d.paused === 'boolean') this.paused = d.paused;
     if (typeof d.balance === 'number') this.balance = d.balance;
@@ -160,6 +190,11 @@ export class PostCardComponent implements OnInit, OnDestroy {
     this.activeFunction = raw === '-' ? '' : raw;
 
     if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
+
+    // ⭐ ИСПРАВЛЕНИЕ: Если пост свободен (busy = false) и баланс <= 0, сбрасываем номер аванса
+    if (this.busy === false && this.balance <= 0) {
+      this.currentAdvanceReceiptNumber = null;
+    }
   }
 
   // ============================================================
@@ -181,11 +216,26 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Команды — через REST (backend публикует в MQTT)
+  // Команды
   // ============================================================
-  stop(): void { this.sendCommand('stop'); }
+  
+  // ⭐ ИСПРАВЛЕНИЕ: Добавлен сброс номера аванса и активной функции при стопе
+  stop(): void { 
+    this.sendCommand('stop'); 
+    this.currentAdvanceReceiptNumber = null;
+    this.activeFunction = '';
+  }
+
   pause(): void { this.sendCommand('pause'); }
-  reset(): void { this.sendCommand('reset'); }
+
+  // ⭐ ИСПРАВЛЕНИЕ: Добавлен сброс номера аванса, баланса и активной функции при сбросе
+  reset(): void { 
+    this.sendCommand('reset'); 
+    this.currentAdvanceReceiptNumber = null;
+    this.activeFunction = '';
+    this.balance = 0;
+  }
+
   printReceipt(): void { this.sendCommand('print_receipt'); }
 
   activateFunction(programName: string): void {
@@ -196,20 +246,73 @@ export class PostCardComponent implements OnInit, OnDestroy {
   openTopUpModal(): void { this.showTopUpModal = true; }
   closeTopUpModal(): void { this.showTopUpModal = false; }
 
+  // ============================================================
+  // Пополнение поста — аванс
+  // ============================================================
   quickTopUp(): void {
     const amount = Number(this.topUpAmount) || 0;
     if (amount <= 0) return;
-    this.handleTopUp({ postId: this.postId, amount });
-    this.topUpAmount = null;
+    this.pendingTopUpAmount = amount;
+    this.showPaymentDialog = true;
   }
 
   handleTopUp({ postId, amount }: { postId: number; amount: number }): void {
     if (amount <= 0) return;
-    this.sendCommand(`add_balance ${amount}`);
-    this.balance = Math.round((this.balance + amount) * 100) / 100;
-    this.notify.success(`Пост ${postId}: пополнено на ${amount} ₽`);
+    this.pendingTopUpAmount = amount;
+    this.showPaymentDialog = true;
   }
 
+  onPaymentSelected(method: PaymentMethod): void {
+    this.showPaymentDialog = false;
+    const amount = this.pendingTopUpAmount;
+    this.pendingTopUpAmount = 0;
+    this.performTopUp(this.postId, amount, method);
+    this.topUpAmount = null;
+  }
+
+  onPaymentCancelled(): void {
+    this.showPaymentDialog = false;
+    this.pendingTopUpAmount = 0;
+  }
+
+  private performTopUp(postId: number, amount: number, paymentMethod: PaymentMethod): void {
+    if (amount <= 0) return;
+    const token = localStorage.getItem('carwash_auth_token') || '';
+
+    fetch(`/api/posts/${postId}/topup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ amount, paymentMethod }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const e = await res.json().catch(() => ({}));
+          throw new Error(e.error || `HTTP ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (typeof data.balance === 'number') this.balance = data.balance;
+        if (typeof data.receiptNumber === 'number') {
+          this.currentAdvanceReceiptNumber = data.receiptNumber;
+        }
+        const label = paymentMethod === 'cash' ? 'нал.' : 'безнал.';
+        const receipt = data.receiptNumber ? `, авансовый чек №${data.receiptNumber}` : '';
+        this.notify.success(
+          `Пост ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
+        );
+      })
+      .catch((err) => {
+        this.notify.error(`Пополнение не выполнено: ${err.message}`);
+      });
+  }
+
+  // ============================================================
+  // Отправка команд поста
+  // ============================================================
   private sendCommand(command: string): void {
     const token = localStorage.getItem('carwash_auth_token') || '';
     console.log(`[PostCard ${this.postId}] → ${command}`);

@@ -1,8 +1,8 @@
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../core/services/admin.service';
-import { MqttService } from '../../../core/services/mqtt.service';
+import { AdminService } from '../../../../../core/services/admin.service';
+import { MqttService } from '../../../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-mqtt-settings',
@@ -16,11 +16,11 @@ import { MqttService } from '../../../core/services/mqtt.service';
       </div>
       <div class="form-group">
         <label>Имя пользователя:</label>
-        <input formControlName="username" type="text" placeholder="(опционально)" />
+        <input formControlName="username" type="text" />
       </div>
       <div class="form-group">
         <label>Пароль:</label>
-        <input formControlName="password" type="password" placeholder="(опционально)" />
+        <input formControlName="password" type="password" />
       </div>
       <button type="submit" class="save-btn">💾 Сохранить и переподключиться</button>
     </form>
@@ -39,33 +39,41 @@ export class MqttSettingsComponent implements OnInit {
     private admin: AdminService,
     private mqtt: MqttService,
     private fb: FormBuilder
-  ) { }
+  ) {}
 
-  ngOnInit() {
-    // Загружаем текущие настройки из админки
+  ngOnInit(): void {
     this.admin.getSettings().subscribe(settings => {
-      const mqttSettings = settings.mqtt || { brokerUrl: 'ws://' + window.location.hostname + ':8083', username: '', password: '' };
+      const m = settings.mqtt;
       this.form = this.fb.group({
-        brokerUrl: [mqttSettings.brokerUrl || ''],
-        username: [mqttSettings.username || ''],
-        password: [mqttSettings.password || '']
+        brokerUrl: [m?.brokerUrl || `ws://${m?.local?.host || location.hostname}:${m?.local?.portWs || 8083}${m?.local?.path || '/mqtt'}`],
+        username: [m?.local?.username || ''],
+        password: [m?.local?.password || '']
       });
     });
   }
 
-  save() {
-    const mqttSettings = this.form.value;
-    // Сохраняем в настройки админки (через /api/settings)
-    this.admin.updateSettings({ mqtt: mqttSettings }).subscribe({
-      next: () => {
-        // Переподключаем MQTT-клиент с новыми параметрами
-        this.mqtt.reconnect(mqttSettings.brokerUrl, mqttSettings.username, mqttSettings.password);
-        alert('Настройки MQTT сохранены и применены');
-      },
-      error: (err) => {
-        console.error('Ошибка сохранения настроек MQTT', err);
-        alert('Ошибка сохранения');
-      }
+  save(): void {
+    const v = this.form.value;
+    this.admin.getSettings().subscribe(settings => {
+      const updated = {
+        ...settings,
+        mqtt: {
+          ...settings.mqtt,
+          brokerUrl: v.brokerUrl,
+          local: {
+            ...settings.mqtt.local,
+            username: v.username,
+            password: v.password
+          }
+        }
+      };
+      this.admin.updateSettings(updated).subscribe({
+        next: () => {
+          this.mqtt.reconnect(v.brokerUrl, v.username, v.password);
+          alert('Настройки MQTT сохранены и применены');
+        },
+        error: () => alert('Ошибка сохранения')
+      });
     });
   }
 }

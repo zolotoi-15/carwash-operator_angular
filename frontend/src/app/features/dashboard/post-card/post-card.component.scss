@@ -118,6 +118,18 @@
       border-color: #2563eb;
     }
   }
+
+  /* ★ Сообщение, если активных услуг нет */
+  .no-services {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: #94a3b8;
+    font-style: italic;
+    padding: 8px;
+    font-size: 12px;
+    border: 1px dashed #e2e8f0;
+    border-radius: 4px;
+  }
 }
 
 @media (max-width: 1400px) {

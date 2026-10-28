@@ -1,11 +1,16 @@
-// src/app/pages/card-report/card-report.component.ts
+// frontend/src/app/features/reports/card-report/card-report.component.ts
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 
-import { ClientCardService, CardReportResponse } from '../../core/services/client-card.service';
-import { CardOperation, CardReportSummary } from '../../models/client-card.model';
+import { ClientCardService } from '../../../core/services/client-card.service';
+// ★ ИСПРАВЛЕНО: путь к core/models (было ../../models/)
+import {
+  CardOperation,
+  CardReportResponse,
+  CardReportSummary,
+} from '../../../core/models/client-card.model';
 
 @Component({
   selector: 'app-card-report',
@@ -64,7 +69,8 @@ export class CardReportComponent implements OnInit {
 
     const header = ['Дата', 'Тип', 'Сумма', 'Баланс после', 'Пост', 'Чек', 'Оператор'];
     const rows = this.operations.map((op) => [
-      new Date(op.date).toLocaleString('ru-RU'),
+      // ★ ИСПРАВЛЕНО: op.createdAt вместо op.date
+      new Date(op.createdAt).toLocaleString('ru-RU'),
       op.type,
       String(op.amount),
       String(op.balanceAfter),
@@ -87,6 +93,7 @@ export class CardReportComponent implements OnInit {
   }
 
   back(): void {
-    this.router.navigate(['/cards']);
+    // ★ ИСПРАВЛЕНО: реальный маршрут карт — /client-cards (см. app.routes.ts)
+    this.router.navigate(['/client-cards']);
   }
 }

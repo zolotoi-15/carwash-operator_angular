@@ -4,3 +4,4 @@ export * from './group.service';
 export * from './permission.service';
 export * from './notification.service';
 export * from './storage.service';
+export * from './settings-update.service';
