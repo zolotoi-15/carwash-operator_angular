@@ -211,43 +211,15 @@ function connectMqtt(settings) {
           const m = topic.match(/^posts\/(\d+)\//);
           if (m) receiptData.postId = parseInt(m[1], 10);
         }
-
-        // ★ Автооткрытие смены перед сохранением чека
-        await ensureOpenShift();
-
-        let timestamp = receiptData.timestamp;
-        if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) {
-          timestamp = new Date();
-        } else {
-          timestamp = new Date(timestamp);
+        // fallback для формата { totalCash } без items
+        if (!Array.isArray(receiptData.items) && receiptData.totalCash != null) {
+          receiptData.items = [{ name: 'Услуги', cost: Number(receiptData.totalCash) || 0 }];
         }
-        const totalCost = receiptData.items.reduce((sum, item) => sum + (item.cost || 0), 0);
-        const roundedTotal = Math.round(totalCost * 10) / 10;
-        const roundedItems = receiptData.items.map(item => ({
-          ...item,
-          seconds: Math.round((item.seconds || 0) * 10) / 10,
-          cost: Math.round((item.cost || 0) * 10) / 10,
-          pricePerSecond: Math.round(((item.cost || 0) / (item.seconds || 1)) * 10) / 10,
-          discount: item.discount || 0
-        }));
-        const receiptNumber = await getNextReceiptNumber();
-        const newReceipt = new Receipt({
-          postId: receiptData.postId,
-          receiptNumber,
-          timestamp,
-          operation: receiptData.operation || 'sell',
-          items: roundedItems,
-          totalCost: roundedTotal,
-          balanceAfter: Math.round((receiptData.balance || 0) * 10) / 10,
-          paymentMethod: receiptData.paymentMethod || null,
-          discountTotal: receiptData.discountTotal || 0,
-          correctionInfo: receiptData.correctionInfo || null,
-          fiscalSent: false
-        });
-        await newReceipt.save();
-        console.log(`✅ Чек №${receiptNumber} сохранён`);
-
-        await broadcastShiftTotal();
+        if (!Array.isArray(receiptData.items) || !receiptData.items.length) {
+          console.warn(`⚠️ Чек из ${topic} пропущен: нет позиций`);
+        } else {
+          await saveReceiptToDb(receiptData);
+        }
       } catch (err) {
         console.error(`Ошибка сохранения чека из ${topic}:`, err.message);
       }
@@ -273,7 +245,7 @@ function connectMqtt(settings) {
         } else if (command === 'reset') {
           resetPost(postId);
         } else if (command === 'print_receipt') {
-          printReceipt(postId);
+          printReceipt(postId).catch(e => console.error(`Ошибка печати чека (пост ${postId}):`, e.message));
         }
       } catch (e) {
         console.error(`Ошибка обработки команды для поста ${postId}:`, e.message);
@@ -913,7 +885,9 @@ function handleProgram(postId, programName) {
 function stopPost(postId, publish = true, printReceiptFlag = false) {
   const state = getPostState(postId);
   if (!state.busy && !printReceiptFlag) return;
-  if (printReceiptFlag && Object.keys(state.servicesUsage).length > 0) printReceipt(postId);
+  if (printReceiptFlag && Object.keys(state.servicesUsage).length > 0) {
+    printReceipt(postId).catch(e => console.error(`Ошибка печати чека (пост ${postId}):`, e.message));
+  }
   if (state.timer) clearInterval(state.timer);
   state.timer = null; state.busy = false; state.paused = false;
   state.currentProgram = null; state.elapsedSec = 0;
@@ -930,11 +904,109 @@ function togglePause(postId) {
   } else stopPost(postId, true, false);
 }
 
-function addBalance(postId, amount) {
+// ============================================================
+// Единое сохранение чеков в БД (пополнение баланса / итог услуг)
+// Типы операций: 'topup' — пополнение баланса поста, 'sell' — использованные услуги
+// ============================================================
+const OP_TOPUP = 'topup';
+const OP_SELL = 'sell';
+
+async function saveReceiptToDb(receiptData) {
+  if (!receiptData || !Array.isArray(receiptData.items) || !receiptData.items.length) {
+    throw new Error('Чек не сохранён: отсутствуют позиции (items)');
+  }
+  if (!receiptData.postId) throw new Error('Чек не сохранён: отсутствует postId');
+
+  // Автооткрытие смены перед сохранением чека
+  try { await ensureOpenShift(); } catch (e) {
+    console.warn('ensureOpenShift при сохранении чека:', e.message);
+  }
+
+  let timestamp = receiptData.timestamp;
+  if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) {
+    timestamp = new Date();
+  } else {
+    timestamp = new Date(timestamp);
+  }
+
+  const roundedItems = receiptData.items.map(item => ({
+    ...item,
+    name: item.name || 'Услуга',
+    seconds: Math.round((item.seconds || 0) * 100) / 100,
+    cost: Math.round((item.cost != null ? item.cost : (item.total || 0)) * 100) / 100,
+    pricePerSecond: Math.round(
+      ((item.pricePerSecond != null ? item.pricePerSecond
+        : (item.price != null ? item.price
+          : (item.seconds > 0 ? (item.cost || 0) / item.seconds : 0))) * 100)) / 100,
+    discount: item.discount || 0,
+    discountPercent: item.discountPercent || 0,
+  }));
+
+  const totalCostRaw = receiptData.totalCost != null
+    ? Number(receiptData.totalCost)
+    : (receiptData.totalCash != null
+        ? Number(receiptData.totalCash)
+        : roundedItems.reduce((s, i) => s + (i.cost || 0), 0));
+  const roundedTotal = Math.round(totalCostRaw * 100) / 100;
+
+  const operation = receiptData.operation && ['topup', 'sell'].includes(receiptData.operation)
+    ? receiptData.operation
+    : (receiptData.operation === OP_TOPUP ? OP_TOPUP : OP_SELL);
+
+  const receiptNumber = await getNextReceiptNumber();
+  const newReceipt = await Receipt.create({
+    postId: Number(receiptData.postId),
+    receiptNumber,
+    timestamp,
+    operation,
+    items: roundedItems,
+    totalCost: roundedTotal,
+    balanceAfter: Math.round((receiptData.balance != null ? receiptData.balance : (receiptData.balanceAfter || 0)) * 100) / 100,
+    paymentMethod: receiptData.paymentMethod || null,
+    discountTotal: receiptData.discountTotal || 0,
+    correctionInfo: receiptData.correctionInfo || null,
+    fiscalSent: false,
+  });
+  console.log(`✅ Чек №${receiptNumber} (${operation}) пост ${newReceipt.postId} на ${roundedTotal} ₽ сохранён в БД`);
+
+  await broadcastShiftTotal();
+
+  // Трансляция чека фронтенду по WebSocket (чтобы список чеков обновлялся в реальном времени)
+  broadcast({
+    type: 'mqtt',
+    topic: 'kkm/print',
+    payload: JSON.stringify({
+      postId: newReceipt.postId,
+      receiptNumber: newReceipt.receiptNumber,
+      operation: newReceipt.operation,
+      items: newReceipt.items,
+      totalCost: newReceipt.totalCost,
+      balance: newReceipt.balanceAfter,
+      paymentMethod: newReceipt.paymentMethod,
+      timestamp: newReceipt.timestamp,
+    }),
+    timestamp: Date.now(),
+  });
+
+  return newReceipt;
+}
+
+function addBalance(postId, amount, meta = {}) {
   const state = getPostState(postId);
   state.balance = Math.round((state.balance + amount) * 100) / 100;
   state.totalPaid = Math.round((state.totalPaid + amount) * 100) / 100;
   publishStatus(postId);
+
+  // ★ Чек пополнения баланса поста — сохраняем в БД
+  saveReceiptToDb({
+    postId: parseInt(postId, 10),
+    operation: OP_TOPUP,
+    items: [{ name: 'Пополнение баланса поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
+    totalCost: amount,
+    balance: state.balance,
+    paymentMethod: meta.paymentMethod || 'cash',
+    timestamp: new Date().toISOString(),
+  }).catch(e => console.error(`Ошибка сохранения чека пополнения (пост ${postId}):`, e.message));
 }
 
 function resetPost(postId) {
@@ -947,7 +1019,7 @@ function resetPost(postId) {
   publishStatus(postId); publishRelayStatus(postId);
 }
 
-function printReceipt(postId) {
+async function printReceipt(postId) {
   const state = getPostState(postId);
   const items = []; let totalCost = 0;
   for (const [name, usage] of Object.entries(state.servicesUsage)) {
@@ -961,10 +1033,31 @@ function printReceipt(postId) {
     }
   }
   if (!items.length || totalCost < 0.01) return;
-  mqttClient.publish('kkm/print', JSON.stringify({
-    postId: parseInt(postId), timestamp: new Date().toISOString(),
-    operation: 'Чек по сессии', items, balance: Math.round(state.balance * 100) / 100
-  }), { qos: 1 });
+
+  const receiptPayload = {
+    postId: parseInt(postId, 10),
+    timestamp: new Date().toISOString(),
+    operation: OP_SELL,
+    items,
+    totalCost: Math.round(totalCost * 100) / 100,
+    balance: Math.round(state.balance * 100) / 100,
+    paymentMethod: state.clientCard ? 'client_card' : 'cash',
+  };
+
+  // ★ Итоговый чек использованных услуг — сохраняем напрямую в БД
+  //   (не зависим от наличия MQTT-клиента)
+  try {
+    await saveReceiptToDb(receiptPayload);
+  } catch (e) {
+    console.error(`Ошибка сохранения итогового чека (пост ${postId}):`, e.message);
+  }
+
+  // Печать на ККМ через MQTT — опционально
+  if (mqttClient) {
+    try { mqttClient.publish('kkm/print', JSON.stringify(receiptPayload), { qos: 1 }); }
+    catch (e) { console.warn('Не удалось опубликовать чек в kkm/print:', e.message); }
+  }
+
   state.servicesUsage = {};
   state.receiptCount++;
   publishStatus(postId);
@@ -1844,44 +1937,50 @@ app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
   });
 });
 
+// POST /api/receipts — сохранение чека (пополнение 'topup' / итог услуг 'sell')
+// Используется фронтендом в offline-режиме и внешними интеграциями.
 app.post('/api/receipts', async (req, res) => {
   try {
-    const receiptData = req.body;
+    const receiptData = req.body || {};
     if (!receiptData.postId || !Array.isArray(receiptData.items) || !receiptData.items.length) {
       return res.status(400).json({ error: 'postId и items обязательны' });
     }
-    const roundedItems = receiptData.items.map(item => ({
-      name: item.name || 'Услуга',
-      seconds: Math.round((item.seconds || 0) * 10) / 10,
-      cost: Math.round((item.cost || 0) * 10) / 10,
-      pricePerSecond: Math.round((item.pricePerSecond || 0) * 10) / 10,
-      discount: item.discount || 0, discountPercent: item.discountPercent || 0
-    }));
-    const roundedTotal = Math.round(roundedItems.reduce((s, i) => s + i.cost, 0) * 10) / 10;
-    let timestamp = receiptData.timestamp;
-    if (!timestamp || timestamp === 'now' || isNaN(Date.parse(timestamp))) timestamp = new Date();
-    else timestamp = new Date(timestamp);
-
-    await ensureOpenShift();
-
-    const receiptNumber = await getNextReceiptNumber();
-    const newReceipt = await Receipt.create({
-      postId: Number(receiptData.postId), receiptNumber, timestamp,
-      operation: receiptData.operation || 'sell',
-      items: roundedItems, totalCost: roundedTotal,
-      balanceAfter: Math.round((receiptData.balance || 0) * 10) / 10,
-      paymentMethod: receiptData.paymentMethod || null,
-      discountTotal: receiptData.discountTotal || 0,
-      correctionInfo: receiptData.correctionInfo || null,
-      fiscalSent: false
+    const newReceipt = await saveReceiptToDb(receiptData);
+    res.status(201).json({
+      message: 'Чек сохранён',
+      id: newReceipt._id,
+      receiptNumber: newReceipt.receiptNumber,
+      operation: newReceipt.operation,
+      totalCost: newReceipt.totalCost,
     });
-
-    await broadcastShiftTotal();
-
-    res.status(201).json({ message: 'Чек сохранён', id: newReceipt._id });
   } catch (err) {
     console.error('Ошибка сохранения чека:', err.message);
     res.status(500).json({ error: 'Ошибка сервера' });
+  }
+});
+
+// POST /api/posts/:postId/topup — пополнение баланса поста с сохранением чека в БД
+app.post('/api/posts/:postId/topup', auth, adminOnly, async (req, res) => {
+  try {
+    const postId = req.params.postId;
+    const amount = Math.round((Number(req.body && req.body.amount) || 0) * 100) / 100;
+    if (!(amount > 0)) return res.status(400).json({ error: 'Некорректная сумма пополнения' });
+
+    const paymentMethod = (req.body && req.body.paymentMethod) || 'cash';
+
+    // Если ESP32 онлайн — проводим команду через MQTT (ESP обновит баланс,
+    // обработчик команды сохранит чек); если офлайн — локально на бэкенде.
+    const state = getPostState(postId);
+    if (mqttClient && state && state.online) {
+      mqttClient.publish(`posts/${postId}/command`, JSON.stringify({ command: `add_balance ${amount}` }), { qos: 1 });
+    } else {
+      addBalance(postId, amount, { paymentMethod });
+    }
+
+    res.json({ ok: true, postId: Number(postId), amount, message: 'Баланс пополнен, чек сохраняется в БД' });
+  } catch (err) {
+    console.error('Ошибка пополнения баланса:', err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
