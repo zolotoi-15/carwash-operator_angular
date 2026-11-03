@@ -1,0 +1,304 @@
+<div class="reports-page">
+
+  <!-- ===== Шапка ===== -->
+  <header class="page-header no-print">
+    <div>
+      <h1>📊 Отчёты по кассовым чекам</h1>
+      <p class="subtitle">{{ periodLabel() }} · {{ rangeLabel() }}</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn" (click)="refresh()" [disabled]="loading">🔄 Обновить</button>
+      <button class="btn btn-primary" (click)="downloadPdf()">📄 Скачать PDF</button>
+    </div>
+  </header>
+
+  <!-- ===== Панель фильтров ===== -->
+  <section class="controls no-print">
+    <div class="segmented">
+      <button [class.active]="period === 'shift'"    (click)="setPeriod('shift')">🕐 Текущая смена</button>
+      <button [class.active]="period === 'day'"       (click)="setPeriod('day')">Сегодня</button>
+      <button [class.active]="period === 'yesterday'" (click)="setPeriod('yesterday')">Вчера</button>
+      <button [class.active]="period === 'week'"      (click)="setPeriod('week')">Неделя</button>
+      <button [class.active]="period === 'month'"     (click)="setPeriod('month')">Месяц</button>
+    </div>
+
+    <div class="range-picker">
+      <span class="range-label">Период:</span>
+      <input type="date" [(ngModel)]="dateFrom" (change)="onCustomRangeChange()" />
+      <span class="dash">—</span>
+      <input type="date" [(ngModel)]="dateTo" (change)="onCustomRangeChange()" />
+    </div>
+
+    <div class="tools">
+      <label class="search">
+        🔍 <input type="text" [(ngModel)]="search" placeholder="Поиск: № чека, услуга, пост…" />
+      </label>
+      <div class="segmented view-toggle">
+        <button [class.active]="viewMode === 'table'"    (click)="setViewMode('table')">☰ Таблица</button>
+        <button [class.active]="viewMode === 'receipts'" (click)="setViewMode('receipts')">🧾 Чеки</button>
+      </div>
+    </div>
+  </section>
+
+  @if (errorMsg) {
+    <div class="alert alert-error">{{ errorMsg }}</div>
+  }
+
+  @if (loading) {
+    <div class="skeleton-wrap">
+      <div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>
+      <div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>
+      <div class="skeleton sk-row"></div><div class="skeleton sk-row"></div><div class="skeleton sk-row"></div>
+    </div>
+  }
+
+  @if (!loading && report) {
+
+    <section class="kpi-grid">
+      <div class="kpi-card kpi-total">
+        <span class="kpi-icon">💰</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.total | number:'1.0-0' }} ₽</div>
+          <div class="kpi-label">Итого за период</div>
+        </div>
+      </div>
+      <div class="kpi-card kpi-count">
+        <span class="kpi-icon">🧾</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.receiptsCount }}</div>
+          <div class="kpi-label">Количество чеков</div>
+        </div>
+      </div>
+      <div class="kpi-card kpi-avg">
+        <span class="kpi-icon">📈</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.avgCheck | number:'1.0-0' }} ₽</div>
+          <div class="kpi-label">Средний чек</div>
+        </div>
+      </div>
+      <div class="kpi-card kpi-cash">
+        <span class="kpi-icon">💵</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.cash | number:'1.0-0' }} ₽</div>
+          <div class="kpi-label">Наличные · {{ kpi.cashPct }}%</div>
+        </div>
+      </div>
+      <div class="kpi-card kpi-noncash">
+        <span class="kpi-icon">💳</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.noncash | number:'1.0-0' }} ₽</div>
+          <div class="kpi-label">Безнал · {{ kpi.noncashPct }}%</div>
+        </div>
+      </div>
+    </section>
+
+    @if (paymentSlices.length || postBars.length) {
+      <section class="charts-grid no-print">
+        @if (paymentSlices.length) {
+          <div class="chart-card">
+            <h3>Способы оплаты</h3>
+            <div class="donut-wrap">
+              <div class="donut" [style.background]="donutStyle">
+                <div class="donut-hole">
+                  <span class="donut-total">{{ kpi.total | number:'1.0-0' }} ₽</span>
+                </div>
+              </div>
+              <ul class="legend">
+                @for (s of paymentSlices; track s.label) {
+                  <li>
+                    <span class="dot" [style.background]="s.color"></span>
+                    <span class="legend-label">{{ s.label }}</span>
+                    <span class="legend-value">{{ s.value | number:'1.0-0' }} ₽</span>
+                    <span class="legend-pct">{{ s.pct | number:'1.0-0' }}%</span>
+                  </li>
+                }
+              </ul>
+            </div>
+          </div>
+        }
+        @if (postBars.length) {
+          <div class="chart-card">
+            <h3>Выручка по постам</h3>
+            <ul class="bars">
+              @for (b of postBars; track b.postId) {
+                <li>
+                  <span class="bar-label">Пост {{ b.postId }}</span>
+                  <div class="bar-track">
+                    <div class="bar-fill" [style.width.%]="b.pct"></div>
+                  </div>
+                  <span class="bar-value">{{ b.sum | number:'1.0-0' }} ₽</span>
+                  <span class="bar-count">{{ b.count }} ч.</span>
+                </li>
+              }
+            </ul>
+          </div>
+        }
+      </section>
+    }
+
+    @if (viewMode === 'table' && report.days.length) {
+      <div class="table-wrap">
+        <table class="grouped-table">
+          <thead>
+            <tr>
+              <th class="col-day">Дата и время</th>
+              <th class="col-post">Пост</th>
+              <th class="col-pay">Способ<br>оплаты</th>
+              <th class="col-rcp">№ чека</th>
+              <th class="col-name">Наименование</th>
+              <th class="col-price">Цена за сек.</th>
+              <th class="col-qty">Кол-во</th>
+              <th class="col-sum">Сумма</th>
+              <th class="col-unit">Ед. изм</th>
+              <th class="col-time">Время<br>работы</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (day of report.days; track day.date; let dayLast = $last) {
+              @for (post of day.posts; track post.postId; let postFirst = $first; let postLast = $last) {
+                @for (pm of post.paymentMethods; track pm.paymentMethod; let pmFirst = $first) {
+                  @for (rcp of pm.receipts; track rcp.receiptNumber; let rcpFirst = $first) {
+                    @if (receiptMatchesSearch(rcp)) {
+                      @for (item of rcp.items; track item; let itemFirst = $first) {
+                        <tr>
+                          @if (postFirst && pmFirst && rcpFirst && itemFirst) {
+                            <td class="cell-day" [attr.rowspan]="countDayRows(day)">
+                              {{ day.date | date:'dd.MM.yyyy' }}
+                            </td>
+                          }
+                          @if (pmFirst && rcpFirst && itemFirst) {
+                            <td class="cell-post" [attr.rowspan]="countPostRows(post)">
+                              Пост {{ post.postId }}
+                            </td>
+                          }
+                          @if (rcpFirst && itemFirst) {
+                            <td class="cell-pay" [attr.rowspan]="countPmRows(pm)">
+                              <span class="pay-badge" [class.pay-cash]="pm.paymentMethod === 'cash'">
+                                {{ payLabel(pm.paymentMethod) }}
+                              </span>
+                            </td>
+                          }
+                          @if (itemFirst) {
+                            <td class="cell-rcp" [attr.rowspan]="rcp.items.length">
+                              №{{ rcp.receiptNumber }}
+                            </td>
+                          }
+
+                          <td class="cell-name">{{ item.name }}</td>
+                          <td class="cell-price">{{ item.pricePerSecond | number:'1.2-2' }}</td>
+                          <td class="cell-qty">{{ item.quantity }}</td>
+                          <td class="cell-sum">{{ item.sum | number:'1.2-2' }}</td>
+                          <td class="cell-unit">{{ item.unit }}</td>
+                          <td class="cell-time">{{ formatTime(item.timeWorkedSec) }}</td>
+                        </tr>
+                      }
+
+                      <tr class="row-receipt-total">
+                        <td colspan="6" class="cell-right">
+                          Итого по чеку №{{ rcp.receiptNumber }}:
+                        </td>
+                        <td class="cell-qty">{{ rcp.items.length }}</td>
+                        <td class="cell-sum">{{ rcp.total | number:'1.2-2' }}</td>
+                        <td colspan="2"></td>
+                      </tr>
+                    }
+                  }
+
+                  <tr class="row-pm-total">
+                    <td colspan="6" class="cell-right">
+                      {{ payLabel(pm.paymentMethod) }} — итого:
+                    </td>
+                    <td class="cell-qty">{{ pm.count }}</td>
+                    <td class="cell-sum">{{ pm.total | number:'1.2-2' }}</td>
+                    <td colspan="2">чеков</td>
+                  </tr>
+                }
+
+                <tr class="row-post-total">
+                  <td colspan="6" class="cell-right">
+                    Пост {{ post.postId }} — итого:
+                  </td>
+                  <td class="cell-qty">{{ post.count }}</td>
+                  <td class="cell-sum">{{ post.total | number:'1.2-2' }}</td>
+                  <td colspan="2">чеков</td>
+                </tr>
+
+                @if (!postLast) {
+                  <tr class="row-spacer"><td colspan="10">&nbsp;</td></tr>
+                  <tr class="row-spacer"><td colspan="10">&nbsp;</td></tr>
+                }
+              }
+
+              <tr class="row-day-total">
+                <td colspan="6" class="cell-right">
+                  Итого за дату {{ day.date | date:'dd.MM.yyyy' }}:
+                </td>
+                <td class="cell-qty">{{ day.count }}</td>
+                <td class="cell-sum">{{ day.total | number:'1.2-2' }}</td>
+                <td colspan="2">чеков</td>
+              </tr>
+
+              @if (!dayLast) {
+                <tr class="row-spacer"><td colspan="10">&nbsp;</td></tr>
+                <tr class="row-spacer"><td colspan="10">&nbsp;</td></tr>
+              }
+            }
+
+            <tr class="row-grand-total">
+              <td colspan="6" class="cell-right">ВСЕГО:</td>
+              <td class="cell-qty">{{ report.grandCount }}</td>
+              <td class="cell-sum">{{ report.grandTotal | number:'1.2-2' }}</td>
+              <td colspan="2">чеков</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    }
+
+    @if (viewMode === 'receipts') {
+      <div class="receipts-list">
+        @for (r of flatReceipts; track r.receiptNumber) {
+          <div class="receipt-card" [class.open]="expanded['' + r.receiptNumber]">
+            <button class="receipt-head" (click)="toggleReceipt('' + r.receiptNumber)">
+              <span class="rcp-num">№{{ r.receiptNumber }}</span>
+              <span class="rcp-post">Пост {{ r.postId }}</span>
+              <span class="pay-badge" [class.pay-cash]="r.paymentMethod === 'cash'">
+                {{ payLabel(r.paymentMethod) }}
+              </span>
+              <span class="rcp-date">{{ r.date | date:'dd.MM HH:mm' }}</span>
+              <span class="rcp-total">{{ r.total | number:'1.2-2' }} ₽</span>
+              <span class="chevron">{{ expanded['' + r.receiptNumber] ? '▾' : '▸' }}</span>
+            </button>
+            @if (expanded['' + r.receiptNumber]) {
+              <div class="receipt-body">
+                <table>
+                  <thead>
+                    <tr><th>Услуга</th><th>Цена/сек</th><th>Кол-во</th><th>Ед.</th><th>Время</th><th>Сумма</th></tr>
+                  </thead>
+                  <tbody>
+                    @for (it of r.items; track it) {
+                      <tr>
+                        <td>{{ it.name }}</td>
+                        <td>{{ it.pricePerSecond | number:'1.2-2' }}</td>
+                        <td>{{ it.quantity }}</td>
+                        <td>{{ it.unit }}</td>
+                        <td>{{ formatTime(it.timeWorkedSec) }}</td>
+                        <td class="cell-sum">{{ it.sum | number:'1.2-2' }}</td>
+                      </tr>
+                    }
+                  </tbody>
+                </table>
+              </div>
+            }
+          </div>
+        } @empty {
+          <p class="empty">Нет чеков, подходящих под поиск</p>
+        }
+      </div>
+    }
+
+    @if (!report.days.length) {
+      <p class="empty">Нет чеков за выбранный период</p>
+    }
+  }
+</div>

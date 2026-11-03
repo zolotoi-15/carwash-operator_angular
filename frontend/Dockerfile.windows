@@ -1,0 +1,33 @@
+# ЭТАП 1: Сборка Angular-приложения на Windows Server Core
+FROM mlveggo/node-servercore-vcredist:20-ltsc2022 AS builder
+
+WORKDIR C:\app
+
+# Копируем файлы зависимостей
+COPY package*.json ./
+
+# Устанавливаем зависимости
+RUN npm install
+
+# Копируем исходный код
+COPY . .
+
+# Собираем production-версию
+RUN npm run build -- --configuration production
+
+# ЭТАП 2: Раздача через IIS
+FROM mcr.microsoft.com/windows/servercore/iis:windowsservercore-ltsc2022
+
+# Удаляем стандартное содержимое IIS
+RUN powershell -NoProfile -Command Remove-Item -Recurse C:\inetpub\wwwroot\*
+
+# Копируем собранные файлы из первого этапа
+COPY --from=builder C:\app\dist\carwash-operator-angular\browser C:\inetpub\wwwroot
+
+# Копируем конфигурацию IIS для SPA-маршрутизации
+COPY web.config C:\inetpub\wwwroot\web.config
+
+EXPOSE 80
+
+# Точка входа для IIS
+ENTRYPOINT ["C:\\ServiceMonitor.exe", "w3svc"]

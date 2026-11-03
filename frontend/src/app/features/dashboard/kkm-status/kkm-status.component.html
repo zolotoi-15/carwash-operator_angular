@@ -1,0 +1,101 @@
+<div class="card kkm-card">
+  <h3 class="card-title">📟 Кассовый аппарат (ККМ)</h3>
+
+  <div class="kkm-row">
+    <span class="label">Состояние:</span>
+    <span class="value" [class.ok]="kkm.ready" [class.err]="!kkm.ready">
+      {{ kkm.ready ? '✅ Готов' : '⚠️ Не отвечает' }}
+    </span>
+  </div>
+
+  <div class="kkm-row">
+    <span class="label">Подключение:</span>
+    <span class="value" [class.ok]="kkm.connected" [class.err]="!kkm.connected">
+      {{ kkm.connected ? '🟢 Да' : '🔴 Нет' }}
+    </span>
+  </div>
+
+  <div class="kkm-row">
+    <span class="label">Драйвер ККТ:</span>
+    <span class="value" [class.ok]="kkm.driverOnline" [class.err]="!kkm.driverOnline">
+      {{ kkm.driverOnline ? '🟢 Онлайн' : '🔴 Недоступен' }}
+    </span>
+  </div>
+
+  <div class="kkm-row">
+    <span class="label">Бумага:</span>
+    <span class="value">{{ kkm.paper ? '📄 Есть' : '❌ Нет' }}</span>
+  </div>
+
+  <div class="kkm-row">
+    <span class="label">Номер ККТ:</span>
+    <span class="value mono">{{ kkm.number || '—' }}</span>
+  </div>
+
+  <div class="kkm-row">
+    <span class="label">Фискальная смена №:</span>
+    <span class="value mono">{{ kkm.shiftNumber }}</span>
+  </div>
+
+  <div class="kkm-row">
+    <span class="label">Кассир:</span>
+    <span class="value">{{ kkm.cashier || '—' }}</span>
+  </div>
+
+  <!-- ---------- Смена ---------- -->
+  <div class="kkm-row">
+    <span class="label">Смена №:</span>
+    <span class="value" [class.ok]="kkm.shiftOpened" [class.err]="!kkm.shiftOpened">
+      {{ kkm.shiftOpened ? '🟢 Открыта (' + kkm.currentShiftNumber + ')' : '🔴 Закрыта' }}
+    </span>
+  </div>
+
+  @if (kkm.shiftOpened && kkm.shiftOpenedAt) {
+    <div class="kkm-row">
+      <span class="label">Открыта:</span>
+      <span class="value mono">{{ kkm.shiftOpenedAt | date:'dd.MM.yy HH:mm' }}</span>
+    </div>
+  }
+
+  @if (kkm.shiftOpened && kkm.shiftAutoCloseAt) {
+    <div class="kkm-row">
+      <span class="label">Автозакрытие:</span>
+      <span class="value mono">
+        {{ kkm.shiftAutoCloseAt | date:'dd.MM.yy HH:mm' }}
+        @if (hoursLeft >= 0 && hoursLeft < 4) {
+          <small class="warn-mini">(осталось {{ hoursLeft.toFixed(1) }} ч)</small>
+        }
+      </span>
+    </div>
+  }
+
+  <!-- ---------- Кнопки управления сменой ---------- -->
+  <div class="shift-actions">
+    <button
+      class="btn btn-open"
+      [disabled]="busy || kkm.shiftOpened"
+      (click)="openShift()">
+      🔓 Открыть смену
+    </button>
+
+    <button
+      class="btn btn-x"
+      [disabled]="busy || !kkm.shiftOpened"
+      (click)="xReport()">
+      📄 X-Отчёт
+    </button>
+
+    <button
+      class="btn btn-z"
+      [disabled]="busy || !kkm.shiftOpened"
+      (click)="zReport()">
+      🔒 Закрыть (Z-Отчёт)
+    </button>
+  </div>
+
+  @if (!kkm.ready) {
+    <div class="warning">
+      ⚠️ ККМ не отвечает, используются ручные настройки
+    </div>
+  }
+</div>

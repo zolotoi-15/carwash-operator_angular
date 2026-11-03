@@ -1,0 +1,22 @@
+<div class="dashboard">
+  @if (auth.currentUser$(); as user) {
+    <!-- можно добавить приветствие -->
+  }
+
+  <div class="top-row">
+    <app-kkm-status></app-kkm-status>
+    <app-tank-levels></app-tank-levels>
+    <app-shift-total></app-shift-total>
+  </div>
+
+  <h2 class="section-title">📋 Состояние постов мойки</h2>
+
+  <div class="posts-grid">
+    @for (id of postIds; track id) {
+      <app-post-card
+        [postId]="id"
+        [activeServices]="activeServicesByPost[id] || []">
+      </app-post-card>
+    }
+  </div>
+</div>

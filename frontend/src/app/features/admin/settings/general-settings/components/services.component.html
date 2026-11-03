@@ -1,0 +1,31 @@
+<form *ngIf="form" [formGroup]="form" (ngSubmit)="save()">
+  <!-- Глобальный список услуг -->
+  <div formArrayName="services">
+    <div *ngFor="let service of services.controls; let i = index" [formGroupName]="i" class="service-row">
+      <input formControlName="name" placeholder="Название" class="service-name" />
+      <input formControlName="free_time_sec" type="number" step="1" placeholder="Беспл. время, сек (опц.)" class="service-free" />
+      <button type="button" (click)="removeService(i)" class="remove-btn">✕</button>
+    </div>
+  </div>
+  <button type="button" (click)="addService()" class="add-btn">➕ Добавить услугу</button>
+
+  <h3>Доступность услуг по постам</h3>
+  <div class="post-selector">
+    <label>
+      Пост:
+      <select [(ngModel)]="selectedPost" (change)="rebuildEnabledForm()" [ngModelOptions]="{standalone: true}">
+        <option *ngFor="let p of postIds" [value]="p">Пост {{ p }}</option>
+      </select>
+    </label>
+  </div>
+  <div class="enabled-grid">
+    <div *ngFor="let service of serviceKeys" class="enabled-field">
+      <label>
+        <input type="checkbox" [formControlName]="getEnabledControlName(service)" />
+        {{ service }}
+      </label>
+    </div>
+  </div>
+
+  <button type="submit" class="save-btn">💾 Сохранить</button>
+</form>

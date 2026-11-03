@@ -1,0 +1,118 @@
+:host {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+}
+
+.card {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: #6d28d9;
+  color: #e9d5ff;
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.card-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  color: #fff;
+  font-weight: 600;
+}
+
+.kkm-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 5px 0;
+  font-size: 13px;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+
+  &:last-of-type { border-bottom: none; }
+}
+
+.label {
+  color: #c4b5fd;
+  flex-shrink: 0;
+}
+
+.value {
+  color: #fff;
+  font-weight: 500;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: auto;
+
+  &.ok  { color: #4ade80; }
+  &.err { color: #fca5a5; }
+}
+
+.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.warn-mini {
+  color: #fde68a;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+/* ===== Кнопки управления сменой ===== */
+.shift-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.btn {
+  padding: 8px 6px;
+  font-size: 11px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #fff;
+  font-weight: 600;
+  transition: filter .15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  &:disabled { opacity: .4; cursor: not-allowed; }
+  &:not(:disabled):hover { filter: brightness(1.15); }
+}
+
+.btn-open { background: #16a34a; }
+.btn-x    { background: #2563eb; }
+.btn-z    { background: #dc2626; }
+
+@media (max-width: 520px) {
+  .shift-actions {
+    grid-template-columns: 1fr;
+  }
+  .btn {
+    font-size: 12px;
+    padding: 10px 6px;
+  }
+}
+
+.warning {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #fde68a;
+}

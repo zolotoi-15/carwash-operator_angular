@@ -1,0 +1,91 @@
+name: Deploy Frontend to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'frontend/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build for Pages
+        working-directory: frontend
+        run: |
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          npm run build -- --base-href "/${REPO_NAME}/"
+
+      - name: Inspect dist structure
+        working-directory: frontend
+        run: |
+          echo "=== dist tree (3 levels) ==="
+          find dist -maxdepth 3 -type d | sort
+          echo "=== index.html locations ==="
+          find dist -name index.html
+
+      - name: Locate browser folder with index.html
+        id: dist
+        working-directory: frontend
+        run: |
+          set -e
+          # Ищем index.html и берём его директорию — это и есть корень сайта
+          INDEX_PATH=$(find dist -name index.html | head -n1)
+          if [ -z "$INDEX_PATH" ]; then
+            echo "❌ index.html не найден после сборки" >&2
+            exit 1
+          fi
+          SITE_ROOT=$(dirname "$INDEX_PATH")
+          echo "Site root: $SITE_ROOT"
+          echo "path=$SITE_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: SPA fallback (copy index.html → 404.html)
+        working-directory: frontend
+        run: |
+          cp "${{ steps.dist.outputs.path }}/index.html" \
+             "${{ steps.dist.outputs.path }}/404.html"
+
+      - name: Verify upload contents
+        working-directory: frontend
+        run: |
+          echo "Files that will be published:"
+          ls -la "${{ steps.dist.outputs.path }}"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/${{ steps.dist.outputs.path }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

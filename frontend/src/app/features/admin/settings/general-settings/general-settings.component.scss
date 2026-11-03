@@ -1,0 +1,273 @@
+.settings-page {
+  padding: 24px;
+  max-width: 1200px;
+}
+
+h2 {
+  margin: 0 0 16px;
+  color: #0f172a;
+}
+
+.settings-section {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  padding: 0;
+
+  > summary {
+    padding: 12px 16px;
+    cursor: pointer;
+    font-weight: 600;
+    user-select: none;
+    color: #0f172a;
+    list-style: none;
+
+    &::marker { color: #64748b; }
+    &:hover { background: #f8fafc; }
+  }
+
+  &[open] > summary {
+    border-bottom: 1px solid #e2e8f0;
+    background: #f8fafc;
+    border-radius: 8px 8px 0 0;
+  }
+
+  &.simple {
+    padding: 16px;
+
+    h3 { margin: 0 0 6px; font-size: 15px; color: #0f172a; }
+    p  { margin: 0 0 10px; font-size: 13px; color: #64748b; }
+  }
+}
+
+.section-body {
+  padding: 16px;
+
+  > label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: #334155;
+
+    input, select {
+      display: block;
+      width: 100%;
+      max-width: 400px;
+      padding: 8px 10px;
+      margin-top: 4px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 13px;
+
+      &:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      }
+    }
+  }
+
+  .hint {
+    margin: 0 0 12px;
+    font-size: 12px;
+    color: #64748b;
+  }
+}
+
+// ---------- Группы MQTT ----------
+.mqtt-group {
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 0 0 16px;
+
+  legend {
+    font-size: 13px;
+    font-weight: 600;
+    color: #0f172a;
+    padding: 0 6px;
+  }
+
+  label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 13px;
+    color: #334155;
+
+    input {
+      display: block;
+      width: 100%;
+      max-width: 400px;
+      padding: 8px 10px;
+      margin-top: 4px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      font-size: 13px;
+
+      &:focus {
+        outline: none;
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+      }
+    }
+  }
+}
+
+// ---------- Строки услуг в блоках Цены/Частоты/Реле/Задержки/Кнопки ----------
+.service-row {
+  padding: 10px 0;
+  border-bottom: 1px dashed #e2e8f0;
+
+  &:last-child { border-bottom: none; }
+
+  h4 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #0f172a;
+  }
+
+  label {
+    display: inline-block;
+    margin-right: 16px;
+    font-size: 13px;
+    color: #334155;
+
+    input {
+      padding: 6px 8px;
+      margin-left: 6px;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      font-size: 13px;
+
+      &:focus { outline: none; border-color: #3b82f6; }
+    }
+  }
+}
+
+// ---------- Чекбоксы реле/диммеров ----------
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+
+  .row-label {
+    font-size: 12px;
+    color: #64748b;
+    min-width: 130px;
+  }
+
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+
+    .check {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #334155;
+      cursor: pointer;
+
+      input { margin: 0; }
+    }
+  }
+}
+
+// ---------- Таблица услуг ----------
+.services-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+
+  th, td {
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 13px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+  }
+
+  th {
+    background: #f8fafc;
+    font-weight: 600;
+    color: #475569;
+    font-size: 12px;
+  }
+
+  input[type="number"] {
+    width: 100px;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  input[type="text"].svc-name {
+    width: 100%;
+    max-width: 260px;
+    padding: 6px 8px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  input[type="checkbox"] {
+    transform: scale(1.15);
+    cursor: pointer;
+  }
+
+  .remove-btn {
+    background: #fee2e2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+    border-radius: 4px;
+    width: 28px;
+    height: 28px;
+    cursor: pointer;
+    font-weight: 700;
+    line-height: 1;
+
+    &:hover { background: #fecaca; }
+  }
+
+  .empty-row {
+    text-align: center;
+    color: #94a3b8;
+    padding: 16px;
+    font-style: italic;
+  }
+}
+
+// ---------- Кнопки в блоке «Услуги» ----------
+.services-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+
+  .add-btn {
+    background: #0ea5e9;
+    &:hover { background: #0284c7; }
+  }
+
+  .save-btn {
+    background: #16a34a;
+    &:hover { background: #15803d; }
+  }
+}
+
+// ---------- Общая кнопка ----------
+button {
+  padding: 8px 14px;
+  border: none;
+  border-radius: 6px;
+  background: #3b82f6;
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover { background: #2563eb; }
+}

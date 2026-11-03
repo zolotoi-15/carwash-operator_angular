@@ -1,0 +1,309 @@
+import {
+  Component, Input, Output, EventEmitter, OnInit, OnDestroy, inject,
+  ChangeDetectionStrategy, ChangeDetectorRef
+} from '@angular/core';
+import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
+import { DomSanitizer, SafeResourceUrl } from '@angular/platform-browser';
+import { Subscription } from 'rxjs';
+
+import { MqttService } from '../../../core/services/mqtt.service';
+import { LocalPostService } from '../../../core/services/local-post.service';
+import { AuthService } from '../../../core/services/auth.service';
+import { ReceiptModalComponent } from './receipt-modal/receipt-modal.component';
+
+export interface PostState {
+  postId: number;
+  busy: boolean;
+  paused: boolean;
+  balance: number;
+  currentProgram: string;
+  elapsedSec: number;
+  totalPaid: number;
+  receiptCount: number;
+}
+
+export interface ProgramOption {
+  code: string;
+  name: string;
+}
+
+@Component({
+  selector: 'app-post-card',
+  standalone: true,
+  imports: [CommonModule, FormsModule, ReceiptModalComponent],
+  templateUrl: './post-card.component.html',
+  styleUrls: ['./post-card.component.scss'],
+  changeDetection: ChangeDetectionStrategy.OnPush,
+})
+export class PostCardComponent implements OnInit, OnDestroy {
+  @Input() post!: PostState;
+  @Input() postId!: number;
+  @Input() cameraUrl = '';
+  @Input() isAdmin = false;
+
+  @Output() stateChanged = new EventEmitter<void>();
+
+  private mqtt = inject(MqttService);
+  private localPost = inject(LocalPostService);
+  private auth = inject(AuthService);
+  private sanitizer = inject(DomSanitizer);
+  private cdr = inject(ChangeDetectorRef);
+
+  // ============================================================
+  // Камера
+  // ============================================================
+  showCamera = false;
+  safeCameraUrl: SafeResourceUrl | null = null;
+
+  // ============================================================
+  // Карта клиента
+  // ============================================================
+  clientCard: string | null = null;
+  clientCardBalance: number | null = null;
+  clientCardType: string | null = null;
+
+  // ============================================================
+  // Режим ESP32
+  // ============================================================
+  isEspOnline = false;
+
+  // ============================================================
+  // Пополнение
+  // ============================================================
+  addAmount: number | null = null;
+  showTopUpModal = false;
+
+  // ============================================================
+  // Программы
+  // ============================================================
+  programs: ProgramOption[] = [
+    { code: 'water',     name: 'Вода' },
+    { code: 'foam',      name: 'Пена' },
+    { code: 'wax',       name: 'Воск' },
+    { code: 'teflon',    name: 'Тефлон' },
+    { code: 'osmosis',   name: 'Осмос' },
+    { code: 'hotWater',  name: 'Горячая вода' },
+    { code: 'waterFoam', name: 'Вода+Пена' },
+    { code: 'turbo',     name: 'Турбо мойка' },
+    { code: 'pause',     name: 'Пауза' },
+  ];
+
+  private subs = new Subscription();
+
+  // ============================================================
+  // Lifecycle
+  // ============================================================
+  ngOnInit(): void {
+    // Подписка на статусы MQTT по этому посту
+    this.subs.add(
+      this.mqtt.getPostStatusUpdates().subscribe(({ postId, data }) => {
+        if (Number(postId) !== Number(this.postId)) return;
+        this.updateFromMqtt(data);
+      })
+    );
+
+    // Подписка на LWT (online/offline ESP32)
+    this.subs.add(
+      this.mqtt.getLwtStatus().subscribe(({ postId, online }) => {
+        if (Number(postId) !== Number(this.postId)) return;
+        this.isEspOnline = online;
+        this.cdr.markForCheck();
+      })
+    );
+
+    // Карта клиента
+    this.subs.add(
+      this.mqtt.getCardScanUpdates().subscribe(evt => {
+        if (evt.postId && Number(evt.postId) !== Number(this.postId)) return;
+        if (evt.topUpResult) {
+          this.clientCard = evt.card;
+          this.clientCardBalance = evt.topUpResult.balance ?? null;
+        }
+        this.cdr.markForCheck();
+      })
+    );
+
+    // Режим offline/online (LocalPostService)
+    this.isEspOnline = !this.localPost.isPostOffline(String(this.postId));
+
+    // Камера
+    this.updateCameraUrl();
+  }
+
+  ngOnDestroy(): void {
+    this.subs.unsubscribe();
+  }
+
+  // ============================================================
+  // MQTT -> state
+  // ============================================================
+  private updateFromMqtt(data: any): void {
+    if (!data) return;
+
+    if (typeof data.busy === 'boolean') this.post.busy = data.busy;
+    if (typeof data.paused === 'boolean') this.post.paused = data.paused;
+    if (typeof data.balance === 'number') this.post.balance = data.balance;
+    if (typeof data.currentProgram === 'string') this.post.currentProgram = data.currentProgram;
+    if (typeof data.elapsedSec === 'number') this.post.elapsedSec = data.elapsedSec;
+    if (typeof data.totalPaid === 'number') this.post.totalPaid = data.totalPaid;
+    if (typeof data.receiptCount === 'number') this.post.receiptCount = data.receiptCount;
+
+    if (data.clientCard) this.clientCard = data.clientCard;
+    if (typeof data.clientCardBalance === 'number') this.clientCardBalance = data.clientCardBalance;
+    if (data.clientCardType) this.clientCardType = data.clientCardType;
+
+    this.cdr.markForCheck();
+  }
+
+  // ============================================================
+  // Камера
+  // ============================================================
+  private updateCameraUrl(): void {
+    if (!this.cameraUrl) {
+      this.safeCameraUrl = null;
+      return;
+    }
+    this.safeCameraUrl = this.sanitizer.bypassSecurityTrustResourceUrl(this.cameraUrl);
+  }
+
+  toggleCamera(): void {
+    this.showCamera = !this.showCamera;
+    this.cdr.markForCheck();
+  }
+
+  isVideoUrl(url: string): boolean {
+    if (!url) return false;
+    return /\.(mp4|webm|ogv|mov)(\?|$)/i.test(url) || url.startsWith('blob:');
+  }
+
+  // ============================================================
+  // Управление программами
+  // ============================================================
+  selectProgram(code: string): void {
+    if (!this.isAdmin) return;
+
+    // Если пост offline — управляем локально
+    if (!this.isEspOnline) {
+      if (this.post.busy) {
+        this.localPost.stopProgram(String(this.postId), false);
+      }
+      this.localPost.startProgram(String(this.postId), code);
+    } else {
+      // ESP32 online — команда через MQTT
+      this.mqtt.sendCommand(String(this.postId), `program ${code}`);
+    }
+
+    this.post.currentProgram = code;
+    this.stateChanged.emit();
+    this.cdr.markForCheck();
+  }
+
+  stopPost(): void {
+    if (!this.isAdmin) return;
+    if (!this.isEspOnline) {
+      this.localPost.stopProgram(String(this.postId), true);
+    } else {
+      this.mqtt.sendCommand(String(this.postId), 'stop');
+    }
+    this.stateChanged.emit();
+    this.cdr.markForCheck();
+  }
+
+  pausePost(): void {
+    if (!this.isAdmin) return;
+    if (!this.isEspOnline) {
+      this.localPost.togglePause(String(this.postId));
+    } else {
+      this.mqtt.sendCommand(String(this.postId), 'pause');
+    }
+    this.stateChanged.emit();
+    this.cdr.markForCheck();
+  }
+
+  resetPost(): void {
+    if (!this.isAdmin) return;
+    if (!this.isEspOnline) {
+      this.localPost.resetPost(String(this.postId));
+    } else {
+      this.mqtt.sendCommand(String(this.postId), 'reset');
+    }
+    this.stateChanged.emit();
+    this.cdr.markForCheck();
+  }
+
+  printReceipt(): void {
+    if (!this.isAdmin) return;
+    this.mqtt.sendCommand(String(this.postId), 'print_receipt');
+  }
+
+  // ============================================================
+  // Пополнение — модальное окно
+  // ============================================================
+  openTopUpModal(): void {
+    this.showTopUpModal = true;
+    this.cdr.markForCheck();
+  }
+
+  closeTopUpModal(): void {
+    this.showTopUpModal = false;
+    this.cdr.markForCheck();
+  }
+
+  handleTopUp({ postId, amount }: { postId: number; amount: number }): void {
+    if (amount <= 0) return;
+
+    // Локальный режим — пополняем локально
+    if (!this.isEspOnline) {
+      this.localPost.addBalance(String(postId), amount);
+    } else {
+      // ESP32 online — команда через MQTT
+      this.mqtt.sendCommand(String(postId), `add_balance ${amount}`);
+    }
+
+    // Обновляем локальный state (мгновенный отклик)
+    this.post.balance = Math.round((this.post.balance + amount) * 100) / 100;
+    this.post.totalPaid = Math.round((this.post.totalPaid + amount) * 100) / 100;
+
+    this.stateChanged.emit();
+    this.cdr.markForCheck();
+  }
+
+  /** Оставлен для совместимости — больше не вызывается из HTML */
+  addBalance(): void {
+    const amount = Number(this.addAmount) || 0;
+    if (amount <= 0) return;
+    this.handleTopUp({ postId: this.postId, amount });
+    this.addAmount = null;
+  }
+
+  /** Оставлен для совместимости, но больше не висит на (focus) */
+  clearAddAmount(): void {
+    this.addAmount = null;
+    this.cdr.markForCheck();
+  }
+
+  // ============================================================
+  // Утилиты
+  // ============================================================
+  getProgramName(code: string): string {
+    if (!code || code === '-') return '-';
+    const found = this.programs.find(p => p.code === code);
+    if (found) return found.name;
+    // Если пришло русское название с бэкенда
+    return code;
+  }
+
+  formatTime(seconds: number): string {
+    if (typeof seconds !== 'number' || isNaN(seconds)) return '00:00';
+    const total = Math.max(0, Math.floor(seconds));
+    const m = Math.floor(total / 60).toString().padStart(2, '0');
+    const s = (total % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  roundOne(value: number): number {
+    if (typeof value !== 'number' || isNaN(value)) return 0;
+    return Math.round(value * 100) / 100;
+  }
+}

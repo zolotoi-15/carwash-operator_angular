@@ -1,0 +1,311 @@
+<div class="settings-page">
+  <h2>⚙️ Панель администратора</h2>
+
+  <!-- ===== Количество постов ===== -->
+  <details class="settings-section" open>
+    <summary>🔢 Количество постов</summary>
+    <div class="section-body">
+      <label>Постов на дашборде:
+        <select
+          [(ngModel)]="settings.numberOfPosts"
+          (ngModelChange)="onNumberOfPostsChange($event)">
+          @for (n of numberOfPostsOptions; track n) {
+            <option [ngValue]="n">{{ n }} постов</option>
+          }
+        </select>
+      </label>
+      <p class="hint">
+        Используется для дашборда и во всех разделах, где настраиваются посты
+        (цены, частоты, реле, задержки, кнопки, камеры, услуги).
+      </p>
+    </div>
+  </details>
+
+  <!-- ===== MQTT ===== -->
+  <details class="settings-section" open>
+    <summary>📡 Настройки MQTT</summary>
+    <div class="section-body">
+
+      <fieldset class="mqtt-group">
+        <legend>Локальный брокер (Aedes)</legend>
+
+        <label>Хост:
+          <input [(ngModel)]="settings.mqtt.local.host" placeholder="192.168.31.211" />
+        </label>
+        <label>TCP-порт (mqtt://):
+          <input type="number" [(ngModel)]="settings.mqtt.local.portTcp" placeholder="1883" />
+        </label>
+        <label>WebSocket-порт (ws://):
+          <input type="number" [(ngModel)]="settings.mqtt.local.portWs" placeholder="8083" />
+        </label>
+        <label>Путь WS:
+          <input [(ngModel)]="settings.mqtt.local.path" placeholder="/mqtt" />
+        </label>
+        <label>Пользователь:
+          <input [(ngModel)]="settings.mqtt.local.username" placeholder="admin" />
+        </label>
+        <label>Пароль:
+          <input type="password" [(ngModel)]="settings.mqtt.local.password" />
+        </label>
+      </fieldset>
+
+      <fieldset class="mqtt-group">
+        <legend>Удалённый брокер (WQTT)</legend>
+
+        <label>Хост:
+          <input [(ngModel)]="settings.mqtt.remote.host" placeholder="m2.wqtt.ru" />
+        </label>
+        <label>TCP-порт (mqtt://):
+          <input type="number" [(ngModel)]="settings.mqtt.remote.portTcp" placeholder="13257" />
+        </label>
+        <label>TLS-порт (mqtts://):
+          <input type="number" [(ngModel)]="settings.mqtt.remote.portTls" placeholder="13258" />
+        </label>
+        <label>WebSocket TLS (wss://):
+          <input type="number" [(ngModel)]="settings.mqtt.remote.portWss" placeholder="13260" />
+        </label>
+        <label>Пользователь:
+          <input [(ngModel)]="settings.mqtt.remote.username" placeholder="u_GGENLB" />
+        </label>
+        <label>Пароль:
+          <input type="password" [(ngModel)]="settings.mqtt.remote.password" />
+        </label>
+      </fieldset>
+
+      <button (click)="saveMqtt()">💾 Сохранить и переподключиться</button>
+    </div>
+  </details>
+
+  <!-- ===== Цены ===== -->
+  <details class="settings-section">
+    <summary>💰 Цены (руб/мин)</summary>
+    <div class="section-body">
+      <label>Пост:
+        <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
+          @for (p of settings.posts; track p.postId) {
+            <option [ngValue]="p.postId">Пост {{ p.postId }}</option>
+          }
+        </select>
+      </label>
+
+      @if (ps; as current) {
+        @for (svc of activeServices(current); track svc.name) {
+          <div class="service-row">
+            <label>{{ svc.name }}:
+              <input type="number" [(ngModel)]="svc.price" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
+      }
+    </div>
+  </details>
+
+  <!-- ===== Частоты ===== -->
+  <details class="settings-section">
+    <summary>⚡ Частота частотника (Гц)</summary>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of activeServices(current); track svc.name) {
+          <div class="service-row">
+            <label>{{ svc.name }}:
+              <input type="number" [(ngModel)]="current.vfdFrequencies[svc.name]" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
+      </div>
+    }
+  </details>
+
+  <!-- ===== Реле и диммеры ===== -->
+  <details class="settings-section">
+    <summary>🔌 Номера реле и диммеры</summary>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of activeServices(current); track svc.name) {
+          <div class="service-row">
+            <h4>{{ svc.name }}</h4>
+            <div class="check-row">
+              <span class="row-label">Реле (8 бит):</span>
+              <span class="checks">
+                @for (n of relayNumbers; track n) {
+                  <label class="check">
+                    <input type="checkbox" [(ngModel)]="current.relayMask[svc.name + '_' + n]" /> {{ n }}
+                  </label>
+                }
+              </span>
+            </div>
+            <div class="check-row">
+              <span class="row-label">Диммеры (4 бита):</span>
+              <span class="checks">
+                @for (d of dimmers; track d) {
+                  <label class="check">
+                    <input type="checkbox" [(ngModel)]="current.dimmerMask[svc.name + '_' + d]" /> {{ d }}
+                  </label>
+                }
+              </span>
+            </div>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
+      </div>
+    }
+  </details>
+
+  <!-- ===== Задержки реле ===== -->
+  <details class="settings-section">
+    <summary>⏱️ Задержки реле (мс)</summary>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of activeServices(current); track svc.name) {
+          <div class="service-row">
+            <h4>{{ svc.name }}</h4>
+            <label>On:
+              <input type="number"
+                [ngModel]="getDelay(current, svc.name, 'onDelay')"
+                (ngModelChange)="setDelay(current, svc.name, 'onDelay', $event)" />
+            </label>
+            <label>Off:
+              <input type="number"
+                [ngModel]="getDelay(current, svc.name, 'offDelay')"
+                (ngModelChange)="setDelay(current, svc.name, 'offDelay', $event)" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
+      </div>
+    }
+  </details>
+
+  <!-- ===== DI кнопок ===== -->
+  <details class="settings-section">
+    <summary>🔘 Входы кнопок (DI)</summary>
+    @if (ps; as current) {
+      <div class="section-body">
+        @for (svc of activeServices(current); track svc.name) {
+          <div class="service-row">
+            <label>{{ svc.name }}:
+              <input type="number" [(ngModel)]="current.buttonInputs[svc.name]" />
+            </label>
+          </div>
+        }
+        <button (click)="savePostSettings()">💾 Сохранить</button>
+      </div>
+    }
+  </details>
+
+  <!-- ===== ККМ ===== -->
+  <details class="settings-section">
+    <summary>🧾 Настройки ККМ</summary>
+    <div class="section-body">
+      <label>
+        <input type="checkbox" [(ngModel)]="settings.kkm.enabled" />
+        Включить ККМ
+      </label>
+      <label>
+        <input type="checkbox" [(ngModel)]="settings.kkm.simulate" />
+        Печать чека (симуляция)
+      </label>
+      <label>Номер ККТ:
+        <input [(ngModel)]="settings.kkm.model" />
+      </label>
+      <label>Номер фискальной смены:
+        <input type="number" [(ngModel)]="settings.kkm.fiscalShiftNumber" />
+      </label>
+      <label>Имя кассира:
+        <input [(ngModel)]="settings.kkm.cashierName" />
+      </label>
+      <button (click)="saveAll()">💾 Сохранить</button>
+    </div>
+  </details>
+
+  <!-- ===== Камеры ===== -->
+  <details class="settings-section">
+    <summary>📷 Камеры постов</summary>
+    <div class="section-body">
+      <p class="hint">Введите URL видеопотока (MJPEG, HLS .m3u8 или RTSP-трансляцию).</p>
+      @for (p of settings.posts; track p.postId) {
+        <div class="service-row">
+          <label>Пост {{ p.postId }}:
+            <input [(ngModel)]="p.cameras['main']" placeholder="http://..." />
+          </label>
+        </div>
+      }
+      <button (click)="saveAll()">💾 Сохранить</button>
+    </div>
+  </details>
+
+  <!-- ===== Услуги (таблица) ===== -->
+  <details class="settings-section" open>
+    <summary>📋 Услуги</summary>
+    @if (ps; as current) {
+      <div class="section-body">
+        <label>Пост:
+          <select [(ngModel)]="selectedPostId" (ngModelChange)="onPostChange($event)">
+            @for (p of settings.posts; track p.postId) {
+              <option [ngValue]="p.postId">Пост {{ p.postId }}</option>
+            }
+          </select>
+        </label>
+
+        <table class="services-table">
+          <thead>
+            <tr>
+              <th style="width:60px">Вкл.</th>
+              <th>Услуга</th>
+              <th style="width:120px">Цена</th>
+              <th style="width:140px">Беспл. время, сек</th>
+              <th style="width:60px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (svc of current.services; track svc.name; let i = $index) {
+              <tr>
+                <td>
+                  <input type="checkbox" [(ngModel)]="svc.enabled" />
+                </td>
+                <td>
+                  <input type="text" [(ngModel)]="svc.name" class="svc-name" />
+                </td>
+                <td>
+                  <input type="number" [(ngModel)]="svc.price" />
+                </td>
+                <td>
+                  <input type="number" [(ngModel)]="svc.free_time_sec" />
+                </td>
+                <td>
+                  <button type="button" class="remove-btn" (click)="removeService(current.postId, i)" title="Удалить">✕</button>
+                </td>
+              </tr>
+            }
+            @if (current.services.length === 0) {
+              <tr>
+                <td colspan="5" class="empty-row">Нет услуг. Нажмите «Добавить услугу».</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+
+        <div class="services-actions">
+          <button type="button" class="add-btn" (click)="addService(current.postId)">➕ Добавить услугу</button>
+          <button type="button" class="save-btn" (click)="savePostSettings()">💾 Сохранить</button>
+        </div>
+      </div>
+    }
+  </details>
+
+  <!-- ===== Отправка ===== -->
+  <div class="settings-section simple">
+    <h3>📤 Отправить настройки на посты</h3>
+    <p>Опубликовать текущую конфигурацию в MQTT для всех постов.</p>
+    <button (click)="publishConfig()">📤 Отправить настройки</button>
+  </div>
+
+  <!-- ===== Копирование ===== -->
+  <div class="settings-section simple">
+    <h3>📋 Копировать настройки с поста 1</h3>
+    <p>Применить настройки поста 1 на все остальные посты.</p>
+    <button (click)="copyFromFirstToAll()">📋 Копировать</button>
+  </div>
+</div>

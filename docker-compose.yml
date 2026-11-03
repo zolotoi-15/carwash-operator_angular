@@ -1,0 +1,56 @@
+services:
+  # ---------- MONGODB ----------
+  mongo:
+    image: mongo:7
+    container_name: carwash-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"          # опционально, для отладки; в проде убери
+    networks:
+      - carwash
+
+  # ---------- BACKEND (Node + Express + MQTT + Mongoose) ----------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: carwash-backend
+    restart: unless-stopped
+    environment:
+      MONGO_URI: mongodb://mongo:27017/carwash
+      PORT: "3000"
+      HOST: "0.0.0.0"
+      JWT_SECRET: change-me-in-prod
+      # MQTT брокер — внешний. Укажи реальный адрес:
+      MQTT_BROKER_URL: ws://192.168.31.211:8083/mqtt
+      KKM_ENABLED: "false"
+      KKM_MOCK_RECEIPT: "true"
+    depends_on:
+      - mongo
+    ports:
+      - "3000:3000"            # чтобы можно было дергать API напрямую (для отладки)
+    networks:
+      - carwash
+
+  # ---------- FRONTEND (Angular + nginx) ----------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: carwash-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"              # http://localhost:8080
+    networks:
+      - carwash
+
+volumes:
+  mongo_data:
+
+networks:
+  carwash:
+    driver: bridge
