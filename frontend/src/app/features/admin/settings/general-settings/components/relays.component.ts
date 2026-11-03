@@ -72,6 +72,24 @@ import { Subject, takeUntil } from 'rxjs';
 
       <div class="current-assignment" *ngIf="currentRelayMac">
         ✅ Посту <b>{{ selectedPost }}</b> назначено реле: <code>relay_{{ currentRelayMac }}</code>
+        <ul class="topic-list" *ngIf="currentRelayMac">
+          <li><code>relay_{{ currentRelayMac }}</code> — базовый топик (команды)</li>
+          <li><code>relay_{{ currentRelayMac }}/postnum</code> — номер поста</li>
+          <li><code>relay_{{ currentRelayMac }}/udp</code> — UDP-порт</li>
+          <li><code>relay_{{ currentRelayMac }}/status_relay</code> — состояние каналов</li>
+          <li><code>relay_{{ currentRelayMac }}/active</code> — активность</li>
+          <li><code>relay_{{ currentRelayMac }}/ip</code> — IP-адрес</li>
+          <li><code>relay_{{ currentRelayMac }}/lwt</code> — онлайн/офлайн (last will)</li>
+        </ul>
+      </div>
+
+      <!-- Ручной ввод MAC, если автообнаружение недоступно -->
+      <div class="manual-add">
+        <input type="text" [(ngModel)]="manualMac" placeholder="MAC вручную, напр. 30:76:F5:30:5B:A4"
+               (input)="manualMac = manualMac.toUpperCase()" />
+        <button type="button" class="mini-btn assign" [disabled]="assignBusy || !validManualMac"
+                (click)="assignManual()">+ назначить посту {{ selectedPost }}</button>
+        <span class="muted" *ngIf="manualMac && !validManualMac">некорректный MAC</span>
       </div>
     </div>
 
@@ -140,6 +158,10 @@ import { Subject, takeUntil } from 'rxjs';
     .empty { padding: 1rem; text-align: center; color: #64748b; font-size: 0.85rem; background: #fff; border: 1px dashed #cbd5e1; border-radius: 8px; }
     .current-assignment { margin-top: 0.75rem; font-size: 0.85rem; color: #166534; }
     .current-assignment code { background: #dcfce7; padding: 1px 6px; border-radius: 4px; }
+    .topic-list { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.78rem; color: #475569; }
+    .topic-list li { margin-bottom: 2px; }
+    .manual-add { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+    .manual-add input { border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 8px; font-size: 0.8rem; width: 240px; }
   `]
 })
 export class RelaysComponent implements OnInit, OnDestroy {
@@ -157,6 +179,12 @@ export class RelaysComponent implements OnInit, OnDestroy {
   relaysError = '';
   assignBusy = false;
   currentRelayMac: string | null = null;
+  manualMac = '';
+
+  /** Валидность MAC, введённого вручную (xx:xx:xx:xx:xx:xx) */
+  get validManualMac(): boolean {
+    return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(this.manualMac.trim().toUpperCase());
+  }
 
   constructor(
     private admin: AdminService,
@@ -269,5 +297,13 @@ export class RelaysComponent implements OnInit, OnDestroy {
         alert('Не удалось назначить реле: ' + msg);
       }
     });
+  }
+
+  /** Назначить реле по MAC, введённому вручную */
+  assignManual(): void {
+    if (!this.validManualMac) return;
+    const mac = this.manualMac.trim().toUpperCase();
+    this.assignRelay(mac);
+    this.manualMac = '';
   }
 }

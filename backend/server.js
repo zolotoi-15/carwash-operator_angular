@@ -1647,40 +1647,57 @@ function normalizeMac(mac) {
   return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(s) ? s : null;
 }
 
-/** Все реле, известные broker'у (по $SYS retained-дереву), + агрегированные состояния */
+/** Все реле, известные broker'у, + агрегированные состояния.
+ *  Источники MAC: 1) накопленные relayStates (подписка relay_+/* слушается всегда —
+ *  любое сообщение от реле сразу делает его «известным»);
+ *  2) retained-топики MQTT-брокера через штатный запрос LISTNRET (работает с mosquitto,
+ *  EMQX и др.; не требует доступа к $SYS);
+ *  3) сохранённые назначения в settings.posts[i].relay.mac. */
 async function listKnownRelays() {
   const macs = new Set(Object.keys(relayStates).map(m => m.toUpperCase()));
+
+  // Retained-топики реле, публикуемые самим устройством при подключении:
+  // relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay, /active, /ip, /lwt
+  const RELAY_SUBTOPICS = ['postnum', 'udp', 'status_relay', 'active', 'ip', 'lwt'];
   if (mqttClient && mqttClient.connected) {
-    // Собираем топики из retained-дерева брокера ($SYS/broker/retained messages/topics/#)
     const topics = await new Promise((resolve) => {
       const acc = new Set();
       let done = false;
-      const finish = () => { if (!done) { done = true; resolve([...acc]); } };
-      const handler = (t, msg) => {
-        if (!t.startsWith('$SYS/broker/retained')) return;
+      const finish = () => { if (!done) { done = true; try { mqttClient.removeListener('message', onData); } catch {} resolve([...acc]); } };
+      const collect = (line) => {
+        const t = String(line).trim().split(/\s+/)[0];
+        if (/^relay_[0-9A-Fa-f:]{12}(\/(postnum|udp|status_relay|active|ip|lwt))?$/i.test(t)) acc.add(t);
+      };
+      const onData = (topic, payload) => {
+        if (!/\bLISTNRET\b/.test(topic) && !topic.endsWith('/RETNILTSNI')) return;
+        try { String(payload).split(/\r?\n/).forEach(collect); } catch { /* ignore */ }
+      };
+      const sendListReq = (reqTopic) => {
         try {
-          const tree = JSON.parse(msg.toString());
-          const walk = (node, prefix) => {
-            if (!node || typeof node !== 'object') return;
-            for (const [k, v] of Object.entries(node)) {
-              const full = prefix ? `${prefix}/${k}` : k;
-              if (typeof v === 'number') { if (/^relay_[0-9A-Fa-f:]{12}/.test(full)) acc.add(full); }
-              else walk(v, full);
-            }
-          };
-          walk(tree, '');
-        } catch { /* ignore */ }
+          mqttClient.publish(reqTopic, 'LISTNRET', { qos: 0, retain: false }, () => {});
+          return true;
+        } catch { return false; }
       };
       try {
-        mqttClient.subscribe('$SYS/broker/retained messages/topics/#', { qos: 0 }, () => {
-          setTimeout(finish, 800);
-        });
-        mqttClient.on('message', handler);
+        mqttClient.on('message', onData);
+        const ok1 = sendListReq('$CONTROL/LISTNREQ');   // mosquitto: ответ в $CONTROL/LISTNRET
+        const ok2 = sendListReq('$CONTROL/RETNILTSNI'); // EMQX-style
+        if (!ok1 && !ok2) return finish();
+        setTimeout(finish, 1000);
       } catch { finish(); }
     }).catch(() => []);
     for (const t of topics) {
       const m = t.match(/^relay_([0-9A-Fa-f:]{12})/i);
       if (m) macs.add(m[1].toUpperCase());
+    }
+  }
+
+  // Реле, уже назначенные постами в настройках (видны даже при недоступном брокере)
+  {
+    const n = settings.numberOfPosts || 8;
+    for (let i = 1; i <= n; i++) {
+      const rm = normalizeMac(settings.posts?.[i]?.relay?.mac);
+      if (rm) macs.add(rm);
     }
   }
   return [...macs].sort().map(mac => {
