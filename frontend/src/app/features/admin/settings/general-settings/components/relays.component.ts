@@ -218,12 +218,12 @@ export class RelaysComponent implements OnInit, OnDestroy {
       // Актуальное назначение реле посту (posts[i].relay.mac)
       this.currentRelayMac = ps.relay?.mac ? String(ps.relay.mac).toUpperCase() : null;
 
-      const currentMask = ps.relayMask || {};
-      const currentDimmer = ps.dimmerMask || {};
+      const currentMask: Record<string, any> = ps.relayMask || {};
+      const currentDimmer: Record<string, any> = ps.dimmerMask || {};
       const group: any = {};
       this.serviceKeys.forEach(name => {
-        const mask = currentMask[name] || 0;
-        const dimmer = currentDimmer[name] || 0;
+        const mask = Number(currentMask[name] || 0);
+        const dimmer = Number(currentDimmer[name] || 0);
         const controls: any = {};
         for (let r = 1; r <= 8; r++) controls['relay' + r] = [!!(mask & (1 << (r - 1)))];
         for (let d = 1; d <= 4; d++) controls['dimmer' + d] = [!!(dimmer & (1 << (d - 1)))];
