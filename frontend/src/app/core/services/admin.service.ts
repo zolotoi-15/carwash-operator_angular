@@ -38,7 +38,9 @@ export interface RelayAssignment {
 export interface RelayInfo {
   mac: string;
   topic: string;                 // relay_<MAC>
-  online: boolean | null;        // из relay_<MAC>/lwt
+  online: boolean | null;        // из relay_<MAC>/lwt (единственный источник статуса)
+  lwtRaw?: string | null;        // сырое значение /lwt (диагностика)
+  lwtAt?: number | null;         // когда получен последний /lwt
   ip: string | null;             // из relay_<MAC>/ip
   statusRelay: any;              // из relay_<MAC>/status_relay
   active: any;                   // из relay_<MAC>/active

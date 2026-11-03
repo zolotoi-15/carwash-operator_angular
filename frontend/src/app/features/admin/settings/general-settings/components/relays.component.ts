@@ -29,7 +29,7 @@ import { Subject, takeUntil } from 'rxjs';
         Доступные топики: <code>relay_&lt;MAC&gt;</code>, <code>/postnum</code>, <code>/udp</code>,
         <code>/status_relay</code>, <code>/active</code>, <code>/ip</code>, <code>/lwt</code>.
         Выберите реле из списка и назначьте его посту. Одно реле — один пост.
-        Статусы ● онлайн / ○ офлайн обновляются автоматически по MQTT-сообщениям реле.
+        Статус ● онлайн / ○ офлайн берётся из топика <code>relay_&lt;MAC&gt;/lwt</code> (last will) и обновляется автоматически по MQTT-сообщениям реле.
       </p>
 
       <div *ngIf="relaysError" class="error-banner">⚠️ {{ relaysError }}</div>
@@ -48,7 +48,7 @@ import { Subject, takeUntil } from 'rxjs';
           <tr *ngFor="let r of relays" [class.row-assigned]="r.assignedPost === selectedPost">
             <td><code>{{ r.topic }}</code></td>
             <td>
-              <span class="badge" [ngClass]="online(r) ? 'badge-on' : 'badge-off'">
+              <span class="badge" [ngClass]="online(r) ? 'badge-on' : 'badge-off'" [title]="statusTitle(r)">
                 {{ online(r) ? '● онлайн' : '○ офлайн' }}
               </span>
             </td>
@@ -235,7 +235,9 @@ export class RelaysComponent implements OnInit, OnDestroy {
           const mac = String(msg.mac).toUpperCase();
           const r = this.relays.find(x => x.mac === mac);
           if (r && msg.state) {
-            r.online = msg.state.online ?? r.online;
+            // Статус онлайн/офлайн — только из /lwt (msg.subTopic === 'lwt' задаёт state.online на бэкенде)
+            if (msg.subTopic === 'lwt') r.online = msg.state.online;
+            else r.online = msg.state.online ?? r.online;
             r.ip = msg.state.ip ?? r.ip;
             r.active = msg.state.active ?? r.active;
             r.statusRelay = msg.state.statusRelay ?? r.statusRelay;
@@ -331,12 +333,17 @@ export class RelaysComponent implements OnInit, OnDestroy {
     this.loadRelays(true);
   }
 
-  /** Статус реле по lwt/active (null — неизвестен, считаем офлайн) */
+  /** Статус реле — берётся ТОЛЬКО из топика relay_<MAC>/lwt (last will).
+   *  online === true → ● онлайн; false/unknown → ○ офлайн. */
   online(r: RelayInfo): boolean {
-    if (r.online === true) return true;
-    const a = r.active;
-    if (a === 'online' || a === 1 || a === true || a === '1') return true;
-    return false;
+    return r.online === true;
+  }
+
+  /** Человекочитаемая подпись источника статуса для диагностики */
+  statusTitle(r: RelayInfo): string {
+    if (r.online === true) return 'lwt · online';
+    if (r.online === false) return 'lwt · offline';
+    return 'нет lwt · offline';
   }
 
   /** Назначить выбранному посту реле (mac = null — снять назначение) */

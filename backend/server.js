@@ -202,6 +202,7 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/lwt');
     mqttClient.subscribe('posts/+/receipt_number');
     subscribeRelayTopics();
+    refreshRelayRetained(); // перечитать retained lwt/ip реле → статусы сразу после старта
     if (settings.posts) publishConfigToAllPosts();
   });
 
@@ -226,6 +227,28 @@ function connectMqtt(settings) {
       });
     }
     console.log(`📡 Подписка на топики реле активна (${subs.size} шаблонов)`);
+  }
+
+  /**
+   * Активное перечитывание retained-топиков реле сразу после подключения.
+   * Ключевой момент: ESP32 публикует relay_<MAC>/lwt с флагом retain — подписываясь
+   * на relay_+/lwt ДО перечисленных ниже повторных подписок и делая «переподписку»
+   * с задержкой, мы гарантированно получаем retained lwt каждого реле и проставляем
+   * онлайн/офлайн без ожидания следующих сообщений устройства.
+   */
+  function refreshRelayRetained() {
+    if (!mqttClient || !mqttClient.connected) return;
+    // Повторная подписка заставляет брокера заново доставить retained-сообщения.
+    for (const subT of ['relay_+/lwt', 'relay_+/ip', 'relay_+/active', 'relay_+/status_relay']) {
+      try {
+        mqttClient.unsubscribe(subT, () => {
+          mqttClient.subscribe(subT, { qos: 0 }, (err) => {
+            if (err) console.warn(`⚠️ refreshRelayRetained ${subT}: ${err.message}`);
+          });
+        });
+      } catch { /* ignore */ }
+    }
+    setTimeout(() => discoverRelayMacsFromBroker().catch(() => {}), 1200);
   }
 
   /** MAC реле, назначенного посту (из настроек), или null */
@@ -269,7 +292,13 @@ function connectMqtt(settings) {
         rs.lastSeen = Date.now();
         switch (sub) {
           case 'lwt':
-            rs.online = String(typeof data === 'string' ? data : (data?.state || '')).toLowerCase() === 'online'; break;
+            // Единственный источник истины статуса — топик /lwt (last will):
+            // живое устройство публикует retained-состояние (часто пустое),
+            // при обрыве связи брокер публикует will → офлайн.
+            rs.online = parseRelayLwt(payload);
+            rs.lwtRaw = payload.length > 64 ? payload.slice(0, 64) + '…' : payload;
+            rs.lwtAt = Date.now();
+            break;
           case 'ip':
             rs.ip = typeof data === 'string' ? data : (data?.ip ?? data?.value ?? null); break;
           case 'active':
@@ -999,6 +1028,38 @@ let postsState = {};
 // Состояния реле (relay_<MAC>) — агрегируются из MQTT-топиков relay_+/*
 const relayStates = {};
 
+/**
+ * Парсинг статуса реле из топика relay_<MAC>/lwt (last will).
+ * Единственный источник истины онлайн/офлайн.
+ *  - пустой payload / ""                → онлайн (retained-живой, will ещё не сработал)
+ *  - "1"/"true"/"on"/"online"/"connect"/"up"/"alive"/"ok" → онлайн
+ *  - JSON {"online":true} / {"state":"online"}            → по значению
+ *  - unix-timestamp (>= 1700000000)                       → онлайн (heartbeat)
+ *  - "0"/"false"/"off"/"offline"/"disconnect"/"down"/"lost" → офлайн
+ *  - прочий непустой текст (will-сообщение)               → офлайн
+ */
+function parseRelayLwt(raw) {
+  const s = String(raw ?? '').trim();
+  if (s === '') return true; // retained-пустота = устройство живо
+  // JSON-варианты
+  if (s.startsWith('{')) {
+    try {
+      const o = JSON.parse(s);
+      if (typeof o.online === 'boolean') return o.online;
+      const st = String(o.state ?? o.status ?? '').toLowerCase();
+      if (st) return ['online', 'on', '1', 'true', 'connected', 'up', 'alive'].includes(st);
+      const n = Number(Object.values(o)[0]);
+      if (Number.isFinite(n)) return n >= 1700000000 ? true : n > 0;
+    } catch { /* не JSON — дальше как строка */ }
+  }
+  const low = s.toLowerCase();
+  if (['1', 'true', 'on', 'online', 'connect', 'connected', 'up', 'alive', 'ok'].includes(low)) return true;
+  if (['0', 'false', 'off', 'offline', 'disconnect', 'disconnected', 'down', 'lost', 'dead'].includes(low)) return false;
+  const num = Number(s);
+  if (Number.isFinite(num)) return num >= 1700000000 ? true : num > 0; // heartbeat-время или счётчик
+  return false; // непустой неизвестный текст считаем will-сообщением → офлайн
+}
+
 function getPostState(postId) {
   if (!postsState[postId]) {
     postsState[postId] = {
@@ -1647,6 +1708,59 @@ function normalizeMac(mac) {
   return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(s) ? s : null;
 }
 
+/**
+ * Запрос retained-топиков реле у брокера ($CONTROL/LISTNREQ → LISTNRET).
+ * Помимо MAC дополнительно извлекает retained-значения relay_<MAC>/lwt, /ip —
+ * чтобы статус ●/○ был корректен сразу после обнаружения (источник — /lwt).
+ */
+async function discoverRelayMacsFromBroker() {
+  if (!mqttClient || !mqttClient.connected) return [];
+  const topics = await new Promise((resolve) => {
+    const acc = new Map(); // topic -> payload
+    let done = false;
+    const finish = () => { if (!done) { done = true; try { mqttClient.removeListener('message', onData); } catch {} resolve(acc); } };
+    const collect = (line) => {
+      const parts = String(line).trim().split(/\s+/);
+      const t = parts[0];
+      if (/^relay_[0-9A-Fa-f:]{12}(\/(postnum|udp|status_relay|active|ip|lwt))?$/i.test(t)) {
+        acc.set(t, parts.slice(1).join(' '));
+      }
+    };
+    const onData = (topic, payload) => {
+      if (!/\bLISTNRET\b/i.test(topic) && !/RETNILTSNI/.test(topic)) return;
+      try { String(payload).split(/\r?\n/).forEach(collect); } catch { /* ignore */ }
+    };
+    try {
+      mqttClient.on('message', onData);
+      let ok = false;
+      for (const req of ['$CONTROL/LISTNREQ', '$CONTROL/RETNILTSNI']) {
+        try { mqttClient.publish(req, 'LISTNRET', { qos: 0, retain: false }, () => {}); ok = true; } catch { /* ignore */ }
+      }
+      if (!ok) return finish();
+      setTimeout(finish, 1000);
+    } catch { finish(); }
+  }).catch(() => new Map());
+
+  const macs = [];
+  for (const [t, val] of (topics instanceof Map ? topics : [])) {
+    const m = t.match(/^relay_([0-9A-Fa-f:]{12})(?:\/(lwt|ip))?$/i);
+    if (!m) continue;
+    const mac = m[1].toUpperCase();
+    macs.push(mac);
+    relayStates[mac] = relayStates[mac] || { mac, lastSeen: 0 };
+    const rs = relayStates[mac];
+    const sub = (m[2] || '').toLowerCase();
+    if (sub === 'lwt') {
+      rs.online = parseRelayLwt(val);
+      rs.lwtRaw = val.length > 64 ? val.slice(0, 64) + '…' : val;
+      rs.lwtAt = Date.now();
+    } else if (sub === 'ip' && !rs.ip) {
+      rs.ip = val.trim() || null;
+    }
+  }
+  return [...new Set(macs)];
+}
+
 /** Все реле, известные broker'у, + агрегированные состояния.
  *  Источники MAC: 1) накопленные relayStates (подписка relay_+/* слушается всегда —
  *  любое сообщение от реле сразу делает его «известным»);
@@ -1659,38 +1773,9 @@ async function listKnownRelays() {
   // Retained-топики реле, публикуемые самим устройством при подключении:
   // relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay, /active, /ip, /lwt
   if (mqttClient && mqttClient.connected) {
-    const topics = await new Promise((resolve) => {
-      const acc = new Set();
-      let done = false;
-      const finish = () => { if (!done) { done = true; try { mqttClient.removeListener('message', onData); } catch {} resolve([...acc]); } };
-      const collect = (line) => {
-        const t = String(line).trim().split(/\s+/)[0];
-        if (/^relay_[0-9A-Fa-f:]{12}(\/(postnum|udp|status_relay|active|ip|lwt))?$/i.test(t)) acc.add(t);
-      };
-      // Ответ на $CONTROL/LISTNREQ приходит в $CONTROL/LISTNRET (mosquitto) либо
-      // в перевернутый топик $CONTROL/RETNILTSNI (некоторые брокеры)
-      const onData = (topic, payload) => {
-        if (!/\bLISTNRET\b/i.test(topic) && !/RETNILTSNI/.test(topic)) return;
-        try { String(payload).split(/\r?\n/).forEach(collect); } catch { /* ignore */ }
-      };
-      const sendListReq = (reqTopic) => {
-        try {
-          mqttClient.publish(reqTopic, 'LISTNRET', { qos: 0, retain: false }, () => {});
-          return true;
-        } catch { return false; }
-      };
-      try {
-        mqttClient.on('message', onData);
-        const ok1 = sendListReq('$CONTROL/LISTNREQ');   // mosquitto: ответ в $CONTROL/LISTNRET
-        const ok2 = sendListReq('$CONTROL/RETNILTSNI'); // EMQX-style
-        if (!ok1 && !ok2) return finish();
-        setTimeout(finish, 1000);
-      } catch { finish(); }
-    }).catch(() => []);
-    for (const t of topics) {
-      const m = t.match(/^relay_([0-9A-Fa-f:]{12})/i);
-      if (m) macs.add(m[1].toUpperCase());
-    }
+    try {
+      for (const mac of await discoverRelayMacsFromBroker()) macs.add(mac);
+    } catch { /* брокер не ответил — используем то, что уже известно */ }
   }
 
   // Реле, уже назначенные постами в настройках (видны даже при недоступном брокере)
@@ -1715,6 +1800,8 @@ async function listKnownRelays() {
       mac,
       topic: `relay_${mac}`,
       online: rs.online ?? null,
+      lwtRaw: rs.lwtRaw ?? null,   // сырое значение /lwt (для диагностики статуса)
+      lwtAt: rs.lwtAt ?? null,     // когда получен последний /lwt
       ip: rs.ip ?? null,
       statusRelay: rs.statusRelay ?? null,
       active: rs.active ?? null,
