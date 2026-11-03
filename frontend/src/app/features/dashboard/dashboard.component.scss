@@ -1,17 +1,32 @@
 .dashboard {
-  padding: 0;                /* ← padding перенесён в .app-content */
+  padding: 0;
   width: 100%;
 }
 
-/* ===== Верхний ряд: три карточки в одну строку во всю ширину ===== */
+/* ===== Верхний ряд: приводим к сетке из 4 колонок (как посты) ===== */
 .top-row {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 1fr;
+  /* 4 колонки, чтобы идеально совпадало с сеткой постов */
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   margin-bottom: 20px;
   align-items: stretch;
-  width: 100%;                /* ← во всю ширину родителя */
-  max-width: none;            /* ← никаких ограничений */
+  width: 100%;
+  max-width: 1800px; /* Такое же ограничение, как у .posts-grid */
+  margin-left: auto;
+  margin-right: auto; /* Центрируем */
+
+  > app-kkm-status {
+    grid-column: span 1; /* 1 колонка */
+  }
+
+  > app-tank-levels {
+    grid-column: span 2; /* 2 колонки (по центру) */
+  }
+
+  > app-shift-total {
+    grid-column: span 1; /* 1 колонка */
+  }
 
   > app-kkm-status,
   > app-tank-levels,
@@ -47,17 +62,18 @@
   }
 }
 
-/* ===== Ниже — сетка постов, ограниченная по ширине ===== */
+/* ===== Ниже — сетка постов ===== */
 .section-title {
   margin: 0 auto 12px;
-  max-width: 1400px;
+  max-width: 1800px; /* Выровняли с сеткой */
   color: #334155;
   font-size: 17px;
 }
 
 .posts-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  /* Используем 4 равные колонки для десктопа, чтобы совпадало с верхом */
+  grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   max-width: 1800px;
   margin-left: auto;
@@ -71,36 +87,36 @@
 }
 
 /* ===== Адаптив ===== */
-@media (max-width: 1200px) {
-  .top-row {
-    grid-template-columns: 1fr 1fr;
+@media (max-width: 1400px) {
+  .top-row, .posts-grid {
+    grid-template-columns: repeat(3, 1fr); /* На узких экранах 3 колонки */
+  }
+  .top-row > app-tank-levels {
+     grid-column: span 1; /* Возвращаем в 1 колонку */
+  }
+  .top-row > app-shift-total {
+     grid-column: span 1;
+  }
+}
 
-    > app-tank-levels {
-      grid-column: 1 / -1;
-    }
+@media (max-width: 1024px) {
+   .top-row, .posts-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 }
 
 @media (max-width: 768px) {
-  .top-row {
+  .top-row, .posts-grid {
     grid-template-columns: 1fr;
-    gap: 12px;
-
-    > app-tank-levels { grid-column: auto; }
-
-    > app-kkm-status .card,
-    > app-tank-levels .card,
-    > app-shift-total .card {
-      min-height: auto;
-    }
   }
-}
+  
+  .top-row > app-tank-levels {
+    grid-column: auto;
+  }
 
-@media (max-width: 640px) {
-  .section-title { font-size: 16px; margin-bottom: 12px; }
-
-  .posts-grid {
-    grid-template-columns: 1fr;
-    gap: 12px;
+  .top-row > app-kkm-status .card,
+  .top-row > app-tank-levels .card,
+  .top-row > app-shift-total .card {
+    min-height: auto;
   }
 }

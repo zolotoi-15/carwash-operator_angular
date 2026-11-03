@@ -1,8 +1,10 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../core/services/admin.service';
+import { AdminService } from '../../../../../core/services/admin.service';
+import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
+import { Subject, takeUntil } from 'rxjs';
 
 @Component({
   selector: 'app-delays',
@@ -34,34 +36,44 @@ import { AdminService } from '../../../core/services/admin.service';
     .loading { text-align: center; color: #666; }
   `]
 })
-export class DelaysComponent implements OnInit {
+export class DelaysComponent implements OnInit, OnDestroy {
   form!: FormGroup;
   serviceKeys: string[] = [];
-  selectedPost: number = 1;
+  selectedPost = 1;
   postIds: number[] = [];
+  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder
-  ) { }
+    private fb: FormBuilder,
+    private settingsUpdate: SettingsUpdateService
+  ) {}
 
-  ngOnInit() {
-    this.admin.getSettings().subscribe(settings => {
-      const count = settings.numberOfPosts || 8;
+  ngOnInit(): void {
+    this.admin.getSettings().subscribe(s => {
+      const count = s.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
       this.loadPostSettings();
     });
+
+    this.settingsUpdate.settingsUpdated$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.loadPostSettings());
   }
 
-  loadPostSettings() {
-    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
-      const services = postSettings.services || [];
-      this.serviceKeys = services.map(s => s.name);
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
 
-      const currentDelays = postSettings.relayDelays || {};
+  loadPostSettings(): void {
+    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
+      const services = ps.services || [];
+      this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
+      const current = ps.relayDelays || {};
       const group: any = {};
       this.serviceKeys.forEach(name => {
-        const def = currentDelays[name] || { onDelay: 100, offDelay: 200 };
+        const def = current[name] || { onDelay: 100, offDelay: 200 };
         group[name + '_on'] = [def.onDelay];
         group[name + '_off'] = [def.offDelay];
       });
@@ -69,17 +81,13 @@ export class DelaysComponent implements OnInit {
     });
   }
 
-  save() {
+  save(): void {
     const raw = this.form.value;
     const relayDelays: any = {};
     this.serviceKeys.forEach(name => {
-      relayDelays[name] = {
-        onDelay: raw[name + '_on'],
-        offDelay: raw[name + '_off']
-      };
+      relayDelays[name] = { onDelay: raw[name + '_on'], offDelay: raw[name + '_off'] };
     });
-    this.admin.updatePostSettings(this.selectedPost, { relayDelays }).subscribe(() => {
-      alert('Задержки для поста ' + this.selectedPost + ' сохранены');
-    });
+    this.admin.updatePostSettings(this.selectedPost, { relayDelays })
+      .subscribe(() => alert('Задержки для поста ' + this.selectedPost + ' сохранены'));
   }
 }

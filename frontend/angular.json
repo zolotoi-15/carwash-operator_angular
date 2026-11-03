@@ -45,17 +45,17 @@
           "configurations": {
             "production": {
               "budgets": [
-  {
-    "type": "initial",
-    "maximumWarning": "500kB",
-    "maximumError": "1MB"
-  },
-  {
-    "type": "anyComponentStyle",
-    "maximumWarning": "8kB",
-    "maximumError": "12kB"
-  }
-],
+                {
+                  "type": "initial",
+                  "maximumWarning": "500kB",
+                  "maximumError": "1MB"
+                },
+                {
+                  "type": "anyComponentStyle",
+                  "maximumWarning": "8kB",
+                  "maximumError": "12kB"
+                }
+              ],
               "outputHashing": "all"
             },
             "development": {
@@ -66,12 +66,12 @@
           },
           "defaultConfiguration": "production"
         },
-
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {
             "buildTarget": "carwash-operator-angular:build",
-            "proxyConfig": "proxy.conf.json"
+            "allowedHosts": ["localhost", "127.0.0.1", "0.0.0.0"],
+            "proxyConfig": "proxy.conf.js"
           },
           "configurations": {
             "production": {
@@ -83,18 +83,16 @@
           },
           "defaultConfiguration": "development"
         },
-
         "extract-i18n": {
           "builder": "@angular/build:extract-i18n",
           "options": {
             "buildTarget": "carwash-operator-angular:build"
           }
         },
-
         "test": {
           "builder": "@angular/build:karma",
           "options": {
-		  "karmaConfig": "karma.conf.js",
+            "karmaConfig": "karma.conf.js",
             "polyfills": [
               "zone.js",
               "zone.js/testing"
@@ -113,7 +111,6 @@
             "scripts": []
           }
         },
-
         "lint": {
           "builder": "@angular-eslint/builder:lint",
           "options": {

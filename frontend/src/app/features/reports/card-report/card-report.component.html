@@ -1,68 +1,134 @@
-<div class="card-report">
-  <header class="card-report__header">
-    <button type="button" class="back" (click)="back()">← К картам</button>
-    <h2>Отчёт по карте {{ cardNumber }}</h2>
+<div class="report-wrapper">
 
-    <div class="filters">
-      <label>
-        С даты:
-        <input type="date" [(ngModel)]="dateFrom" />
-      </label>
-      <label>
-        По дату:
-        <input type="date" [(ngModel)]="dateTo" />
-      </label>
-      <button type="button" (click)="reload()" [disabled]="loading">Применить</button>
-      <button type="button" (click)="exportCsv()" [disabled]="!operations.length">Экспорт CSV</button>
+  <!-- ===== Шапка ===== -->
+  <header class="rep-header no-print">
+    <div>
+      <h1>📊 Отчёт по сменам и выручке</h1>
+      <p class="subtitle">
+        {{ periodLabel() }} · {{ rangeLabel() }}
+        @if (lastUpdated) { · обновлено в {{ lastUpdated | date:'HH:mm:ss' }} }
+      </p>
+    </div>
+    <div class="header-actions">
+      <button class="btn" (click)="refresh()" [disabled]="loading">🔄 Обновить</button>
+      <button class="btn" (click)="exportCSV()">📥 Экспорт CSV</button>
+      <button class="btn btn-primary" (click)="print()">🖨️ Печать</button>
     </div>
   </header>
 
-  <p class="error" *ngIf="error">{{ error }}</p>
-  <p class="loading" *ngIf="loading">Загрузка…</p>
+  @if (error) {
+    <div class="alert alert-error">
+      {{ error }}
+      <button class="retry" (click)="load()">Повторить</button>
+    </div>
+  }
 
-  <section class="summary" *ngIf="summary as s">
-    <div class="summary-item">
-      <span class="label">Текущий баланс:</span>
-      <span class="value">{{ s.balance | number:'1.2-2' }} ₽</span>
-    </div>
-    <div class="summary-item">
-      <span class="label">Всего пополнений:</span>
-      <span class="value">{{ s.totalTopUps | number:'1.2-2' }} ₽</span>
-    </div>
-    <div class="summary-item">
-      <span class="label">Всего списаний:</span>
-      <span class="value">{{ s.totalCharges | number:'1.2-2' }} ₽</span>
-    </div>
-    <div class="summary-item">
-      <span class="label">Операций:</span>
-      <span class="value">{{ s.operationsCount }}</span>
+  <!-- ===== Переключатель периодов ===== -->
+  <section class="tabs no-print">
+    <div class="segmented">
+      @for (p of periods; track p.value) {
+        <button [class.active]="period() === p.value" (click)="setPeriod(p.value)">
+          {{ p.icon }} {{ p.label }}
+        </button>
+      }
     </div>
   </section>
 
-  <table class="operations" *ngIf="operations.length">
-    <thead>
-      <tr>
-        <th>Дата</th>
-        <th>Тип</th>
-        <th>Сумма</th>
-        <th>Баланс после</th>
-        <th>Пост</th>
-        <th>Чек №</th>
-        <th>Оператор</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr *ngFor="let op of operations">
-        <td>{{ op.date | date:'dd.MM.yyyy HH:mm' }}</td>
-        <td>{{ op.type }}</td>
-        <td [class.negative]="op.amount < 0">{{ op.amount | number:'1.2-2' }} ₽</td>
-        <td>{{ op.balanceAfter | number:'1.2-2' }} ₽</td>
-        <td>{{ op.postId || '—' }}</td>
-        <td>{{ op.receiptNumber || '—' }}</td>
-        <td>{{ op.operatorName || '—' }}</td>
-      </tr>
-    </tbody>
-  </table>
+  @if (loading && !rows.length) {
+    <div class="skeleton-wrap">
+      <div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>
+      <div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>
+      <div class="skeleton sk-row"></div><div class="skeleton sk-row"></div>
+    </div>
+  }
 
-  <p class="empty" *ngIf="!loading && !operations.length">Операций за период не найдено</p>
+  <!-- ===== KPI-карточки ===== -->
+  <section class="kpis">
+    <div class="kpi k-blue">
+      <span class="kpi-ico">💰</span>
+      <div>
+        <div class="kpi-val">{{ totals.revenue | number:'1.0-2' }} ₽</div>
+        <div class="kpi-lbl">Выручка</div>
+      </div>
+    </div>
+    <div class="kpi k-violet">
+      <span class="kpi-ico">🧾</span>
+      <div>
+        <div class="kpi-val">{{ totals.avgCheck | number:'1.0-2' }} ₽</div>
+        <div class="kpi-lbl">Средний чек</div>
+      </div>
+    </div>
+    <div class="kpi k-green">
+      <span class="kpi-ico">📦</span>
+      <div>
+        <div class="kpi-val">{{ totals.receipts }}</div>
+        <div class="kpi-lbl">Количество чеков</div>
+      </div>
+    </div>
+    <div class="kpi k-orange">
+      <span class="kpi-ico">⭐</span>
+      <div>
+        <div class="kpi-val small">{{ topService }}</div>
+        <div class="kpi-lbl">Топ услуга @if (topCount) { · {{ topCount }} зак. }</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Таблица услуг ===== -->
+  <section class="table-card">
+    <div class="table-head">
+      <h2>Услуги за период</h2>
+      <label class="search no-print">
+        🔍 <input type="text" [(ngModel)]="search" placeholder="Поиск услуги…" />
+      </label>
+    </div>
+
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Услуга</th>
+            <th class="num">Выручка</th>
+            <th class="num">Чеки</th>
+            <th class="num">Средний чек</th>
+            <th class="share-col">Доля</th>
+          </tr>
+        </thead>
+        <tbody>
+          @for (r of filteredRows(); track r.service) {
+            <tr>
+              <td class="svc">
+                <span class="svc-ico">{{ r.icon }}</span>
+                <span>{{ r.service }}</span>
+              </td>
+              <td class="num strong">{{ r.sum | number:'1.0-2' }} ₽</td>
+              <td class="num">{{ r.count }}</td>
+              <td class="num">{{ (r.count ? r.sum / r.count : 0) | number:'1.0-2' }} ₽</td>
+              <td class="share-col">
+                <div class="bar-track">
+                  <div class="bar-fill" [style.width.%]="percent(r.sum)" [style.background]="barColor(r.sum)"></div>
+                </div>
+                <span class="pct">{{ percent(r.sum) | number:'1.0-0' }}%</span>
+              </td>
+            </tr>
+          } @empty {
+            <tr><td colspan="5" class="empty-cell">
+              {{ loading ? 'Загрузка…' : (rows.length ? 'Ничего не найдено' : 'Нет данных за выбранный период') }}
+            </td></tr>
+          }
+        </tbody>
+        @if (rows.length) {
+          <tfoot>
+            <tr>
+              <td>ИТОГО</td>
+              <td class="num">{{ totals.revenue | number:'1.0-2' }} ₽</td>
+              <td class="num">{{ totals.receipts }}</td>
+              <td class="num">{{ totals.avgCheck | number:'1.0-2' }} ₽</td>
+              <td class="share-col"><span class="pct">100%</span></td>
+            </tr>
+          </tfoot>
+        }
+      </table>
+    </div>
+  </section>
 </div>

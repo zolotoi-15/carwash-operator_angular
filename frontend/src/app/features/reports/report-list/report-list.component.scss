@@ -1,73 +1,322 @@
-/* ============================================================
-   Общее
-   ============================================================ */
+// frontend/src/app/features/reports/report-list/report-list.component.scss
+$bg: #f1f5f9;
+$card: #ffffff;
+$ink: #0f172a;
+$muted: #64748b;
+$line: #e2e8f0;
+$blue: #2563eb;
+$radius: 14px;
+
 .reports-page {
-  padding: 24px;
+  padding: 20px;
+  background: $bg;
+  min-height: 100%;
+  color: $ink;
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
 }
 
-.filters {
+/* ===== Шапка ===== */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .subtitle { margin: 0; color: $muted; font-size: 13px; }
+}
+
+.header-actions {
   display: flex;
   gap: 8px;
-  align-items: center;
+}
+
+.btn {
+  border: 1px solid $line;
+  background: $card;
+  color: $ink;
+  padding: 8px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s ease;
+
+  &:hover:not(:disabled) { border-color: $blue; color: $blue; box-shadow: 0 2px 6px rgba(37, 99, 235, .12); }
+  &:disabled { opacity: .5; cursor: wait; }
+
+  &.btn-primary {
+    background: $blue;
+    border-color: $blue;
+    color: #fff;
+    &:hover { background: #1d4ed8; color: #fff; }
+  }
+}
+
+/* ===== Фильтры ===== */
+.controls {
+  display: flex;
   flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: $radius;
+  padding: 12px 14px;
   margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+}
+
+.segmented {
+  display: inline-flex;
+  background: $bg;
+  border-radius: 10px;
+  padding: 3px;
+  gap: 2px;
 
   button {
-    padding: 6px 12px;
+    border: none;
+    background: transparent;
+    padding: 7px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    color: $muted;
     cursor: pointer;
-    border: 1px solid #cbd5e1;
-    background: #fff;
-    border-radius: 4px;
+    white-space: nowrap;
+    transition: all .15s ease;
 
+    &:hover { color: $ink; }
     &.active {
-      background: #2563eb;
-      color: #fff;
-      border-color: #2563eb;
+      background: $card;
+      color: $blue;
+      font-weight: 600;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, .12);
     }
   }
+}
 
-  input[type=date] {
+.range-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: $muted;
+
+  input[type="date"] {
+    border: 1px solid $line;
+    border-radius: 8px;
     padding: 6px 8px;
-    border: 1px solid #cbd5e1;
-    border-radius: 4px;
+    font-size: 13px;
+    color: $ink;
+    background: $card;
+  }
+  .dash { color: $line; }
+}
+
+.tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+
+  .search {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid $line;
+    border-radius: 10px;
+    padding: 6px 10px;
+    background: $card;
+    font-size: 14px;
+
+    input {
+      border: none;
+      outline: none;
+      font-size: 13px;
+      width: 220px;
+      background: transparent;
+      color: $ink;
+    }
   }
 }
 
-.range-label {
-  margin-left: 12px;
-  color: #64748b;
+/* ===== Алерты ===== */
+.alert {
+  padding: 10px 14px;
+  border-radius: 10px;
   font-size: 13px;
+  margin-bottom: 14px;
+
+  &.alert-error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+  }
 }
 
-.pdf-btn {
-  margin-left: auto;
+/* ===== Скелетон ===== */
+.skeleton-wrap {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+
+  .skeleton {
+    background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.2s infinite;
+    border-radius: $radius;
+  }
+  .sk-card { height: 84px; }
+  .sk-row { height: 34px; grid-column: 1 / -1; }
 }
 
-.summary {
-  margin: 16px 0;
-  font-size: 15px;
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
-.error {
-  color: #dc2626;
-  font-size: 13px;
-  margin: 4px 0 12px;
+/* ===== KPI ===== */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
-.empty {
-  text-align: center;
-  color: #94a3b8;
-  padding: 24px;
+.kpi-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: $radius;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+
+  .kpi-icon {
+    font-size: 26px;
+    width: 46px;
+    height: 46px;
+    display: grid;
+    place-items: center;
+    border-radius: 12px;
+    background: $bg;
+  }
+
+  .kpi-value { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi-label { font-size: 12px; color: $muted; }
+
+  &.kpi-total .kpi-icon { background: #eff6ff; }
+  &.kpi-cash .kpi-icon { background: #ecfdf5; }
+  &.kpi-noncash .kpi-icon { background: #eef2ff; }
 }
 
-/* ============================================================
-   Обёртка таблицы
-   ============================================================ */
+/* ===== Диаграммы ===== */
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.chart-card {
+  background: $card;
+  border: 1px solid $line;
+  border-radius: $radius;
+  padding: 14px 16px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+
+  h3 { margin: 0 0 12px; font-size: 14px; color: $ink; }
+}
+
+.donut-wrap {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.donut {
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  position: relative;
+  flex-shrink: 0;
+
+  .donut-hole {
+    position: absolute;
+    inset: 26px;
+    background: $card;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+
+    .donut-total { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  }
+}
+
+.legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-width: 180px;
+
+  li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    padding: 4px 0;
+
+    .dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+    .legend-label { flex: 1; color: $ink; }
+    .legend-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .legend-pct { color: $muted; width: 42px; text-align: right; }
+  }
+}
+
+.bars {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+
+  li {
+    display: grid;
+    grid-template-columns: 70px 1fr 90px 46px;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 13px;
+
+    .bar-track {
+      height: 10px;
+      background: $bg;
+      border-radius: 6px;
+      overflow: hidden;
+
+      .bar-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #3b82f6, #2563eb);
+        border-radius: 6px;
+        transition: width .4s ease;
+      }
+    }
+    .bar-value { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+    .bar-count { color: $muted; text-align: right; font-size: 12px; }
+  }
+}
+
+/* ===== Таблица ===== */
 .table-wrap {
-  overflow-x: auto;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  background: #fff;
+  background: $card;
+  border: 1px solid $line;
+  border-radius: $radius;
+  overflow: auto;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+  max-height: 70vh;
 }
 
 .grouped-table {
@@ -75,147 +324,156 @@
   border-collapse: collapse;
   font-size: 13px;
 
-  th,
-  td {
-    border: 1px solid #cbd5e1;
-    padding: 6px 8px;
-    vertical-align: top;
-  }
-
   thead th {
-    background: #e0e7ff;
-    font-weight: 600;
-    text-align: left;
-    white-space: nowrap;
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 2;
+    background: #f8fafc;
+    color: $muted;
+    font-weight: 600;
+    font-size: 12px;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 2px solid $line;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 7px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    vertical-align: middle;
+  }
+
+  tbody tr:hover td { background: #f8fbff; }
+
+  .cell-day { font-weight: 600; background: #f8fafc; }
+  .cell-post { font-weight: 600; background: #fbfdff; }
+  .cell-pay { background: #fcfdfe; }
+  .cell-rcp { color: $muted; white-space: nowrap; }
+  .cell-sum, .cell-price, .cell-qty, .cell-time { font-variant-numeric: tabular-nums; text-align: right; }
+  .cell-right { text-align: right; }
+  .col-sum, .col-price, .col-qty, .col-time { text-align: right; }
+
+  .row-receipt-total td {
+    background: #f0f7ff;
+    font-weight: 600;
+    color: #1e40af;
+  }
+  .row-pm-total td {
+    background: #eef2f7;
+    font-weight: 600;
+    color: #334155;
+  }
+  .row-post-total td {
+    background: #e8eefc;
+    font-weight: 700;
+    color: #1e3a8a;
+  }
+  .row-day-total td {
+    background: #dbe4f3;
+    font-weight: 700;
+    color: #1e293b;
+  }
+  .row-grand-total td {
+    background: #0f172a;
+    color: #fff;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .row-spacer td { border: none; height: 6px; background: $card; }
+}
+
+.pay-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: #eef2ff;
+  color: #3730a3;
+  white-space: nowrap;
+
+  &.pay-cash { background: #ecfdf5; color: #047857; }
+}
+
+/* ===== Режим «Чеки» ===== */
+.receipts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.receipt-card {
+  background: $card;
+  border: 1px solid $line;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05);
+
+  &.open { border-color: #bfdbfe; }
+
+  .receipt-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 11px 14px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+
+    &:hover { background: #f8fbff; }
+
+    .rcp-num { font-weight: 700; min-width: 74px; }
+    .rcp-post { color: $muted; min-width: 70px; }
+    .rcp-date { color: $muted; margin-left: auto; font-variant-numeric: tabular-nums; }
+    .rcp-total { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 96px; text-align: right; }
+    .chevron { color: $muted; width: 14px; }
+  }
+
+  .receipt-body {
+    padding: 0 14px 12px;
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+
+      th {
+        text-align: left;
+        color: $muted;
+        font-weight: 600;
+        font-size: 12px;
+        padding: 6px 8px;
+        border-bottom: 1px solid $line;
+      }
+      td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; }
+      td.cell-sum { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+      th:nth-child(n+2), td:nth-child(n+2) { text-align: right; }
+      th:first-child, td:first-child { text-align: left; }
+    }
   }
 }
 
-/* ============================================================
-   Группировочные ячейки (rowspan)
-   ============================================================ */
-.cell-day {
-  background: #e9d5ff;
-  font-weight: 600;
+.empty {
   text-align: center;
-  vertical-align: middle !important;
-  white-space: nowrap;
-  color: #4c1d95;
-}
-
-.cell-post {
-  background: #ddd6fe;
-  font-weight: 600;
-  text-align: center;
-  vertical-align: middle !important;
-  white-space: nowrap;
-  color: #4c1d95;
-}
-
-.cell-pay {
-  background: #c7d2fe;
-  font-weight: 600;
-  text-align: center;
-  vertical-align: middle !important;
-  white-space: nowrap;
-}
-
-.cell-rcp {
-  background: #eef2ff;
-  font-weight: 600;
-  text-align: center;
-  vertical-align: middle !important;
-  white-space: nowrap;
-}
-
-/* ============================================================
-   Ячейки данных позиции
-   ============================================================ */
-.cell-name {
-  text-align: left;
-}
-
-.cell-price {
-  text-align: right;
-  width: 90px;
-  font-family: ui-monospace, monospace;
-  color: #334155;
-  font-size: 12px;
-}
-
-.cell-qty {
-  text-align: right;
-  width: 70px;
-}
-
-.cell-sum {
-  text-align: right;
-  width: 90px;
-  font-weight: 500;
-}
-
-.cell-unit {
-  text-align: left;
-  width: 70px;
-  color: #64748b;
-}
-
-.cell-time {
-  text-align: right;
-  width: 100px;
-  font-family: ui-monospace, monospace;
-}
-
-.cell-right {
-  text-align: right;
-  font-weight: 600;
-}
-
-/* ============================================================
-   Строки итогов
-   ============================================================ */
-.row-receipt-total td {
-  background: #f8fafc;
-  font-weight: 600;
-  color: #475569;
-  font-size: 12px;
-}
-
-.row-pm-total td {
-  background: #dbeafe;
-  font-weight: 600;
-}
-
-.row-post-total td {
-  background: #c7d2fe;
-  font-weight: 700;
-}
-
-.row-day-total td {
-  background: #a78bfa;
-  color: #fff;
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.row-grand-total td {
-  background: #1e293b;
-  color: #fff;
-  font-weight: 700;
+  color: $muted;
+  padding: 40px 0;
   font-size: 14px;
 }
 
-/* ============================================================
-   Пустые строки-разделители
-   ============================================================ */
-.row-spacer td {
-  background: #f5f7fa;
-  border-left: none;
-  border-right: none;
-  height: 12px;
-  padding: 0;
-  font-size: 0;
-  line-height: 0;
+/* ===== Печать ===== */
+@media print {
+  .reports-page { background: #fff; padding: 0; }
+  .no-print { display: none !important; }
+  .table-wrap { max-height: none; border: none; box-shadow: none; overflow: visible; }
+  .grouped-table thead th { position: static; }
+}
+
+/* ===== Мобильные ===== */
+@media (max-width: 720px) {
+  .tools { margin-left: 0; width: 100%; }
+  .search input { width: 100%; }
+  .page-header { flex-direction: column; }
 }

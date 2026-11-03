@@ -1,13 +1,15 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';  // <-- добавить
+import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../core/services/admin.service';
+import { AdminService } from '../../../../../core/services/admin.service';
+import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
+import { Subject, takeUntil } from 'rxjs';
 
 @Component({
   selector: 'app-prices',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, FormsModule],  // <-- добавить FormsModule
+  imports: [CommonModule, ReactiveFormsModule, FormsModule],
   template: `
     <div class="post-selector">
       <label>Пост: 
@@ -28,46 +30,63 @@ import { AdminService } from '../../../core/services/admin.service';
     </form>
     <div *ngIf="!form" class="loading">Загрузка...</div>
   `,
-  styles: [/* ... */]
+  styles: [`
+    .post-selector { margin-bottom: 1rem; }
+    .two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
+    .price-field label { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    input { width: 80px; padding: 6px; border-radius: 8px; border: 1px solid #ccc; }
+    .save-btn { background: #27ae60; color: white; border: none; padding: 8px 16px; border-radius: 30px; cursor: pointer; font-size: 1rem; }
+    .loading { text-align: center; color: #666; }
+  `]
 })
-export class PricesComponent implements OnInit {
+export class PricesComponent implements OnInit, OnDestroy {
   form!: FormGroup;
   serviceKeys: string[] = [];
-  selectedPost: number = 1;
+  selectedPost = 1;
   postIds: number[] = [];
+  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder
-  ) { }
+    private fb: FormBuilder,
+    private settingsUpdate: SettingsUpdateService
+  ) {}
 
-  ngOnInit() {
-    this.admin.getSettings().subscribe(settings => {
-      const count = settings.numberOfPosts || 8;
+  ngOnInit(): void {
+    this.admin.getSettings().subscribe(s => {
+      const count = s.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
-      // Загружаем настройки для первого поста
       this.loadPostSettings();
     });
+
+    this.settingsUpdate.settingsUpdated$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(() => this.loadPostSettings());
   }
 
-  loadPostSettings() {
-    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
-      const services = postSettings.services || [];
-      this.serviceKeys = services.map(s => s.name);
+  ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+  }
 
-      const currentPrices = postSettings.prices || {};
+  loadPostSettings(): void {
+    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
+      const services = ps.services || [];
+      this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
       const group: any = {};
-      this.serviceKeys.forEach(name => {
-        group[name] = [currentPrices[name] || 30];
-      });
+      services.forEach(s => { if (s.enabled !== false) group[s.name] = [s.price ?? 30]; });
       this.form = this.fb.group(group);
     });
   }
 
-  save() {
+  save(): void {
     const prices = this.form.value;
-    this.admin.updatePostSettings(this.selectedPost, { prices }).subscribe(() => {
-      alert('Цены для поста ' + this.selectedPost + ' сохранены');
+    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
+      const updated = ps.services.map(s =>
+        this.serviceKeys.includes(s.name) ? { ...s, price: prices[s.name] } : s
+      );
+      this.admin.updatePostSettings(this.selectedPost, { services: updated })
+        .subscribe(() => alert('Цены для поста ' + this.selectedPost + ' сохранены'));
     });
   }
 }
