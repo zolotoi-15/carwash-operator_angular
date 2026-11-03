@@ -1409,6 +1409,13 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// Просмотр отчётов разрешён администраторам, разработчикам и наблюдателям (viewer)
+function viewerOrAdmin(req, res, next) {
+  const role = req.user && req.user.role;
+  if (role === 'admin' || role === 'developer' || role === 'viewer') return next();
+  return res.status(403).json({ error: 'Viewer or admin required' });
+}
+
 // ---------- Init users ----------
 (async () => {
   try {
@@ -2066,7 +2073,7 @@ app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
   res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
 });
 
-app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
+app.get('/api/reports/range', auth, viewerOrAdmin, async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
 
@@ -2089,7 +2096,7 @@ app.get('/api/reports/range', auth, adminOnly, async (req, res) => {
   res.json(summary);
 });
 
-app.get('/api/reports/grouped', auth, adminOnly, async (req, res) => {
+app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
   const { from, to } = req.query;
   if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
 

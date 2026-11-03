@@ -1,8 +1,9 @@
-import { Component, OnInit, inject, signal } from '@angular/core';
+import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { HttpClient } from '@angular/common/http';
 import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
-import { Subscription } from 'rxjs';
+import { Subscription, firstValueFrom } from 'rxjs';
 
 export interface ReportRow {
   service: string;
@@ -31,8 +32,14 @@ export type Period = 'shift' | 'day' | 'week' | 'month';
         <div class="header-actions">
           <button class="btn-export" (click)="exportCSV()">📥 Экспорт CSV</button>
           <button class="btn-print" (click)="print()">🖨️ Печать</button>
+          <button class="btn-refresh" (click)="refresh()" [disabled]="loading">{{ loading ? '⏳ Загрузка…' : '🔄 Обновить' }}</button>
         </div>
       </div>
+
+      <!-- ===== Сообщение об ошибке ===== -->
+      @if (error) {
+        <div class="error-banner">⚠️ {{ error }} <button class="retry" (click)="refresh()">Повторить</button></div>
+      }
 
       <!-- ===== Переключатель периодов ===== -->
       <div class="period-tabs">
@@ -53,7 +60,7 @@ export type Period = 'shift' | 'day' | 'week' | 'month';
           <div class="kpi-body">
             <div class="kpi-label">Выручка</div>
             <div class="kpi-value">{{ totals.revenue | number:'1.0-0' }} ₽</div>
-            <div class="kpi-delta positive">▲ 12% к прошлой смене</div>
+            <div class="kpi-delta neutral">{{ lastUpdated ? 'обновлено в ' + (lastUpdated | date:'HH:mm') : 'загрузка…' }}</div>
           </div>
         </div>
 
@@ -62,7 +69,7 @@ export type Period = 'shift' | 'day' | 'week' | 'month';
           <div class="kpi-body">
             <div class="kpi-label">Средний чек</div>
             <div class="kpi-value">{{ totals.avgCheck | number:'1.0-0' }} ₽</div>
-            <div class="kpi-delta positive">▲ 5%</div>
+            <div class="kpi-delta neutral">за период</div>
           </div>
         </div>
 
@@ -439,60 +446,162 @@ export type Period = 'shift' | 'day' | 'week' | 'month';
     }
   `]
 })
-export class CardReportComponent implements OnInit {
+export class CardReportComponent implements OnInit, OnDestroy {
   private realtime = inject(RealtimeService);
+  private http = inject(HttpClient);
   private sub?: Subscription;
 
   period = signal<Period>('shift');
   search = '';
+  loading = false;
+  error = '';
+  lastUpdated: Date | null = null;
+  // '—' пока данные не загружены; реальные значения приходят с бэкенда
+  shiftDelta: string | null = null;
 
   periods: { value: Period; label: string; icon: string }[] = [
-    { value: 'shift', label: 'Смена', icon: '🕐' },
-    { value: 'day', label: 'День', icon: '📅' },
-    { value: 'week', label: 'Неделя', icon: '📆' },
-    { value: 'month', label: 'Месяц', icon: '🗓️' }
+    { value: 'shift', label: 'Текущая смена', icon: '🕐' },
+    { value: 'day',   label: 'День',          icon: '📅' },
+    { value: 'week',  label: 'Неделя',        icon: '📆' },
+    { value: 'month', label: 'Месяц',         icon: '🗓️' }
   ];
 
-  rows: ReportRow[] = [
-    { service: 'Комплекс "Стандарт"', count: 24, sum: 12000, icon: '🚿' },
-    { service: 'Комплекс "Премиум"', count: 12, sum: 9600, icon: '✨' },
-    { service: 'Только мойка кузова', count: 18, sum: 5400, icon: '💧' },
-    { service: 'Мойка + пылесос', count: 9, sum: 3600, icon: '🧹' },
-    { service: 'Чернение шин', count: 15, sum: 2250, icon: '🛞' },
-    { service: 'Химчистка салона', count: 3, sum: 4500, icon: '🪑' }
-  ];
+  rows: ReportRow[] = [];
 
   totals = { revenue: 0, avgCheck: 0, receipts: 0 };
   topService = '—';
   topCount = 0;
 
   ngOnInit(): void {
-    this.recalc();
+    this.load();
     this.sub = this.realtime.messages$.subscribe((msg: RealtimeMessage) => {
-      if (msg.type === 'mqtt' && msg.topic === 'shift/total') {
-        try {
-          const data = JSON.parse(msg.payload || '{}');
-          // можно обновлять rows из реальных данных
-          this.recalc();
-        } catch { /* ignore */ }
+      if (msg.type === 'mqtt' && (msg.topic === 'shift/total' || msg.topic === 'kkm/print')) {
+        this.load();
       }
     });
   }
 
+  ngOnDestroy(): void {
+    this.sub?.unsubscribe();
+  }
+
   setPeriod(p: Period): void {
     this.period.set(p);
-    // здесь можно запросить данные за период с бэкенда
-    this.recalc();
+    this.load();
+  }
+
+  /** Диапазон дат для выбранного периода */
+  private range(): { from: Date; to: Date } | null {
+    const now = new Date();
+    const to = now;
+    let from: Date;
+    switch (this.period()) {
+      case 'day':
+        from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        break;
+      case 'week':
+        from = new Date(now); from.setDate(from.getDate() - 6);
+        from.setHours(0, 0, 0, 0);
+        break;
+      case 'month':
+        from = new Date(now.getFullYear(), now.getMonth(), 1);
+        break;
+      case 'shift':
+      default:
+        return null; // обрабатывается в load() через /api/kkm/current-shift
+    }
+    return { from, to };
+  }
+
+  /** Загрузка реальных данных с бэкенда (/api/reports/range) */
+  async load(): Promise<void> {
+    this.loading = true;
+    this.error = '';
+    try {
+      let from: Date;
+      let to: Date = new Date();
+
+      if (this.period() === 'shift') {
+        // период по умолчанию — текущая открытая смена; fallback — текущий день
+        let openedAt: string | null = null;
+        try {
+          const shift = await firstValueFrom<any>(this.http.get('/api/kkm/current-shift'));
+          if (shift && shift.exists !== false && shift.openedAt) openedAt = shift.openedAt;
+        } catch { /* смена недоступна — fallback на день */ }
+        if (openedAt) {
+          from = new Date(openedAt);
+        } else {
+          from = new Date(); from.setHours(0, 0, 0, 0);
+        }
+      } else {
+        const r = this.range()!;
+        from = r.from; to = r.to;
+      }
+
+      const res = await firstValueFrom<any>(
+        this.http.get('/api/reports/range', {
+          params: { from: from.toISOString(), to: to.toISOString() },
+        })
+      );
+
+      const receipts: any[] = Array.isArray(res) ? res : (res?.receipts ?? []);
+      const agg = new Map<string, { count: number; sum: number }>();
+      let revenue = 0;
+
+      for (const rc of receipts) {
+        // итоговые чеки услуг (operation 'sell'/нет поля); пополнения баланса — отдельная агрегация
+        const isTopup = rc.operation === 'topup';
+        revenue += Number(rc.totalCost) || 0;
+        const items: any[] = rc.items || [];
+        if (!items.length) continue;
+        for (const it of items) {
+          const key = isTopup ? '💳 Пополнение баланса' : (it.name || 'Услуга');
+          const cur = agg.get(key) || { count: 0, sum: 0 };
+          cur.count += 1;
+          cur.sum += Number(it.cost) || 0;
+          agg.set(key, cur);
+        }
+      }
+
+      this.rows = [...agg.entries()]
+        .map(([service, v]) => ({ service, count: v.count, sum: Math.round(v.sum * 100) / 100, icon: this.iconFor(service) }))
+        .sort((a, b) => b.sum - a.sum);
+
+      this.totals.revenue = Math.round(revenue * 100) / 100;
+      this.totals.receipts = receipts.length;
+      this.totals.avgCheck = receipts.length ? Math.round(revenue / receipts.length) : 0;
+      const top = [...this.rows].sort((a, b) => b.count - a.count)[0];
+      this.topService = top?.service.replace(/^[^\p{L}]+/u, '').trim() || '—';
+      this.topCount = top?.count || 0;
+      this.lastUpdated = new Date();
+    } catch (e: any) {
+      this.error = 'Не удалось загрузить данные отчёта. Проверьте подключение к серверу.';
+    } finally {
+      this.loading = false;
+      this.recalc();
+    }
+  }
+
+  private iconFor(name: string): string {
+    const n = name.toLowerCase();
+    if (n.includes('пополн')) return '💳';
+    if (n.includes('премиум') || n.includes('люкс')) return '✨';
+    if (n.includes('стандарт') || n.includes('комплекс')) return '🚿';
+    if (n.includes('пылесос')) return '🧹';
+    if (n.includes('шин') || n.includes('чернен')) return '🛞';
+    if (n.includes('салон') || n.includes('хим')) return '🪑';
+    if (n.includes('воск') || n.includes('полир')) return '🧴';
+    return '💧';
+  }
+
+  refresh(): void {
+    this.load();
   }
 
   private recalc(): void {
-    this.totals.revenue = this.rows.reduce((s, r) => s + r.sum, 0);
-    this.totals.receipts = this.rows.reduce((s, r) => s + r.count, 0);
-    this.totals.avgCheck = this.totals.receipts
-      ? Math.round(this.totals.revenue / this.totals.receipts)
-      : 0;
+    this.totals.revenue = this.rows.reduce((s, r) => s + r.sum, 0) || this.totals.revenue;
     const top = [...this.rows].sort((a, b) => b.count - a.count)[0];
-    this.topService = top?.service || '—';
+    this.topService = top?.service.replace(/^[^\p{L}]+/u, '').trim() || '—';
     this.topCount = top?.count || 0;
   }
 
