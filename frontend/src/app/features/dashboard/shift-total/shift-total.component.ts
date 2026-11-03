@@ -1,4 +1,3 @@
-// frontend/src/app/features/dashboard/shift-total/shift-total.component.ts
 import { Component, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { Subscription } from 'rxjs';
@@ -8,6 +7,10 @@ import { RealtimeService, RealtimeMessage } from '../../../core/services/realtim
   selector: 'app-shift-total',
   standalone: true,
   imports: [CommonModule],
+  // Добавляем стили для хоста, чтобы компонент занимал всю ячейку грида
+  host: {
+    style: 'display: flex; width: 100%; height: 100%; min-width: 0;'
+  },
   template: `
     <div class="card">
       <h3 class="card-title">💰 Общая сумма за смену ККМ</h3>
@@ -17,6 +20,10 @@ import { RealtimeService, RealtimeMessage } from '../../../core/services/realtim
   `,
   styles: [`
     .card {
+      flex: 1;               /* Растягиваем карточку по доступному пространству */
+      width: 100%;           /* Занимаем всю ширину ячейки грида */
+      height: 100%;          /* Занимаем всю высоту */
+      box-sizing: border-box;
       background: linear-gradient(135deg, #3b82f6, #8b5cf6);
       color: #fff;
       border-radius: 10px;
@@ -24,10 +31,12 @@ import { RealtimeService, RealtimeMessage } from '../../../core/services/realtim
       display: flex;
       flex-direction: column;
       justify-content: center;
-      height: 100%;
-      box-sizing: border-box;
     }
-    .card-title { margin: 0 0 12px; font-size: 15px; color: #dbeafe; }
+    .card-title { 
+      margin: 0 0 12px; 
+      font-size: 15px; 
+      color: #dbeafe; 
+    }
     .amount {
       font-size: 36px;
       font-weight: 700;
@@ -35,15 +44,16 @@ import { RealtimeService, RealtimeMessage } from '../../../core/services/realtim
       margin-bottom: 8px;
       line-height: 1;
     }
-    .receipts-count { font-size: 13px; color: #dbeafe; }
+    .receipts-count { 
+      font-size: 13px; 
+      color: #dbeafe; 
+    }
   `]
 })
 export class ShiftTotalComponent implements OnInit, OnDestroy {
   private realtime = inject(RealtimeService);
-
   total = 0;
   count = 0;
-
   private sub?: Subscription;
 
   ngOnInit(): void {
@@ -53,7 +63,9 @@ export class ShiftTotalComponent implements OnInit, OnDestroy {
           const data = JSON.parse(msg.payload || '{}');
           this.total = Number(data.total) || 0;
           this.count = Number(data.count) || 0;
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
     });
   }
