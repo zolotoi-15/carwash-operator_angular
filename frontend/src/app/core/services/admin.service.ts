@@ -25,6 +25,27 @@ export interface PostSettings {
   buttonInputs: Record<string, number>;
   relayDelays: Record<string, { onDelay: number; offDelay: number }>;
   cameras: Record<string, string>;
+  /** Назначенное посту реле MQTT-ретранслятора (топики relay_<MAC>/...) */
+  relay?: RelayAssignment | null;
+}
+
+/** Назначение реле посту */
+export interface RelayAssignment {
+  mac: string; // "30:76:F5:30:5B:A4"
+}
+
+/** Доступное реле, обнаруженное на MQTT-брокере */
+export interface RelayInfo {
+  mac: string;
+  topic: string;                 // relay_<MAC>
+  online: boolean | null;        // из relay_<MAC>/lwt
+  ip: string | null;             // из relay_<MAC>/ip
+  statusRelay: any;              // из relay_<MAC>/status_relay
+  active: any;                   // из relay_<MAC>/active
+  postnum: any;                  // из relay_<MAC>/postnum
+  udp: any;                      // из relay_<MAC>/udp
+  lastSeen: number | null;
+  assignedPost: number | null;   // какому посту уже назначено
 }
 
 export interface KkmSettings {
@@ -168,6 +189,7 @@ export class AdminService {
         buttonInputs,
         relayDelays,
         cameras: pd.cameras || {},
+        relay: pd.relay?.mac ? { mac: String(pd.relay.mac).toUpperCase() } : null,
       });
     }
 
@@ -266,6 +288,7 @@ export class AdminService {
         buttonInputs:   p.buttonInputs,
         relayDelays:    p.relayDelays,
         cameras:        p.cameras,
+        relay:          p.relay?.mac ? { mac: p.relay.mac } : null,
         services: p.services.map(s => ({
           name: s.name,
           price: s.price,
@@ -321,6 +344,26 @@ export class AdminService {
 
   publishConfig(): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/publish-config`, {});
+  }
+
+  // ================= Реле (relay_<MAC>/...) =================
+
+  /** Список доступных реле, обнаруженных на MQTT-брокере */
+  getRelays(discover = false): Observable<RelayInfo[]> {
+    const req$ = discover
+      ? this.http.post<{ relays: RelayInfo[] }>(`${this.apiUrl}/relays/discover`, {})
+      : this.http.get<{ relays: RelayInfo[] }>(`${this.apiUrl}/relays`);
+    return req$.pipe(map(r => r.relays || []));
+  }
+
+  /** Назначить посту реле по MAC (mac = null — снять назначение) */
+  assignPostRelay(postId: number, mac: string | null): Observable<any> {
+    return this.http.put<any>(`${this.apiUrl}/posts/${postId}/relay`, { mac });
+  }
+
+  /** Прямая команда реле в топик relay_<MAC>[/<subTopic>] */
+  sendRelayCommand(mac: string, subTopic: string, payload: any): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/relays/${encodeURIComponent(mac)}/command`, { subTopic, payload });
   }
 
   getPostSettings(postId: number): Observable<PostSettings> {
