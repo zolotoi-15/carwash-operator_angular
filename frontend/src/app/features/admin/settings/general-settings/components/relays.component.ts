@@ -58,14 +58,16 @@ import { Subject, takeUntil } from 'rxjs';
               <span *ngIf="!r.assignedPost" class="muted">свободно</span>
             </td>
             <td>
-              <button *ngIf="r.assignedPost !== selectedPost" type="button" class="mini-btn assign"
-                      [disabled]="assignBusy || !!r.assignedPost"
+              <!-- Кнопка «снять» доступна ВСЕГДА для любого занятого реле (не только выбранного поста) -->
+              <button *ngIf="!r.assignedPost" type="button" class="mini-btn assign"
+                      [disabled]="assignBusy"
                       (click)="assignRelay(r.mac)">
-                {{ r.assignedPost ? 'занято' : '→ назначить посту ' + selectedPost }}
+                → назначить посту {{ selectedPost }}
               </button>
-              <button *ngIf="r.assignedPost === selectedPost" type="button" class="mini-btn unassign"
-                      [disabled]="assignBusy" (click)="assignRelay(null)">
-                ✖ снять с поста {{ selectedPost }}
+              <button *ngIf="r.assignedPost" type="button" class="mini-btn unassign"
+                      [disabled]="assignBusy" title="Отвязать реле от поста {{ r.assignedPost }}"
+                      (click)="unassignRelay(r)">
+                ✖ снять с поста {{ r.assignedPost }}
               </button>
             </td>
           </tr>
@@ -360,6 +362,26 @@ export class RelaysComponent implements OnInit, OnDestroy {
         this.assignBusy = false;
         const msg = err?.error?.error || err?.message || 'неизвестная ошибка';
         alert('Не удалось назначить реле: ' + msg);
+      }
+    });
+  }
+
+  /** Снять реле с того поста, которому оно реально назначено (кнопка есть у каждой занятой строки) */
+  unassignRelay(r: RelayInfo): void {
+    if (this.assignBusy || !r.assignedPost) return;
+    const post = Number(r.assignedPost);
+    this.assignBusy = true;
+    this.admin.assignPostRelay(post, null).pipe(takeUntil(this.destroy$)).subscribe({
+      next: () => {
+        this.assignBusy = false;
+        this.selectedPost = post;              // показать освобождённый пост — можно сразу назначить другое реле
+        this.currentRelayMac = null;           // реле снято — блок топиков для выбранного поста скрывается
+        this.loadPostSettings();
+        this.loadRelays();
+      },
+      error: (err) => {
+        this.assignBusy = false;
+        alert('Не удалось снять реле с поста ' + post + ': ' + (err?.error?.error || err?.message || 'неизвестная ошибка'));
       }
     });
   }
