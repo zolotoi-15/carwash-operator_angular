@@ -50,6 +50,24 @@ export class CardReportComponent implements OnInit, OnDestroy {
   topService = '—';
   topCount = 0;
 
+  rangeStart: Date | null = null;
+  rangeEnd: Date | null = null;
+
+  periodLabel(): string {
+    switch (this.period()) {
+      case 'shift': return 'Текущая смена';
+      case 'day': return 'Сегодня';
+      case 'week': return 'Последняя неделя';
+      case 'month': return 'Текущий месяц';
+    }
+  }
+
+  rangeLabel(): string {
+    if (!this.rangeStart || !this.rangeEnd) return '';
+    const f = (d: Date) => d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return `${f(this.rangeStart)} — ${f(this.rangeEnd)}`;
+  }
+
   ngOnInit(): void {
     this.load();
     this.sub = this.realtime.messages$.subscribe((msg: RealtimeMessage) => {
@@ -121,6 +139,9 @@ export class CardReportComponent implements OnInit, OnDestroy {
           params: { from: from.toISOString(), to: to.toISOString() },
         })
       );
+
+      this.rangeStart = from;
+      this.rangeEnd = to;
 
       const receipts: any[] = Array.isArray(res) ? res : (res?.receipts ?? []);
       const agg = new Map<string, { count: number; sum: number }>();

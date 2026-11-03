@@ -1,140 +1,134 @@
-<!--
-  Файл-справочник шаблона «Отчёт по сменам и выручке» (CardReportComponent).
-  ВНИМАНИЕ: компонент использует inline-template в card-report.component.ts —
-  этот HTML синхронизирован с ним один-в-один для удобства редактирования/ревью.
--->
 <div class="report-wrapper">
 
-  <!-- ===== Шапка с градиентом ===== -->
-  <div class="report-header">
-    <div class="header-left">
-      <h2 class="header-title">📊 Отчёт по сменам и выручке</h2>
-      <p class="header-sub">Аналитика работы автомойки в реальном времени</p>
+  <!-- ===== Шапка ===== -->
+  <header class="rep-header no-print">
+    <div>
+      <h1>📊 Отчёт по сменам и выручке</h1>
+      <p class="subtitle">
+        {{ periodLabel() }} · {{ rangeLabel() }}
+        @if (lastUpdated) { · обновлено в {{ lastUpdated | date:'HH:mm:ss' }} }
+      </p>
     </div>
     <div class="header-actions">
-      <button class="btn-export" (click)="exportCSV()">📥 Экспорт CSV</button>
-      <button class="btn-print" (click)="print()">🖨️ Печать</button>
-      <button class="btn-refresh" (click)="refresh()" [disabled]="loading">{{ loading ? '⏳ Загрузка…' : '🔄 Обновить' }}</button>
+      <button class="btn" (click)="refresh()" [disabled]="loading">🔄 Обновить</button>
+      <button class="btn" (click)="exportCSV()">📥 Экспорт CSV</button>
+      <button class="btn btn-primary" (click)="print()">🖨️ Печать</button>
     </div>
-  </div>
+  </header>
 
-  <!-- ===== Сообщение об ошибке ===== -->
   @if (error) {
-    <div class="error-banner">⚠️ {{ error }} <button class="retry" (click)="refresh()">Повторить</button></div>
+    <div class="alert alert-error">
+      {{ error }}
+      <button class="retry" (click)="load()">Повторить</button>
+    </div>
   }
 
   <!-- ===== Переключатель периодов ===== -->
-  <div class="period-tabs">
-    @for (p of periods; track p.value) {
-      <button
-        class="tab"
-        [class.active]="period() === p.value"
-        (click)="setPeriod(p.value)">
-        {{ p.icon }} {{ p.label }}
-      </button>
-    }
-  </div>
+  <section class="tabs no-print">
+    <div class="segmented">
+      @for (p of periods; track p.value) {
+        <button [class.active]="period() === p.value" (click)="setPeriod(p.value)">
+          {{ p.icon }} {{ p.label }}
+        </button>
+      }
+    </div>
+  </section>
+
+  @if (loading && !rows.length) {
+    <div class="skeleton-wrap">
+      <div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>
+      <div class="skeleton sk-card"></div><div class="skeleton sk-card"></div>
+      <div class="skeleton sk-row"></div><div class="skeleton sk-row"></div>
+    </div>
+  }
 
   <!-- ===== KPI-карточки ===== -->
-  <div class="kpi-grid">
-    <div class="kpi-card kpi-revenue">
-      <div class="kpi-icon">💰</div>
-      <div class="kpi-body">
-        <div class="kpi-label">Выручка</div>
-        <div class="kpi-value">{{ totals.revenue | number:'1.0-0' }} ₽</div>
-        <div class="kpi-delta neutral">{{ lastUpdated ? 'обновлено в ' + (lastUpdated | date:'HH:mm') : 'загрузка…' }}</div>
+  <section class="kpis">
+    <div class="kpi k-blue">
+      <span class="kpi-ico">💰</span>
+      <div>
+        <div class="kpi-val">{{ totals.revenue | number:'1.0-2' }} ₽</div>
+        <div class="kpi-lbl">Выручка</div>
       </div>
     </div>
-
-    <div class="kpi-card kpi-check">
-      <div class="kpi-icon">🧾</div>
-      <div class="kpi-body">
-        <div class="kpi-label">Средний чек</div>
-        <div class="kpi-value">{{ totals.avgCheck | number:'1.0-0' }} ₽</div>
-        <div class="kpi-delta neutral">за период</div>
+    <div class="kpi k-violet">
+      <span class="kpi-ico">🧾</span>
+      <div>
+        <div class="kpi-val">{{ totals.avgCheck | number:'1.0-2' }} ₽</div>
+        <div class="kpi-lbl">Средний чек</div>
       </div>
     </div>
-
-    <div class="kpi-card kpi-receipts">
-      <div class="kpi-icon">📋</div>
-      <div class="kpi-body">
-        <div class="kpi-label">Количество чеков</div>
-        <div class="kpi-value">{{ totals.receipts }}</div>
-        <div class="kpi-delta neutral">за период</div>
+    <div class="kpi k-green">
+      <span class="kpi-ico">📦</span>
+      <div>
+        <div class="kpi-val">{{ totals.receipts }}</div>
+        <div class="kpi-lbl">Количество чеков</div>
       </div>
     </div>
-
-    <div class="kpi-card kpi-top">
-      <div class="kpi-icon">🏆</div>
-      <div class="kpi-body">
-        <div class="kpi-label">Топ-услуга</div>
-        <div class="kpi-value small">{{ topService }}</div>
-        <div class="kpi-delta neutral">{{ topCount }} заказов</div>
+    <div class="kpi k-orange">
+      <span class="kpi-ico">⭐</span>
+      <div>
+        <div class="kpi-val small">{{ topService }}</div>
+        <div class="kpi-lbl">Топ услуга @if (topCount) { · {{ topCount }} зак. }</div>
       </div>
     </div>
-  </div>
+  </section>
 
   <!-- ===== Таблица услуг ===== -->
-  <div class="table-card">
-    <div class="table-header">
-      <h3>🧼 Услуги за период</h3>
-      <div class="search-box">
-        <input
-          type="text"
-          placeholder="🔍 Поиск услуги..."
-          [(ngModel)]="search"
-          class="search-input" />
-      </div>
+  <section class="table-card">
+    <div class="table-head">
+      <h2>Услуги за период</h2>
+      <label class="search no-print">
+        🔍 <input type="text" [(ngModel)]="search" placeholder="Поиск услуги…" />
+      </label>
     </div>
 
-    <div class="table-wrap">
-      <table class="report-table">
+    <div class="table-scroll">
+      <table>
         <thead>
           <tr>
             <th>Услуга</th>
-            <th class="num">Кол-во</th>
-            <th class="num">Сумма</th>
-            <th class="bar">Доля</th>
+            <th class="num">Выручка</th>
+            <th class="num">Чеки</th>
+            <th class="num">Средний чек</th>
+            <th class="share-col">Доля</th>
           </tr>
         </thead>
         <tbody>
-          @for (row of filteredRows(); track row.service) {
+          @for (r of filteredRows(); track r.service) {
             <tr>
               <td class="svc">
-                <span class="svc-icon">{{ row.icon }}</span>
-                {{ row.service }}
+                <span class="svc-ico">{{ r.icon }}</span>
+                <span>{{ r.service }}</span>
               </td>
-              <td class="num">{{ row.count }}</td>
-              <td class="num money">{{ row.sum | number:'1.0-0' }} ₽</td>
-              <td class="bar">
-                <div class="bar-bg">
-                  <div
-                    class="bar-fill"
-                    [style.width.%]="percent(row.sum)"
-                    [style.background]="barColor(row.sum)">
-                  </div>
+              <td class="num strong">{{ r.sum | number:'1.0-2' }} ₽</td>
+              <td class="num">{{ r.count }}</td>
+              <td class="num">{{ (r.count ? r.sum / r.count : 0) | number:'1.0-2' }} ₽</td>
+              <td class="share-col">
+                <div class="bar-track">
+                  <div class="bar-fill" [style.width.%]="percent(r.sum)" [style.background]="barColor(r.sum)"></div>
                 </div>
-                <span class="bar-label">{{ percent(row.sum).toFixed(1) }}%</span>
+                <span class="pct">{{ percent(r.sum) | number:'1.0-0' }}%</span>
               </td>
             </tr>
-          }
-          @empty {
-            <tr>
-              <td colspan="4" class="empty">
-                😔 Нет данных за выбранный период
-              </td>
-            </tr>
+          } @empty {
+            <tr><td colspan="5" class="empty-cell">
+              {{ loading ? 'Загрузка…' : (rows.length ? 'Ничего не найдено' : 'Нет данных за выбранный период') }}
+            </td></tr>
           }
         </tbody>
-        <tfoot>
-          <tr>
-            <td><strong>ИТОГО</strong></td>
-            <td class="num"><strong>{{ totals.receipts }}</strong></td>
-            <td class="num money"><strong>{{ totals.revenue | number:'1.0-0' }} ₽</strong></td>
-            <td></td>
-          </tr>
-        </tfoot>
+        @if (rows.length) {
+          <tfoot>
+            <tr>
+              <td>ИТОГО</td>
+              <td class="num">{{ totals.revenue | number:'1.0-2' }} ₽</td>
+              <td class="num">{{ totals.receipts }}</td>
+              <td class="num">{{ totals.avgCheck | number:'1.0-2' }} ₽</td>
+              <td class="share-col"><span class="pct">100%</span></td>
+            </tr>
+          </tfoot>
+        }
       </table>
     </div>
-  </div>
+  </section>
 </div>
