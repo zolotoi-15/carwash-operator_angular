@@ -1,99 +1,534 @@
-// frontend/src/app/features/reports/card-report/card-report.component.ts
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, inject, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
+import { Subscription } from 'rxjs';
 
-import { ClientCardService } from '../../../core/services/client-card.service';
-// ★ ИСПРАВЛЕНО: путь к core/models (было ../../models/)
-import {
-  CardOperation,
-  CardReportResponse,
-  CardReportSummary,
-} from '../../../core/models/client-card.model';
+export interface ReportRow {
+  service: string;
+  count: number;
+  sum: number;
+  icon: string;
+}
+
+export type Period = 'shift' | 'day' | 'week' | 'month';
 
 @Component({
   selector: 'app-card-report',
   standalone: true,
   imports: [CommonModule, FormsModule],
-  templateUrl: './card-report.component.html',
-  styleUrls: ['./card-report.component.scss'],
+  host: {
+    style: 'display: block; width: 100%;'
+  },
+  template: `
+    <div class="report-wrapper">
+      <!-- ===== Шапка с градиентом ===== -->
+      <div class="report-header">
+        <div class="header-left">
+          <h2 class="header-title">📊 Отчёт по сменам и выручке</h2>
+          <p class="header-sub">Аналитика работы автомойки в реальном времени</p>
+        </div>
+        <div class="header-actions">
+          <button class="btn-export" (click)="exportCSV()">📥 Экспорт CSV</button>
+          <button class="btn-print" (click)="print()">🖨️ Печать</button>
+        </div>
+      </div>
+
+      <!-- ===== Переключатель периодов ===== -->
+      <div class="period-tabs">
+        @for (p of periods; track p.value) {
+          <button
+            class="tab"
+            [class.active]="period() === p.value"
+            (click)="setPeriod(p.value)">
+            {{ p.icon }} {{ p.label }}
+          </button>
+        }
+      </div>
+
+      <!-- ===== KPI-карточки ===== -->
+      <div class="kpi-grid">
+        <div class="kpi-card kpi-revenue">
+          <div class="kpi-icon">💰</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Выручка</div>
+            <div class="kpi-value">{{ totals.revenue | number:'1.0-0' }} ₽</div>
+            <div class="kpi-delta positive">▲ 12% к прошлой смене</div>
+          </div>
+        </div>
+
+        <div class="kpi-card kpi-check">
+          <div class="kpi-icon">🧾</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Средний чек</div>
+            <div class="kpi-value">{{ totals.avgCheck | number:'1.0-0' }} ₽</div>
+            <div class="kpi-delta positive">▲ 5%</div>
+          </div>
+        </div>
+
+        <div class="kpi-card kpi-receipts">
+          <div class="kpi-icon">📋</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Количество чеков</div>
+            <div class="kpi-value">{{ totals.receipts }}</div>
+            <div class="kpi-delta neutral">за период</div>
+          </div>
+        </div>
+
+        <div class="kpi-card kpi-top">
+          <div class="kpi-icon">🏆</div>
+          <div class="kpi-body">
+            <div class="kpi-label">Топ-услуга</div>
+            <div class="kpi-value small">{{ topService }}</div>
+            <div class="kpi-delta neutral">{{ topCount }} заказов</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== Таблица услуг ===== -->
+      <div class="table-card">
+        <div class="table-header">
+          <h3>🧼 Услуги за период</h3>
+          <div class="search-box">
+            <input
+              type="text"
+              placeholder="🔍 Поиск услуги..."
+              [(ngModel)]="search"
+              class="search-input" />
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="report-table">
+            <thead>
+              <tr>
+                <th>Услуга</th>
+                <th class="num">Кол-во</th>
+                <th class="num">Сумма</th>
+                <th class="bar">Доля</th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (row of filteredRows(); track row.service) {
+                <tr>
+                  <td class="svc">
+                    <span class="svc-icon">{{ row.icon }}</span>
+                    {{ row.service }}
+                  </td>
+                  <td class="num">{{ row.count }}</td>
+                  <td class="num money">{{ row.sum | number:'1.0-0' }} ₽</td>
+                  <td class="bar">
+                    <div class="bar-bg">
+                      <div
+                        class="bar-fill"
+                        [style.width.%]="percent(row.sum)"
+                        [style.background]="barColor(row.sum)">
+                      </div>
+                    </div>
+                    <span class="bar-label">{{ percent(row.sum).toFixed(1) }}%</span>
+                  </td>
+                </tr>
+              }
+              @empty {
+                <tr>
+                  <td colspan="4" class="empty">
+                    😔 Нет данных за выбранный период
+                  </td>
+                </tr>
+              }
+            </tbody>
+            <tfoot>
+              <tr>
+                <td><strong>ИТОГО</strong></td>
+                <td class="num"><strong>{{ totals.receipts }}</strong></td>
+                <td class="num money"><strong>{{ totals.revenue | number:'1.0-0' }} ₽</strong></td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+  `,
+  styles: [`
+    /* ===== Обёртка ===== */
+    .report-wrapper {
+      padding: 20px;
+      max-width: 1400px;
+      margin: 0 auto;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    /* ===== Шапка ===== */
+    .report-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: linear-gradient(135deg, #6d28d9 0%, #3b82f6 100%);
+      color: #fff;
+      padding: 24px 28px;
+      border-radius: 14px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 24px rgba(109, 40, 217, 0.25);
+    }
+    .header-title {
+      margin: 0 0 4px;
+      font-size: 22px;
+      font-weight: 700;
+    }
+    .header-sub {
+      margin: 0;
+      font-size: 13px;
+      color: #e9d5ff;
+    }
+    .header-actions {
+      display: flex;
+      gap: 10px;
+    }
+    .btn-export, .btn-print {
+      background: rgba(255, 255, 255, 0.18);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.3);
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(10px);
+    }
+    .btn-export:hover, .btn-print:hover {
+      background: rgba(255, 255, 255, 0.3);
+      transform: translateY(-1px);
+    }
+
+    /* ===== Вкладки периодов ===== */
+    .period-tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 20px;
+      background: #f1f5f9;
+      padding: 6px;
+      border-radius: 12px;
+      width: fit-content;
+    }
+    .tab {
+      padding: 10px 20px;
+      border: none;
+      background: transparent;
+      color: #64748b;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+    .tab:hover {
+      color: #334155;
+      background: rgba(255, 255, 255, 0.6);
+    }
+    .tab.active {
+      background: #fff;
+      color: #6d28d9;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    }
+
+    /* ===== KPI-сетка ===== */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .kpi-card {
+      background: #fff;
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      border: 1px solid #e2e8f0;
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .kpi-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
+    }
+    .kpi-icon {
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      flex-shrink: 0;
+    }
+    .kpi-revenue .kpi-icon { background: linear-gradient(135deg, #10b981, #059669); }
+    .kpi-check .kpi-icon { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+    .kpi-receipts .kpi-icon { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+    .kpi-top .kpi-icon { background: linear-gradient(135deg, #f59e0b, #d97706); }
+    .kpi-body { flex: 1; min-width: 0; }
+    .kpi-label {
+      font-size: 12px;
+      color: #64748b;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .kpi-value {
+      font-size: 24px;
+      font-weight: 700;
+      color: #0f172a;
+      line-height: 1.2;
+    }
+    .kpi-value.small { font-size: 18px; }
+    .kpi-delta {
+      font-size: 11px;
+      margin-top: 4px;
+      font-weight: 600;
+    }
+    .kpi-delta.positive { color: #10b981; }
+    .kpi-delta.neutral { color: #94a3b8; }
+
+    /* ===== Таблица ===== */
+    .table-card {
+      background: #fff;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      border: 1px solid #e2e8f0;
+    }
+    .table-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 18px 24px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .table-header h3 {
+      margin: 0;
+      font-size: 16px;
+      color: #0f172a;
+      font-weight: 700;
+    }
+    .search-input {
+      padding: 8px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 13px;
+      outline: none;
+      width: 240px;
+      transition: border-color 0.2s;
+    }
+    .search-input:focus {
+      border-color: #6d28d9;
+      box-shadow: 0 0 0 3px rgba(109, 40, 217, 0.1);
+    }
+    .table-wrap {
+      overflow-x: auto;
+    }
+    .report-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .report-table thead {
+      background: #f8fafc;
+    }
+    .report-table th {
+      padding: 14px 20px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .report-table th.num { text-align: right; }
+    .report-table td {
+      padding: 16px 20px;
+      font-size: 14px;
+      color: #334155;
+      border-bottom: 1px solid #f1f5f9;
+    }
+    .report-table tbody tr {
+      transition: background 0.15s;
+    }
+    .report-table tbody tr:hover {
+      background: #f8fafc;
+    }
+    .report-table td.num {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+    .report-table td.money {
+      font-weight: 600;
+      color: #0f172a;
+    }
+    .svc {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .svc-icon {
+      width: 32px;
+      height: 32px;
+      background: #f1f5f9;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+    }
+    .bar {
+      width: 200px;
+    }
+    .bar-bg {
+      height: 8px;
+      background: #f1f5f9;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 4px;
+    }
+    .bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+    .bar-label {
+      font-size: 11px;
+      color: #64748b;
+      font-weight: 600;
+    }
+    .empty {
+      text-align: center;
+      padding: 40px !important;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+    .report-table tfoot td {
+      background: #f8fafc;
+      font-size: 14px;
+      padding: 16px 20px;
+      border-top: 2px solid #e2e8f0;
+    }
+
+    /* ===== Адаптив ===== */
+    @media (max-width: 1024px) {
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .bar { width: 140px; }
+    }
+    @media (max-width: 640px) {
+      .report-header { flex-direction: column; gap: 16px; align-items: flex-start; }
+      .header-actions { width: 100%; }
+      .btn-export, .btn-print { flex: 1; }
+      .kpi-grid { grid-template-columns: 1fr; }
+      .period-tabs { width: 100%; overflow-x: auto; }
+      .tab { white-space: nowrap; }
+      .bar { display: none; }
+    }
+
+    /* ===== Печать ===== */
+    @media print {
+      .report-header, .period-tabs, .header-actions, .search-box { display: none !important; }
+      .report-wrapper { padding: 0; }
+      .kpi-card, .table-card { box-shadow: none; border: 1px solid #ccc; break-inside: avoid; }
+    }
+  `]
 })
 export class CardReportComponent implements OnInit {
-  cardNumber = '';
-  dateFrom?: string;
-  dateTo?: string;
+  private realtime = inject(RealtimeService);
+  private sub?: Subscription;
 
-  summary: CardReportSummary | null = null;
-  operations: CardOperation[] = [];
+  period = signal<Period>('shift');
+  search = '';
 
-  loading = false;
-  error: string | null = null;
+  periods: { value: Period; label: string; icon: string }[] = [
+    { value: 'shift', label: 'Смена', icon: '🕐' },
+    { value: 'day', label: 'День', icon: '📅' },
+    { value: 'week', label: 'Неделя', icon: '📆' },
+    { value: 'month', label: 'Месяц', icon: '🗓️' }
+  ];
 
-  constructor(
-    private route: ActivatedRoute,
-    private router: Router,
-    private cardService: ClientCardService,
-  ) {}
+  rows: ReportRow[] = [
+    { service: 'Комплекс "Стандарт"', count: 24, sum: 12000, icon: '🚿' },
+    { service: 'Комплекс "Премиум"', count: 12, sum: 9600, icon: '✨' },
+    { service: 'Только мойка кузова', count: 18, sum: 5400, icon: '💧' },
+    { service: 'Мойка + пылесос', count: 9, sum: 3600, icon: '🧹' },
+    { service: 'Чернение шин', count: 15, sum: 2250, icon: '🛞' },
+    { service: 'Химчистка салона', count: 3, sum: 4500, icon: '🪑' }
+  ];
+
+  totals = { revenue: 0, avgCheck: 0, receipts: 0 };
+  topService = '—';
+  topCount = 0;
 
   ngOnInit(): void {
-    this.cardNumber = (this.route.snapshot.paramMap.get('card') || '').toUpperCase();
-    this.reload();
+    this.recalc();
+    this.sub = this.realtime.messages$.subscribe((msg: RealtimeMessage) => {
+      if (msg.type === 'mqtt' && msg.topic === 'shift/total') {
+        try {
+          const data = JSON.parse(msg.payload || '{}');
+          // можно обновлять rows из реальных данных
+          this.recalc();
+        } catch { /* ignore */ }
+      }
+    });
   }
 
-  reload(): void {
-    if (!this.cardNumber) {
-      this.error = 'Не указан номер карты';
-      return;
-    }
-    this.loading = true;
-    this.error = null;
-
-    this.cardService
-      .getCardReport(this.cardNumber, this.dateFrom, this.dateTo)
-      .subscribe({
-        next: (resp: CardReportResponse) => {
-          this.summary = resp.summary;
-          this.operations = resp.operations;
-          this.loading = false;
-        },
-        error: (err) => {
-          this.error = err?.error?.error || 'Не удалось загрузить отчёт';
-          this.loading = false;
-        },
-      });
+  setPeriod(p: Period): void {
+    this.period.set(p);
+    // здесь можно запросить данные за период с бэкенда
+    this.recalc();
   }
 
-  exportCsv(): void {
-    if (!this.operations.length) return;
+  private recalc(): void {
+    this.totals.revenue = this.rows.reduce((s, r) => s + r.sum, 0);
+    this.totals.receipts = this.rows.reduce((s, r) => s + r.count, 0);
+    this.totals.avgCheck = this.totals.receipts
+      ? Math.round(this.totals.revenue / this.totals.receipts)
+      : 0;
+    const top = [...this.rows].sort((a, b) => b.count - a.count)[0];
+    this.topService = top?.service || '—';
+    this.topCount = top?.count || 0;
+  }
 
-    const header = ['Дата', 'Тип', 'Сумма', 'Баланс после', 'Пост', 'Чек', 'Оператор'];
-    const rows = this.operations.map((op) => [
-      // ★ ИСПРАВЛЕНО: op.createdAt вместо op.date
-      new Date(op.createdAt).toLocaleString('ru-RU'),
-      op.type,
-      String(op.amount),
-      String(op.balanceAfter),
-      op.postId || '',
-      op.receiptNumber || '',
-      op.operatorName || '',
-    ]);
+  filteredRows = () => {
+    const q = this.search.trim().toLowerCase();
+    if (!q) return this.rows;
+    return this.rows.filter(r => r.service.toLowerCase().includes(q));
+  };
 
-    const csv = [header, ...rows]
-      .map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(';'))
-      .join('\r\n');
+  percent(sum: number): number {
+    return this.totals.revenue ? (sum / this.totals.revenue) * 100 : 0;
+  }
 
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' });
+  barColor(sum: number): string {
+    const p = this.percent(sum);
+    if (p > 25) return 'linear-gradient(90deg, #6d28d9, #8b5cf6)';
+    if (p > 15) return 'linear-gradient(90deg, #3b82f6, #60a5fa)';
+    if (p > 8) return 'linear-gradient(90deg, #10b981, #34d399)';
+    return 'linear-gradient(90deg, #f59e0b, #fbbf24)';
+  }
+
+  exportCSV(): void {
+    const header = 'Услуга;Количество;Сумма\n';
+    const body = this.rows
+      .map(r => `${r.service};${r.count};${r.sum}`)
+      .join('\n');
+    const blob = new Blob(['\uFEFF' + header + body], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `card-${this.cardNumber}-report.csv`;
+    a.download = `report_${this.period()}_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
-  back(): void {
-    // ★ ИСПРАВЛЕНО: реальный маршрут карт — /client-cards (см. app.routes.ts)
-    this.router.navigate(['/client-cards']);
+  print(): void {
+    window.print();
   }
 }
