@@ -1658,7 +1658,6 @@ async function listKnownRelays() {
 
   // Retained-топики реле, публикуемые самим устройством при подключении:
   // relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay, /active, /ip, /lwt
-  const RELAY_SUBTOPICS = ['postnum', 'udp', 'status_relay', 'active', 'ip', 'lwt'];
   if (mqttClient && mqttClient.connected) {
     const topics = await new Promise((resolve) => {
       const acc = new Set();
@@ -1668,8 +1667,10 @@ async function listKnownRelays() {
         const t = String(line).trim().split(/\s+/)[0];
         if (/^relay_[0-9A-Fa-f:]{12}(\/(postnum|udp|status_relay|active|ip|lwt))?$/i.test(t)) acc.add(t);
       };
+      // Ответ на $CONTROL/LISTNREQ приходит в $CONTROL/LISTNRET (mosquitto) либо
+      // в перевернутый топик $CONTROL/RETNILTSNI (некоторые брокеры)
       const onData = (topic, payload) => {
-        if (!/\bLISTNRET\b/.test(topic) && !topic.endsWith('/RETNILTSNI')) return;
+        if (!/\bLISTNRET\b/i.test(topic) && !/RETNILTSNI/.test(topic)) return;
         try { String(payload).split(/\r?\n/).forEach(collect); } catch { /* ignore */ }
       };
       const sendListReq = (reqTopic) => {

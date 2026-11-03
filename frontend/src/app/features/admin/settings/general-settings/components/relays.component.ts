@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { AdminService, RelayInfo } from '../../../../../core/services/admin.service';
 import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
+import { RealtimeService } from '../../../../../core/services/realtime.service';
 import { Subject, takeUntil } from 'rxjs';
 
 @Component({
@@ -15,14 +16,20 @@ import { Subject, takeUntil } from 'rxjs';
     <div class="topics-card">
       <div class="topics-header">
         <h4>📡 Реле (MQTT-топики ретрансляторов)</h4>
-        <button type="button" class="mini-btn" (click)="discoverRelays()" [disabled]="relaysLoading">
-          {{ relaysLoading ? 'Поиск…' : '🔄 Обновить список' }}
-        </button>
+        <div class="header-actions">
+          <label class="auto-refresh" title="Список реле и их статусы обновляются каждые 10 секунд">
+            <input type="checkbox" [(ngModel)]="autoRefresh" /> 🔄 Автообновление
+          </label>
+          <button type="button" class="mini-btn" (click)="discoverRelays()" [disabled]="relaysLoading">
+            {{ relaysLoading ? 'Поиск…' : 'Обновить список' }}
+          </button>
+        </div>
       </div>
       <p class="hint">
         Доступные топики: <code>relay_&lt;MAC&gt;</code>, <code>/postnum</code>, <code>/udp</code>,
         <code>/status_relay</code>, <code>/active</code>, <code>/ip</code>, <code>/lwt</code>.
         Выберите реле из списка и назначьте его посту. Одно реле — один пост.
+        Статусы ● онлайн / ○ офлайн обновляются автоматически по MQTT-сообщениям реле.
       </p>
 
       <div *ngIf="relaysError" class="error-banner">⚠️ {{ relaysError }}</div>
@@ -87,8 +94,13 @@ import { Subject, takeUntil } from 'rxjs';
       <div class="manual-add">
         <input type="text" [(ngModel)]="manualMac" placeholder="MAC вручную, напр. 30:76:F5:30:5B:A4"
                (input)="manualMac = manualMac.toUpperCase()" />
+        <label class="post-pick">Пост:
+          <select [(ngModel)]="manualPost">
+            <option *ngFor="let i of postIds" [value]="i">Пост {{ i }}</option>
+          </select>
+        </label>
         <button type="button" class="mini-btn assign" [disabled]="assignBusy || !validManualMac"
-                (click)="assignManual()">+ назначить посту {{ selectedPost }}</button>
+                (click)="assignManual()">+ назначить посту {{ manualPost }}</button>
         <span class="muted" *ngIf="manualMac && !validManualMac">некорректный MAC</span>
       </div>
     </div>
@@ -137,6 +149,10 @@ import { Subject, takeUntil } from 'rxjs';
     .topics-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem; }
     .topics-header { display: flex; justify-content: space-between; align-items: center; }
     .topics-header h4 { margin: 0; font-size: 1rem; color: #0f172a; }
+    .header-actions { display: flex; align-items: center; gap: 0.75rem; }
+    .auto-refresh { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: #475569; cursor: pointer; user-select: none; }
+    .post-pick { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; color: #475569; }
+    .post-pick select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 6px; font-size: 0.8rem; background: #fff; }
     .hint { font-size: 0.8rem; color: #64748b; margin: 0.35rem 0 0.75rem; line-height: 1.5; }
     .hint code { background: #eef2ff; color: #3730a3; padding: 1px 5px; border-radius: 4px; font-size: 0.75rem; }
     .relays-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -180,6 +196,14 @@ export class RelaysComponent implements OnInit, OnDestroy {
   assignBusy = false;
   currentRelayMac: string | null = null;
   manualMac = '';
+  /** Пост для ручного назначения по MAC (по умолчанию = выбранный вверху) */
+  get manualPost(): number { return this._manualPost ?? this.selectedPost; }
+  set manualPost(v: number) { this._manualPost = Number(v); }
+  private _manualPost: number | null = null;
+
+  /** Автообновление списка реле и статусов каждые 10 секунд */
+  autoRefresh = true;
+  private refreshTimer: any = null;
 
   /** Валидность MAC, введённого вручную (xx:xx:xx:xx:xx:xx) */
   get validManualMac(): boolean {
@@ -189,7 +213,8 @@ export class RelaysComponent implements OnInit, OnDestroy {
   constructor(
     private admin: AdminService,
     private fb: FormBuilder,
-    private settingsUpdate: SettingsUpdateService
+    private settingsUpdate: SettingsUpdateService,
+    private realtime: RealtimeService
   ) {}
 
   ngOnInit(): void {
@@ -199,6 +224,28 @@ export class RelaysComponent implements OnInit, OnDestroy {
       this.loadPostSettings();
     });
     this.loadRelays();
+    this.startAutoRefresh();
+
+    // Мгновенное обновление статусов реле при любых MQTT-сообщениях relay_<MAC>/*
+    // (бэкенд рассылает type:'relay-status' через WebSocket realtime)
+    this.realtime.messages$
+      .pipe(takeUntil(this.destroy$))
+      .subscribe((msg: any) => {
+        if (msg?.type === 'relay-status' && msg.mac) {
+          const mac = String(msg.mac).toUpperCase();
+          const r = this.relays.find(x => x.mac === mac);
+          if (r && msg.state) {
+            r.online = msg.state.online ?? r.online;
+            r.ip = msg.state.ip ?? r.ip;
+            r.active = msg.state.active ?? r.active;
+            r.statusRelay = msg.state.statusRelay ?? r.statusRelay;
+            r.lastSeen = msg.state.lastSeen ?? r.lastSeen;
+          } else if (!r) {
+            this.loadRelays(); // новое реле появилось на брокере — обновить список
+          }
+        }
+        if (msg?.type === 'relay-assigned') { this.loadRelays(); }
+      });
 
     this.settingsUpdate.settingsUpdated$
       .pipe(takeUntil(this.destroy$))
@@ -206,8 +253,19 @@ export class RelaysComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.destroy$.next();
     this.destroy$.complete();
+  }
+
+  /** Автообновление списка каждые 10 с (только GET, без тяжёлого discover) */
+  startAutoRefresh(): void {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.refreshTimer = setInterval(() => {
+      if (this.autoRefresh && !this.assignBusy && !this.relaysLoading) {
+        this.loadRelays();
+      }
+    }, 10000);
   }
 
   loadPostSettings(): void {
@@ -299,11 +357,25 @@ export class RelaysComponent implements OnInit, OnDestroy {
     });
   }
 
-  /** Назначить реле по MAC, введённому вручную */
+  /** Назначить реле по MAC, введённому вручную (пост берётся из manualPost) */
   assignManual(): void {
     if (!this.validManualMac) return;
     const mac = this.manualMac.trim().toUpperCase();
-    this.assignRelay(mac);
-    this.manualMac = '';
+    const post = Number(this.manualPost);
+    this.assignBusy = true;
+    this.admin.assignPostRelay(post, mac).pipe(takeUntil(this.destroy$)).subscribe({
+      next: () => {
+        this.assignBusy = false;
+        this.selectedPost = post;          // показать блок топиков этого поста
+        this.currentRelayMac = mac;
+        this.manualMac = '';
+        this.loadPostSettings();
+        this.loadRelays();
+      },
+      error: (err) => {
+        this.assignBusy = false;
+        alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message || 'неизвестная ошибка'));
+      }
+    });
   }
 }
