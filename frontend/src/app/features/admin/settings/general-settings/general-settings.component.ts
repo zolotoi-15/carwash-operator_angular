@@ -31,11 +31,9 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
   settings: GeneralSettings = structuredClone(emptyGeneralSettings);
   loading = false;
   saving = false;
-
   numberOfPostsOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
   relayNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
   dimmers = [1, 2, 3, 4];
-
   selectedPostId = 1;
   private destroy$ = new Subject<void>();
 
@@ -79,14 +77,27 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     const currentPosts = this.settings.posts || [];
     const template = currentPosts.find(p => p.postId === 1) || currentPosts[0];
     if (!template) { this.notify.warning('Нет ни одного поста для клонирования'); return; }
+
     const newPosts: PostSettings[] = [];
     for (let i = 1; i <= count; i++) {
       const existing = currentPosts.find(p => p.postId === i);
-      if (existing) { newPosts.push(existing); }
-      else {
+      if (existing) {
+        newPosts.push(existing);
+      } else {
+        const cloned = structuredClone(template);
+        // ★ НЕ копируем назначение реле на новые посты
+        cloned.relay = null;
         newPosts.push({
-          postId: i, services: structuredClone(template.services || []),
-          relayMask: {}, vfdFrequencies: {}, dimmerMask: {}, buttonInputs: {}, relayDelays: {}, dimmerDosing: {}, cameras: {},
+          postId: i,
+          services: cloned.services || [],
+          relayMask: cloned.relayMask || {},
+          vfdFrequencies: cloned.vfdFrequencies || {},
+          dimmerMask: cloned.dimmerMask || {},
+          buttonInputs: cloned.buttonInputs || {},
+          relayDelays: cloned.relayDelays || {},
+          dimmerDosing: cloned.dimmerDosing || {},
+          cameras: cloned.cameras || {},
+          relay: null,
         });
       }
     }
@@ -101,7 +112,9 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
       next: (s) => {
         this.settings = s;
         this.loading = false;
-        if (!this.settings.posts.find(p => p.postId === this.selectedPostId)) this.selectedPostId = this.settings.posts[0]?.postId ?? 1;
+        if (!this.settings.posts.find(p => p.postId === this.selectedPostId)) {
+          this.selectedPostId = this.settings.posts[0]?.postId ?? 1;
+        }
       },
       error: () => { this.notify.error('Не удалось загрузить настройки'); this.loading = false; },
     });
@@ -126,14 +139,24 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     });
   }
 
+  // ★ НЕ копируем назначение реле на другие посты
   copyFromFirstToAll(): void {
     const post1 = this.settings.posts?.[0];
     if (!post1) { this.notify.warning('Пост 1 не найден'); return; }
     const count = this.settings.numberOfPosts || 8;
     const newPosts: PostSettings[] = [];
-    for (let i = 1; i <= count; i++) newPosts.push({ ...structuredClone(post1), postId: i });
+
+    for (let i = 1; i <= count; i++) {
+      const cloned = structuredClone(post1);
+      cloned.postId = i;
+      if (i !== 1) {
+        cloned.relay = null;
+      }
+      newPosts.push(cloned);
+    }
+
     this.settings = { ...this.settings, posts: newPosts };
-    this.persist('Настройки скопированы на все посты');
+    this.persist('Настройки скопированы на все посты (реле — только у поста 1)');
   }
 
   publishConfig(): void {
@@ -150,8 +173,8 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     const base = 'Новая услуга';
     if (!post.services.some(s => s.name === base)) return base;
     let i = 2;
-    while (post.services.some(s => s.name === `${base} ${i}`)) i++;
-    return `${base} ${i}`;
+    while (post.services.some(s => s.name === `${base}${i}`)) i++;
+    return `${base}${i}`;
   }
 
   addService(postId: number): void {
@@ -169,7 +192,8 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     post.dimmerMask[name] = 0;
     post.buttonInputs[name] = 0;
     post.relayDelays[name] = { onDelay: 100, offDelay: 200 };
-    post.dimmerDosing[name] = { 1: 100, 2: 100, 3: 100, 4: 100 };
+    // ★ ДОЗАЦИЯ-0: новая услуга без диммеров → дозация 0
+    post.dimmerDosing[name] = { 1: 0, 2: 0, 3: 0, 4: 0 };
     post.services = [...post.services, { name, price: 0, free_time_sec: 0, enabled: true } as ServiceConfig];
     this.settings = { ...this.settings, posts: [...this.settings.posts] };
   }

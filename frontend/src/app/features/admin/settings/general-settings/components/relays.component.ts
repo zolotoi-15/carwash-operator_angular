@@ -12,29 +12,22 @@ import { Subject, takeUntil } from 'rxjs';
   standalone: true,
   imports: [CommonModule, ReactiveFormsModule, FormsModule],
   template: `
-    <!-- ================= Топики реле MQTT-ретрансляторов ================= -->
-    <div class="topics-card">
-      <div class="topics-header">
-        <h4>📡 Реле (MQTT-топики ретрансляторов)</h4>
-        <div class="header-actions">
-          <label class="auto-refresh" title="Список реле и их статусы обновляются каждые 10 секунд">
-            <input type="checkbox" [(ngModel)]="autoRefresh" /> 🔄 Автообновление
-          </label>
-          <button type="button" class="mini-btn" (click)="discoverRelays()" [disabled]="relaysLoading">
-            {{ relaysLoading ? 'Поиск…' : 'Обновить список' }}
-          </button>
-        </div>
-      </div>
-      <p class="hint">
-        Доступные топики: <code>relay_&lt;MAC&gt;</code>, <code>/postnum</code>, <code>/udp</code>,
-        <code>/status_relay</code>, <code>/active</code>, <code>/ip</code>, <code>/lwt</code>.
-        Выберите реле из списка и назначьте его посту. Одно реле — один пост.
-        Статус ● онлайн / ○ офлайн берётся из топика <code>relay_&lt;MAC&gt;/lwt</code> (last will) и обновляется автоматически по MQTT-сообщениям реле.
-      </p>
+    <div class="post-selector">
+      <label>Пост:
+        <select [(ngModel)]="selectedPost" (change)="loadPostSettings()">
+          <option *ngFor="let i of postIds" [value]="i">Пост {{ i }}</option>
+        </select>
+      </label>
+      <button type="button" class="discover-btn" (click)="discoverRelays()">🔍 Поиск реле</button>
+    </div>
 
-      <div *ngIf="relaysError" class="error-banner">⚠️ {{ relaysError }}</div>
-
-      <table class="relays-table" *ngIf="relays.length; else noRelays">
+    <!-- ====== Назначение реле посту ====== -->
+    <div class="relay-assignment">
+      <h3>📡 Реле (MQTT-топики ретрансляторов)</h3>
+      <p>Доступные топики: relay_&lt;MAC&gt;, /postnum, /udp, /status_relay, /active, /ip, /lwt</p>
+      <div *ngIf="relaysLoading" class="loading">Загрузка реле...</div>
+      <div *ngIf="relaysError" class="error">{{ relaysError }}</div>
+      <table *ngIf="!relaysLoading" class="relay-table">
         <thead>
           <tr>
             <th>Топик / MAC</th>
@@ -45,76 +38,58 @@ import { Subject, takeUntil } from 'rxjs';
           </tr>
         </thead>
         <tbody>
-          <tr *ngFor="let r of relays" [class.row-assigned]="r.assignedPost === selectedPost">
-            <td><code>{{ r.topic }}</code></td>
-            <td>
-              <span class="badge" [ngClass]="online(r) ? 'badge-on' : 'badge-off'" [title]="statusTitle(r)">
-                {{ online(r) ? '● онлайн' : '○ офлайн' }}
-              </span>
+          <tr *ngFor="let r of relays">
+            <td>{{ r.topic }}</td>
+            <td [title]="statusTitle(r)">
+              <span [class.online]="online(r)">{{ online(r) ? '● онлайн' : '○ офлайн' }}</span>
             </td>
             <td>{{ r.ip || '—' }}</td>
+            <td>{{ r.assignedPost ? 'Пост ' + r.assignedPost : '—' }}</td>
             <td>
-              <span *ngIf="r.assignedPost" class="badge badge-post">Пост {{ r.assignedPost }}</span>
-              <span *ngIf="!r.assignedPost" class="muted">свободно</span>
-            </td>
-            <td>
-              <button *ngIf="!r.assignedPost" type="button" class="mini-btn assign"
-                      [disabled]="assignBusy"
-                      (click)="assignRelay(r.mac)">
-                → назначить посту {{ selectedPost }}
+              <button
+                *ngIf="!r.assignedPost || r.assignedPost !== selectedPost"
+                type="button"
+                class="assign-btn"
+                [disabled]="assignBusy"
+                (click)="assignRelay(r.mac)">
+                + назначить посту {{ selectedPost }}
               </button>
-              <button *ngIf="r.assignedPost" type="button" class="mini-btn unassign"
-                      [disabled]="assignBusy" title="Отвязать реле от поста {{ r.assignedPost }}"
-                      (click)="unassignRelay(r)">
+              <button
+                *ngIf="r.assignedPost"
+                type="button"
+                class="unassign-btn"
+                [disabled]="assignBusy"
+                (click)="unassignRelay(r)">
                 ✖ снять с поста {{ r.assignedPost }}
               </button>
             </td>
           </tr>
         </tbody>
       </table>
-      <ng-template #noRelays>
-        <div class="empty">
-          {{ relaysLoading ? 'Загрузка реле с брокера…' : 'Реле не обнаружены. Проверьте подключение устройств к MQTT-брокеру и нажмите «Обновить список».' }}
-        </div>
-      </ng-template>
-
-      <div class="current-assignment" *ngIf="currentRelayMac">
-        ✅ Посту <b>{{ selectedPost }}</b> назначено реле: <code>relay_{{ currentRelayMac }}</code>
-        <ul class="topic-list" *ngIf="currentRelayMac">
-          <li><code>relay_{{ currentRelayMac }}</code> — базовый топик (команды)</li>
-          <li><code>relay_{{ currentRelayMac }}/postnum</code> — номер поста</li>
-          <li><code>relay_{{ currentRelayMac }}/udp</code> — UDP-порт</li>
-          <li><code>relay_{{ currentRelayMac }}/status_relay</code> — состояние каналов</li>
-          <li><code>relay_{{ currentRelayMac }}/active</code> — активность</li>
-          <li><code>relay_{{ currentRelayMac }}/ip</code> — IP-адрес</li>
-          <li><code>relay_{{ currentRelayMac }}/lwt</code> — онлайн/офлайн (last will)</li>
-        </ul>
+      <div *ngIf="currentRelayMac" class="assigned-info">
+        ✅ Посту {{ selectedPost }} назначено реле: relay_{{ currentRelayMac }}
       </div>
-
-      <!-- Ручной ввод MAC, если автообнаружение недоступно -->
-      <div class="manual-add">
-        <input type="text" [(ngModel)]="manualMac" placeholder="MAC вручную, напр. 30:76:F5:30:5B:A4"
-               (input)="manualMac = manualMac.toUpperCase()" />
-        <label class="post-pick">Пост:
+      <div class="manual-assign">
+        <h4>MAC вручную, напр. 30:76:F5:30:5B:A4</h4>
+        <input type="text" [(ngModel)]="manualMac" placeholder="MAC-адрес" />
+        <label>Пост:
           <select [(ngModel)]="manualPost">
             <option *ngFor="let i of postIds" [value]="i">Пост {{ i }}</option>
           </select>
         </label>
-        <button type="button" class="mini-btn assign" [disabled]="assignBusy || !validManualMac"
-                (click)="assignManual()">+ назначить посту {{ manualPost }}</button>
-        <span class="muted" *ngIf="manualMac && !validManualMac">некорректный MAC</span>
+        <button
+          type="button"
+          class="assign-btn"
+          [disabled]="assignBusy || !validManualMac"
+          (click)="assignManual()">
+          + назначить посту {{ manualPost }}
+        </button>
       </div>
     </div>
 
-    <div class="post-selector">
-      <label>Пост: 
-        <select [(ngModel)]="selectedPost" (change)="loadPostSettings()">
-          <option *ngFor="let i of postIds" [value]="i">Пост {{ i }}</option>
-        </select>
-      </label>
-    </div>
-
-    <form *ngIf="form" [formGroup]="form" (ngSubmit)="save()">
+    <!-- ====== Реле и диммеры по услугам ====== -->
+    <form *ngIf="form" [formGroup]="form" (ngSubmit)="save()" class="services-config">
+      <h3>⚙️ Конфигурация услуг поста {{ selectedPost }}</h3>
       <div *ngFor="let service of serviceKeys" class="relay-group">
         <strong>{{ service }}</strong>
         <div class="relay-section">
@@ -125,7 +100,6 @@ import { Subject, takeUntil } from 'rxjs';
             </label>
           </div>
         </div>
-        
         <div class="relay-section">
           <span class="section-label">Диммеры (4 бита):</span>
           <div [formGroupName]="service" class="relay-checkboxes">
@@ -134,16 +108,25 @@ import { Subject, takeUntil } from 'rxjs';
             </label>
           </div>
         </div>
-
-        <!-- ★ Блок дозации и прокачки (появляется, если выбран хотя бы один диммер) -->
+        <!-- Блок дозации и прокачки -->
         <div class="dosing-section" *ngIf="hasAnyDimmerSelected(service)">
           <div *ngFor="let d of dimmerNumbers" class="dimmer-dosing-row">
             <ng-container *ngIf="form.get(service + '.dimmer' + d)?.value">
               <label>
                 D{{ d }} дозация:
-                <input type="number" min="0" max="100" [(ngModel)]="dosingConfig[service][d]" [ngModelOptions]="{standalone: true}"> %
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  [ngModel]="dosingConfig[service][d]"
+                  (ngModelChange)="onDosingChange(service, d, $event)"
+                  [ngModelOptions]="{standalone: true}" /> %
               </label>
-              <button type="button" class="pump-btn" (click)="pumpDimmer(service, d)" [disabled]="pumpingDimmer">
+              <button
+                type="button"
+                class="pump-btn"
+                (click)="pumpDimmer(service, d)"
+                [disabled]="pumpingDimmer">
                 🚿 Прокачать
               </button>
             </ng-container>
@@ -152,62 +135,32 @@ import { Subject, takeUntil } from 'rxjs';
       </div>
       <button type="submit" class="save-btn">💾 Сохранить</button>
     </form>
-    <div *ngIf="!form" class="loading">Загрузка...</div>
   `,
   styles: [`
-    .post-selector { margin-bottom: 1rem; }
-    .relay-group { margin-bottom: 1.5rem; border-bottom: 1px solid #eee; padding: 0.5rem 0; }
+    .post-selector { margin-bottom: 1rem; display: flex; gap: 1rem; align-items: center; }
+    .discover-btn { background: #3498db; color: white; border: none; padding: 6px 12px; border-radius: 20px; cursor: pointer; }
+    .relay-assignment { border: 1px solid #ddd; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    .relay-table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    .relay-table th, .relay-table td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; }
+    .relay-table th { background: #f5f5f5; }
+    .online { color: #27ae60; font-weight: bold; }
+    .assign-btn { background: #27ae60; color: white; border: none; padding: 4px 10px; border-radius: 15px; cursor: pointer; }
+    .unassign-btn { background: #e74c3c; color: white; border: none; padding: 4px 10px; border-radius: 15px; cursor: pointer; }
+    .assigned-info { margin-top: 0.5rem; padding: 0.5rem; background: #e8f5e9; border-radius: 4px; }
+    .manual-assign { margin-top: 1rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .services-config { border: 1px solid #ddd; padding: 1rem; border-radius: 8px; }
+    .relay-group { margin-bottom: 1.5rem; padding-bottom: 1rem; border-bottom: 1px solid #eee; }
     .relay-section { margin-top: 0.5rem; }
-    .section-label { font-size: 0.85rem; color: #555; margin-right: 0.5rem; }
-    .relay-checkboxes { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.3rem; }
-    .relay-label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; }
-    
-    /* ★ Стили для дозации */
-    .dosing-section { margin-top: 8px; padding: 8px 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
-    .dimmer-dosing-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
-    .dimmer-dosing-row:last-child { margin-bottom: 0; }
-    .dimmer-dosing-row label { display: flex; align-items: center; gap: 4px; font-size: 0.85rem; color: #166534; margin: 0; }
-    .dimmer-dosing-row input { width: 60px; padding: 2px 4px; border: 1px solid #86efac; border-radius: 4px; text-align: right; }
-    .pump-btn { background: #22c55e; color: white; border: none; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; cursor: pointer; transition: 0.2s; }
-    .pump-btn:hover:not(:disabled) { background: #16a34a; }
+    .section-label { font-weight: 600; margin-right: 0.5rem; }
+    .relay-checkboxes { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+    .relay-label { display: inline-flex; align-items: center; gap: 0.2rem; padding: 2px 6px; background: #f0f0f0; border-radius: 4px; cursor: pointer; }
+    .dosing-section { margin-top: 0.5rem; padding: 0.5rem; background: #fff9e6; border-radius: 4px; }
+    .dimmer-dosing-row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.3rem; }
+    .pump-btn { background: #9b59b6; color: white; border: none; padding: 4px 10px; border-radius: 15px; cursor: pointer; }
     .pump-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    
-    .save-btn { background: #27ae60; color: white; border: none; padding: 8px 16px; border-radius: 30px; cursor: pointer; margin-top: 1rem; }
-    .loading { text-align: center; color: #666; }
-    
-    /* --- topics card --- */
-    .topics-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem; }
-    .topics-header { display: flex; justify-content: space-between; align-items: center; }
-    .topics-header h4 { margin: 0; font-size: 1rem; color: #0f172a; }
-    .header-actions { display: flex; align-items: center; gap: 0.75rem; }
-    .auto-refresh { display: flex; align-items: center; gap: 4px; font-size: 0.78rem; color: #475569; cursor: pointer; user-select: none; }
-    .post-pick { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; color: #475569; }
-    .post-pick select { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 6px; font-size: 0.8rem; background: #fff; }
-    .hint { font-size: 0.8rem; color: #64748b; margin: 0.35rem 0 0.75rem; line-height: 1.5; }
-    .hint code { background: #eef2ff; color: #3730a3; padding: 1px 5px; border-radius: 4px; font-size: 0.75rem; }
-    .relays-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-    .relays-table th { text-align: left; color: #475569; font-weight: 600; padding: 6px 8px; border-bottom: 2px solid #e2e8f0; }
-    .relays-table td { padding: 6px 8px; border-bottom: 1px solid #eef2f7; vertical-align: middle; }
-    .relays-table code { font-size: 0.78rem; color: #0f172a; }
-    .row-assigned { background: #ecfdf5; }
-    .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
-    .badge-on { background: #dcfce7; color: #166534; }
-    .badge-off { background: #fee2e2; color: #991b1b; }
-    .badge-post { background: #dbeafe; color: #1e40af; }
-    .muted { color: #94a3b8; font-size: 0.78rem; }
-    .mini-btn { border: 1px solid #cbd5e1; background: #fff; color: #334155; padding: 4px 10px; border-radius: 6px; font-size: 0.78rem; cursor: pointer; }
-    .mini-btn:hover:not(:disabled) { background: #f1f5f9; }
-    .mini-btn:disabled { opacity: 0.55; cursor: default; }
-    .mini-btn.assign { border-color: #2563eb; color: #2563eb; }
-    .mini-btn.unassign { border-color: #dc2626; color: #dc2626; }
-    .error-banner { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 8px; padding: 8px 12px; font-size: 0.85rem; margin-bottom: 0.5rem; }
-    .empty { padding: 1rem; text-align: center; color: #64748b; font-size: 0.85rem; background: #fff; border: 1px dashed #cbd5e1; border-radius: 8px; }
-    .current-assignment { margin-top: 0.75rem; font-size: 0.85rem; color: #166534; }
-    .current-assignment code { background: #dcfce7; padding: 1px 6px; border-radius: 4px; }
-    .topic-list { margin: 0.4rem 0 0; padding-left: 1.2rem; font-size: 0.78rem; color: #475569; }
-    .topic-list li { margin-bottom: 2px; }
-    .manual-add { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
-    .manual-add input { border: 1px solid #cbd5e1; border-radius: 6px; padding: 5px 8px; font-size: 0.8rem; width: 240px; }
+    .save-btn { background: #27ae60; color: white; border: none; padding: 8px 20px; border-radius: 25px; cursor: pointer; font-weight: bold; }
+    .loading { color: #666; text-align: center; padding: 1rem; }
+    .error { color: #e74c3c; padding: 0.5rem; background: #ffe6e6; border-radius: 4px; }
   `]
 })
 export class RelaysComponent implements OnInit, OnDestroy {
@@ -218,23 +171,27 @@ export class RelaysComponent implements OnInit, OnDestroy {
   selectedPost = 1;
   postIds: number[] = [];
   private destroy$ = new Subject<void>();
-
   dosingConfig: Record<string, Record<number, number>> = {};
   pumpingDimmer = false;
-
   relays: RelayInfo[] = [];
   relaysLoading = false;
   relaysError = '';
   assignBusy = false;
   currentRelayMac: string | null = null;
   manualMac = '';
-  get manualPost(): number { return this._manualPost ?? this.selectedPost; }
-  set manualPost(v: number) { this._manualPost = Number(v); }
   private _manualPost: number | null = null;
   autoRefresh = true;
   private refreshTimer: any = null;
+
+  get manualPost(): number {
+    return this._manualPost ?? this.selectedPost;
+  }
+  set manualPost(v: number) {
+    this._manualPost = Number(v);
+  }
+
   get validManualMac(): boolean {
-    return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(this.manualMac.trim().toUpperCase());
+    return /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/.test(this.manualMac.trim());
   }
 
   constructor(
@@ -264,7 +221,9 @@ export class RelaysComponent implements OnInit, OnDestroy {
           r.active = msg.state.active ?? r.active;
           r.statusRelay = msg.state.statusRelay ?? r.statusRelay;
           r.lastSeen = msg.state.lastSeen ?? r.lastSeen;
-        } else if (!r) this.loadRelays();
+        } else if (!r) {
+          this.loadRelays();
+        }
       }
       if (msg?.type === 'relay-assigned') this.loadRelays();
     });
@@ -295,15 +254,22 @@ export class RelaysComponent implements OnInit, OnDestroy {
       this.currentRelayMac = ps.relay?.mac ? String(ps.relay.mac).toUpperCase() : null;
 
       this.dosingConfig = ps.dimmerDosing ? structuredClone(ps.dimmerDosing) : {};
-      this.serviceKeys.forEach(name => {
-        if (!this.dosingConfig[name]) this.dosingConfig[name] = {};
-        for (let d = 1; d <= 4; d++) {
-          if (this.dosingConfig[name][d] === undefined) this.dosingConfig[name][d] = 100;
-        }
-      });
 
       const currentMask: Record<string, any> = ps.relayMask || {};
       const currentDimmer: Record<string, any> = ps.dimmerMask || {};
+
+      // ★ ДОЗАЦИЯ-0: инициализация дозации с учётом выбранных диммеров
+      this.serviceKeys.forEach(name => {
+        if (!this.dosingConfig[name]) this.dosingConfig[name] = {};
+        const dimmerValue = Number(currentDimmer[name] || 0);
+        for (let d = 1; d <= 4; d++) {
+          if (this.dosingConfig[name][d] === undefined) {
+            const isDimmerSelected = !!(dimmerValue & (1 << (d - 1)));
+            this.dosingConfig[name][d] = isDimmerSelected ? 100 : 0;
+          }
+        }
+      });
+
       const group: any = {};
       this.serviceKeys.forEach(name => {
         const mask = Number(currentMask[name] || 0);
@@ -313,8 +279,15 @@ export class RelaysComponent implements OnInit, OnDestroy {
         for (let d = 1; d <= 4; d++) controls['dimmer' + d] = [!!(dimmer & (1 << (d - 1)))];
         group[name] = this.fb.group(controls);
       });
+
       this.form = this.fb.group(group);
     });
+  }
+
+  onDosingChange(service: string, dimmer: number, value: number | string): void {
+    const num = Number(value) || 0;
+    if (!this.dosingConfig[service]) this.dosingConfig[service] = {};
+    this.dosingConfig[service][dimmer] = Math.max(0, Math.min(100, num));
   }
 
   save(): void {
@@ -330,11 +303,20 @@ export class RelaysComponent implements OnInit, OnDestroy {
       for (let d = 1; d <= 4; d++) if (group['dimmer' + d]) dimmer |= (1 << (d - 1));
       relayMask[name] = mask;
       dimmerMask[name] = dimmer;
-      dimmerDosing[name] = { ...this.dosingConfig[name] };
+
+      // ★ ДОЗАЦИЯ-0: для невыбранных диммеров дозация = 0
+      dimmerDosing[name] = {};
+      for (let d = 1; d <= 4; d++) {
+        const isSelected = !!(dimmer & (1 << (d - 1)));
+        dimmerDosing[name][d] = isSelected ? (this.dosingConfig[name]?.[d] ?? 100) : 0;
+      }
     });
 
     this.admin.updatePostSettings(this.selectedPost, { relayMask, dimmerMask, dimmerDosing })
-      .subscribe(() => alert('Настройки реле, диммеров и дозации сохранены'));
+      .subscribe({
+        next: () => alert('Настройки реле, диммеров и дозации сохранены'),
+        error: (err) => alert('Ошибка сохранения: ' + (err?.error?.error || err?.message))
+      });
   }
 
   hasAnyDimmerSelected(service: string): boolean {
@@ -347,6 +329,7 @@ export class RelaysComponent implements OnInit, OnDestroy {
     if (this.pumpingDimmer) return;
     this.pumpingDimmer = true;
     const percent = this.dosingConfig[service]?.[dimmer] ?? 100;
+
     this.admin.pumpDimmer(this.selectedPost, `D${dimmer}`, percent).subscribe({
       next: () => {
         this.pumpingDimmer = false;
@@ -390,7 +373,10 @@ export class RelaysComponent implements OnInit, OnDestroy {
         this.currentRelayMac = mac ? String(mac).toUpperCase() : null;
         this.loadRelays();
       },
-      error: (err) => { this.assignBusy = false; alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message)); }
+      error: (err) => {
+        this.assignBusy = false;
+        alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message));
+      }
     });
   }
 
@@ -406,7 +392,10 @@ export class RelaysComponent implements OnInit, OnDestroy {
         this.loadPostSettings();
         this.loadRelays();
       },
-      error: (err) => { this.assignBusy = false; alert('Не удалось снять реле: ' + (err?.error?.error || err?.message)); }
+      error: (err) => {
+        this.assignBusy = false;
+        alert('Не удалось снять реле: ' + (err?.error?.error || err?.message));
+      }
     });
   }
 
@@ -424,7 +413,10 @@ export class RelaysComponent implements OnInit, OnDestroy {
         this.loadPostSettings();
         this.loadRelays();
       },
-      error: (err) => { this.assignBusy = false; alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message)); }
+      error: (err) => {
+        this.assignBusy = false;
+        alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message));
+      }
     });
   }
 }

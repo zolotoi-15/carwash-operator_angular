@@ -6,7 +6,6 @@ import { environment } from '../../../environments/environment';
 import { SettingsUpdateService } from './settings-update.service';
 
 // ================= МОДЕЛИ =================
-
 export interface ServiceConfig {
   name: string;
   price: number;
@@ -22,20 +21,19 @@ export interface PostSettings {
   dimmerMask: Record<string, number | boolean>;
   buttonInputs: Record<string, number>;
   relayDelays: Record<string, { onDelay: number; offDelay: number }>;
-  /** ★ Настройки дозации для диммеров: { "Вода": { "1": 100, "2": 50 } } */
   dimmerDosing: Record<string, Record<number, number>>;
   cameras: Record<string, string>;
   relay?: RelayAssignment | null;
 }
 
 export interface RelayAssignment {
-  mac: string; // "30:76:F5:30:5B:A4"
+  mac: string;
 }
 
 export interface RelayInfo {
   mac: string;
-  topic: string;                 // relay_<MAC>
-  online: boolean | null;        // из relay_<MAC>/lwt
+  topic: string;
+  online: boolean | null;
   lwtRaw?: string | null;
   lwtAt?: number | null;
   ip: string | null;
@@ -89,7 +87,6 @@ export interface GeneralSettings {
 }
 
 // ================= ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ =================
-
 export const emptyPostSettings: PostSettings = {
   postId: 0,
   services: [],
@@ -135,7 +132,6 @@ export const emptyGeneralSettings: GeneralSettings = {
 };
 
 // ================= СЕРВИС =================
-
 @Injectable({ providedIn: 'root' })
 export class AdminService {
   private http = inject(HttpClient);
@@ -143,7 +139,6 @@ export class AdminService {
   private apiUrl = `${environment.apiUrl}`;
 
   // ------- server → UI -------
-
   private fromServer(data: any): GeneralSettings {
     const postsObj = data?.posts || {};
     const posts: PostSettings[] = [];
@@ -173,18 +168,23 @@ export class AdminService {
         if (dimmerMask[svc.name]     === undefined) dimmerMask[svc.name]     = 0;
         if (buttonInputs[svc.name]   === undefined) buttonInputs[svc.name]   = 0;
         if (relayDelays[svc.name]    === undefined) relayDelays[svc.name]    = { onDelay: 100, offDelay: 200 };
-        
+
+        // ★ ДОЗАЦИЯ-0: нормализация дозации с учётом выбранных диммеров
+        const dimmerValue = Number(dimmerMask[svc.name] || 0);
         if (!dimmerDosing[svc.name]) {
-          dimmerDosing[svc.name] = { 1: 100, 2: 100, 3: 100, 4: 100 };
-        } else {
-          for (let d = 1; d <= 4; d++) {
-            if (dimmerDosing[svc.name][d] === undefined) dimmerDosing[svc.name][d] = 100;
+          dimmerDosing[svc.name] = {};
+        }
+        for (let d = 1; d <= 4; d++) {
+          if (dimmerDosing[svc.name][d] === undefined) {
+            const isDimmerSelected = !!(dimmerValue & (1 << (d - 1)));
+            dimmerDosing[svc.name][d] = isDimmerSelected ? 100 : 0;
           }
         }
       }
 
       posts.push({
-        postId, services, relayMask, vfdFrequencies, dimmerMask, buttonInputs, relayDelays, dimmerDosing,
+        postId, services, relayMask, vfdFrequencies, dimmerMask, buttonInputs,
+        relayDelays, dimmerDosing,
         cameras: pd.cameras || {},
         relay: pd.relay?.mac ? { mac: String(pd.relay.mac).toUpperCase() } : null,
       });
@@ -195,12 +195,17 @@ export class AdminService {
     const mqttRaw = data?.mqtt || {};
     let mqtt: MqttSettings;
     if (mqttRaw.local || mqttRaw.remote) {
-      mqtt = { local: { ...DEFAULT_MQTT.local, ...(mqttRaw.local || {}) }, remote: { ...DEFAULT_MQTT.remote, ...(mqttRaw.remote || {}) }, brokerUrl: mqttRaw.brokerUrl };
+      mqtt = {
+        local: { ...DEFAULT_MQTT.local, ...(mqttRaw.local || {}) },
+        remote: { ...DEFAULT_MQTT.remote, ...(mqttRaw.remote || {}) },
+        brokerUrl: mqttRaw.brokerUrl,
+      };
     } else if (mqttRaw.brokerUrl) {
       mqtt = { local: { ...DEFAULT_MQTT.local }, remote: { ...DEFAULT_MQTT.remote }, brokerUrl: mqttRaw.brokerUrl };
       try {
         const u = new URL(mqttRaw.brokerUrl);
-        mqtt.local.host = u.hostname; mqtt.local.portWs = Number(u.port) || mqtt.local.portWs;
+        mqtt.local.host = u.hostname;
+        mqtt.local.portWs = Number(u.port) || mqtt.local.portWs;
         mqtt.local.path = u.pathname || mqtt.local.path;
         if (mqttRaw.username) mqtt.local.username = mqttRaw.username;
         if (mqttRaw.password) mqtt.local.password = mqttRaw.password;
@@ -217,7 +222,6 @@ export class AdminService {
   }
 
   // ------- UI → server -------
-
   private rebuildMasks(post: PostSettings): void {
     const relayMask  = post.relayMask  || (post.relayMask  = {});
     const dimmerMask = post.dimmerMask || (post.dimmerMask = {});
@@ -249,25 +253,42 @@ export class AdminService {
       p.services.forEach(svc => { prices[svc.name] = svc.price; });
 
       postsObj[p.postId] = {
-        prices, relayMask: p.relayMask, vfdFrequencies: p.vfdFrequencies, dimmerMask: p.dimmerMask,
-        buttonInputs: p.buttonInputs, relayDelays: p.relayDelays, dimmerDosing: p.dimmerDosing,
-        cameras: p.cameras, relay: p.relay?.mac ? { mac: p.relay.mac } : null,
-        services: p.services.map(s => ({ name: s.name, price: s.price, free_time_sec: s.free_time_sec ?? 0, enabled: s.enabled !== false })),
+        prices,
+        relayMask: p.relayMask,
+        vfdFrequencies: p.vfdFrequencies,
+        dimmerMask: p.dimmerMask,
+        buttonInputs: p.buttonInputs,
+        relayDelays: p.relayDelays,
+        dimmerDosing: p.dimmerDosing,
+        cameras: p.cameras,
+        relay: p.relay?.mac ? { mac: p.relay.mac } : null,
+        services: p.services.map(s => ({
+          name: s.name, price: s.price,
+          free_time_sec: s.free_time_sec ?? 0,
+          enabled: s.enabled !== false,
+        })),
       };
     });
 
-    const mqtt = { local: settings.mqtt?.local ?? DEFAULT_MQTT.local, remote: settings.mqtt?.remote ?? DEFAULT_MQTT.remote };
+    const mqtt = {
+      local: settings.mqtt?.local ?? DEFAULT_MQTT.local,
+      remote: settings.mqtt?.remote ?? DEFAULT_MQTT.remote,
+    };
     const kkmFromUi = settings.kkm || {};
     const kkm = {
-      enabled: !!kkmFromUi.enabled, mockReceipt: !!kkmFromUi.simulate, provider: kkmFromUi.model || 'mock',
-      manual: { kkNumber: '', fiscalShiftNumber: kkmFromUi.fiscalShiftNumber ?? null, cashierName: kkmFromUi.cashierName ?? '' },
+      enabled: !!kkmFromUi.enabled,
+      mockReceipt: !!kkmFromUi.simulate,
+      provider: kkmFromUi.model || 'mock',
+      manual: {
+        kkNumber: '',
+        fiscalShiftNumber: kkmFromUi.fiscalShiftNumber ?? null,
+        cashierName: kkmFromUi.cashierName ?? '',
+      },
     };
-
     return { ...settings, posts: postsObj, mqtt, kkm };
   }
 
   // ================= API =================
-
   getSettings(): Observable<GeneralSettings> {
     return this.http.get<any>(`${this.apiUrl}/settings`).pipe(map(data => this.fromServer(data)));
   }
@@ -284,12 +305,9 @@ export class AdminService {
     return this.http.post<any>(`${this.apiUrl}/publish-config`, {});
   }
 
-  /** ★ Прокачка диммера */
   pumpDimmer(postId: number, dimmer: string, percent?: number): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/posts/${postId}/pump-dimmer`, { dimmer, percent });
   }
-
-  // ================= Реле =================
 
   getRelays(discover = false): Observable<RelayInfo[]> {
     const req$ = discover
@@ -309,7 +327,10 @@ export class AdminService {
   getPostSettings(postId: number): Observable<PostSettings> {
     return this.getSettings().pipe(map(settings => {
       const post = settings.posts.find(p => p.postId === postId);
-      if (!post) throw new Error(`Пост ${postId} не найден`);
+      if (!post) {
+        // ★ Возвращаем пустой пост вместо ошибки
+        return { ...structuredClone(emptyPostSettings), postId };
+      }
       return post;
     }));
   }
@@ -317,8 +338,23 @@ export class AdminService {
   updatePostSettings(postId: number, ps: Partial<PostSettings>): Observable<PostSettings> {
     return this.getSettings().pipe(
       map(settings => {
+        let post = settings.posts.find(p => p.postId === postId);
+        // ★ СОЗДАНИЕ-ПОСТА: создаём пост, если его нет
+        if (!post) {
+          post = {
+            postId,
+            services: [],
+            relayMask: {},
+            vfdFrequencies: {},
+            dimmerMask: {},
+            buttonInputs: {},
+            relayDelays: {},
+            dimmerDosing: {},
+            cameras: {},
+          };
+          settings.posts.push(post);
+        }
         const idx = settings.posts.findIndex(p => p.postId === postId);
-        if (idx === -1) throw new Error(`Пост ${postId} не найден`);
         settings.posts[idx] = { ...settings.posts[idx], ...ps };
         return settings;
       }),
@@ -338,7 +374,13 @@ export class AdminService {
         if (!post1) throw new Error('Пост 1 не найден');
         const count = settings.numberOfPosts || 8;
         const newPosts: PostSettings[] = [];
-        for (let i = 1; i <= count; i++) newPosts.push({ ...structuredClone(post1), postId: i });
+        for (let i = 1; i <= count; i++) {
+          const cloned = structuredClone(post1);
+          // ★ НЕ копируем назначение реле на другие посты
+          if (i !== 1) cloned.relay = null;
+          cloned.postId = i;
+          newPosts.push(cloned);
+        }
         return { ...settings, posts: newPosts };
       }),
       switchMap(updated => this.updateSettings(updated)),
