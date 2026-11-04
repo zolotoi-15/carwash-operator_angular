@@ -1,242 +1,340 @@
-import { Component, OnInit, OnDestroy, inject, signal } from '@angular/core';
+// src/app/features/dashboard/post-card/post-card.component.ts
+import { Component, Input, OnInit, OnDestroy, inject } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { HttpClient } from '@angular/common/http';
-import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
-import { Subscription, firstValueFrom } from 'rxjs';
+import { Subscription } from 'rxjs';
 
-export interface ReportRow {
-  service: string;
-  count: number;
-  sum: number;
-  icon: string;
+import { RealtimeService, RealtimeMessage } from '../../../core/services/realtime.service';
+import { NotificationService } from '../../../core/services/notification.service';
+import { ReceiptModalComponent } from '../receipt-modal/receipt-modal.component';
+import {
+  PaymentMethodDialogComponent,
+  PaymentMethod,
+} from '../../../shared/components/payment-method-dialog/payment-method-dialog.component';
+
+interface CardScanFlash {
+  card: string;
+  postId: string;
+  timestamp: number;
 }
 
-export type Period = 'shift' | 'day' | 'week' | 'month';
+export interface ActiveService {
+  name: string;
+  price: number;
+  free_time_sec: number;
+}
 
 @Component({
-  selector: 'app-card-report',
+  selector: 'app-post-card',
   standalone: true,
-  imports: [CommonModule, FormsModule],
-  host: {
-    style: 'display: block; width: 100%;'
-  },
-  templateUrl: './card-report.component.html',
-  styleUrl: './card-report.component.scss',
+  imports: [
+    CommonModule,
+    FormsModule,
+    ReceiptModalComponent,
+    PaymentMethodDialogComponent,
+  ],
+  templateUrl: './post-card.component.html',
+  styleUrls: ['./post-card.component.scss'],
 })
-export class CardReportComponent implements OnInit, OnDestroy {
+export class PostCardComponent implements OnInit, OnDestroy {
+  @Input() postId!: number;
+  @Input() activeServices: ActiveService[] = [];
+
   private realtime = inject(RealtimeService);
-  private http = inject(HttpClient);
-  private sub?: Subscription;
+  private notify = inject(NotificationService);
 
-  period = signal<Period>('shift');
-  search = '';
-  loading = false;
-  error = '';
-  lastUpdated: Date | null = null;
-  // '—' пока данные не загружены; реальные значения приходят с бэкенда
-  shiftDelta: string | null = null;
+  // ============================================================
+  // Состояние поста
+  // ============================================================
+  online = false;
+  esp32Connected = false;
+  busy = false;
+  paused = false;
+  balance = 0;
+  activeFunction = '';
+  sum = 0;
+  lastSeen: number | null = null;
 
-  periods: { value: Period; label: string; icon: string }[] = [
-    { value: 'shift', label: 'Текущая смена', icon: '🕐' },
-    { value: 'day',   label: 'День',          icon: '📅' },
-    { value: 'week',  label: 'Неделя',        icon: '📆' },
-    { value: 'month', label: 'Месяц',         icon: '🗓️' }
-  ];
+  currentAdvanceReceiptNumber: number | null = null;
 
-  rows: ReportRow[] = [];
+  // ★ НОВОЕ: активная карта клиента — показывается постоянно,
+  // пока пост занят или есть баланс
+  clientCard: string | null = null;
 
-  totals = { revenue: 0, avgCheck: 0, receipts: 0 };
-  topService = '—';
-  topCount = 0;
+  // ============================================================
+  // Пополнение
+  // ============================================================
+  topUpAmount: number | null = null;
+  showTopUpModal = false;
+  showPaymentDialog = false;
+  pendingTopUpAmount = 0;
 
-  rangeStart: Date | null = null;
-  rangeEnd: Date | null = null;
+  // ============================================================
+  // Flash при сканировании карты (кратковременная подсветка)
+  // ============================================================
+  lastCardScan: CardScanFlash | null = null;
+  cardFlashVisible = false;
+  private flashTimeout: any = null;
 
-  periodLabel(): string {
-    switch (this.period()) {
-      case 'shift': return 'Текущая смена';
-      case 'day': return 'Сегодня';
-      case 'week': return 'Последняя неделя';
-      case 'month': return 'Текущий месяц';
-    }
+  get functions(): string[] {
+    return (this.activeServices || []).map(s => s.name);
   }
 
-  rangeLabel(): string {
-    if (!this.rangeStart || !this.rangeEnd) return '';
-    const f = (d: Date) => d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-    return `${f(this.rangeStart)} — ${f(this.rangeEnd)}`;
-  }
+  private subs = new Subscription();
 
   ngOnInit(): void {
-    this.load();
-    this.sub = this.realtime.messages$.subscribe((msg: RealtimeMessage) => {
-      if (msg.type === 'mqtt' && (msg.topic === 'shift/total' || msg.topic === 'kkm/print')) {
-        this.load();
-      }
-    });
+    this.subs.add(
+      this.realtime.messages$.subscribe((msg) => this.handleRealtime(msg)),
+    );
   }
 
   ngOnDestroy(): void {
-    this.sub?.unsubscribe();
+    if (this.flashTimeout) clearTimeout(this.flashTimeout);
+    this.subs.unsubscribe();
   }
 
-  setPeriod(p: Period): void {
-    this.period.set(p);
-    this.load();
-  }
+  // ============================================================
+  // WebSocket — единый поток событий
+  // ============================================================
+  private handleRealtime(msg: RealtimeMessage): void {
+    const postIdStr = String(this.postId);
 
-  /** Диапазон дат для выбранного периода */
-  private range(): { from: Date; to: Date } | null {
-    const now = new Date();
-    const to = now;
-    let from: Date;
-    switch (this.period()) {
-      case 'day':
-        from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-        break;
-      case 'week':
-        from = new Date(now); from.setDate(from.getDate() - 6);
-        from.setHours(0, 0, 0, 0);
-        break;
-      case 'month':
-        from = new Date(now.getFullYear(), now.getMonth(), 1);
-        break;
-      case 'shift':
-      default:
-        return null; // обрабатывается в load() через /api/kkm/current-shift
+    if (msg.type === 'snapshot') {
+      const state = msg.posts?.[postIdStr];
+      if (state) this.applyState(state);
+      return;
     }
-    return { from, to };
+
+    if (msg.type === 'card-scan' && String(msg.postId) === postIdStr) {
+      this.showCardFlash(msg.card || '');
+      return;
+    }
+
+    if (msg.type === 'card-balance' && String(msg.postId) === postIdStr) {
+      if (typeof msg.balance === 'number') this.balance = msg.balance;
+      if (msg.card) this.showCardFlash(String(msg.card));
+      return;
+    }
+
+    if (msg.type !== 'mqtt') return;
+
+    const topic = msg.topic || '';
+
+    if (topic === `posts/${postIdStr}/lwt`) {
+      const online = (msg.payload || '').trim().toLowerCase() === 'online';
+      this.online = online;
+      this.esp32Connected = online;
+      return;
+    }
+
+    if (topic === `posts/${postIdStr}/status`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        this.applyState(data);
+      } catch { /* ignore */ }
+      return;
+    }
+
+    if (topic === `posts/${postIdStr}/status_relay`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        if (typeof data.busy === 'boolean') this.busy = data.busy;
+        if (typeof data.paused === 'boolean') this.paused = data.paused;
+        if (typeof data.currentProgram === 'string') {
+          const raw = data.currentProgram.trim();
+          this.activeFunction = raw === '-' ? '' : raw;
+        }
+      } catch { /* ignore */ }
+      return;
+    }
+
+    if (topic === `posts/${postIdStr}/clientcardbalance`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        if (typeof data.balance === 'number') this.balance = data.balance;
+        if (data.card) this.showCardFlash(String(data.card));
+      } catch { /* ignore */ }
+      return;
+    }
+
+    if (topic === `posts/${postIdStr}/receipt_number`) {
+      try {
+        const data = JSON.parse(msg.payload || '{}');
+        if (data.receiptNumber !== undefined) {
+          this.currentAdvanceReceiptNumber = data.receiptNumber
+            ? Number(data.receiptNumber)
+            : null;
+        }
+        if (typeof data.balanceAfter === 'number') {
+          this.balance = data.balanceAfter;
+        }
+      } catch { /* ignore */ }
+      return;
+    }
   }
 
-  /** Загрузка реальных данных с бэкенда (/api/reports/range) */
-  async load(): Promise<void> {
-    this.loading = true;
-    this.error = '';
-    try {
-      let from: Date;
-      let to: Date = new Date();
+  private applyState(d: any): void {
+    if (typeof d.online === 'boolean') {
+      this.online = d.online;
+      this.esp32Connected = d.online;
+    }
+    if (typeof d.busy === 'boolean') this.busy = d.busy;
+    if (typeof d.paused === 'boolean') this.paused = d.paused;
+    if (typeof d.balance === 'number') this.balance = d.balance;
+    if (typeof d.sum === 'number') this.sum = d.sum;
+    else if (typeof d.total === 'number') this.sum = d.total;
 
-      if (this.period() === 'shift') {
-        // период по умолчанию — текущая открытая смена; fallback — текущий день
-        let openedAt: string | null = null;
-        try {
-          const shift = await firstValueFrom<any>(this.http.get('/api/kkm/current-shift'));
-          if (shift && shift.exists !== false && shift.openedAt) openedAt = shift.openedAt;
-        } catch { /* смена недоступна — fallback на день */ }
-        if (openedAt) {
-          from = new Date(openedAt);
-        } else {
-          from = new Date(); from.setHours(0, 0, 0, 0);
-        }
-      } else {
-        const r = this.range()!;
-        from = r.from; to = r.to;
+    const raw = String(d.currentProgram ?? d.activeFunction ?? '').trim();
+    this.activeFunction = raw === '-' ? '' : raw;
+
+    if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
+
+    // Если пост свободен (busy = false) и баланс <= 0 — очищаем номер аванса и карту клиента
+    if (this.busy === false && this.balance <= 0) {
+      this.currentAdvanceReceiptNumber = null;
+      this.clientCard = null;   // ★ карта больше не «активна»
+    }
+  }
+
+  // ============================================================
+  // Flash при сканировании карты
+  // ============================================================
+  private showCardFlash(card: string): void {
+    if (!card) return;
+
+    // ★ Постоянное отображение — не сбрасывается по таймеру
+    this.clientCard = card;
+
+    // Кратковременная подсветка (4 сек)
+    this.lastCardScan = {
+      card,
+      postId: String(this.postId),
+      timestamp: Date.now(),
+    };
+    this.cardFlashVisible = true;
+    if (this.flashTimeout) clearTimeout(this.flashTimeout);
+    this.flashTimeout = setTimeout(() => {
+      this.cardFlashVisible = false;
+    }, 4000);
+  }
+
+  // ============================================================
+  // Команды
+  // ============================================================
+  printReceipt(): void {
+    // ★ Печать доступна и при online = false — блокировки нет.
+    // Если бэкенд отклоняет команду при offline-пульте, ограничение
+    // нужно снять на сервере (/api/posts/{id}/command).
+    this.sendCommand('print_receipt');
+  }
+
+  // ★ НОВОЕ: методы, на которые ссылается HTML, но которых не было в TS
+  stop(): void {
+    this.sendCommand('stop');
+  }
+
+  pause(): void {
+    this.sendCommand('pause');
+  }
+
+  reset(): void {
+    this.sendCommand('reset');
+  }
+
+  activateFunction(programName: string): void {
+    this.sendCommand(`program ${programName}`);
+    this.activeFunction = programName;
+  }
+
+  openTopUpModal(): void { this.showTopUpModal = true; }
+  closeTopUpModal(): void { this.showTopUpModal = false; }
+
+  // ============================================================
+  // Пополнение поста — аванс
+  // ============================================================
+  quickTopUp(): void {
+    const amount = Number(this.topUpAmount) || 0;
+    if (amount <= 0) return;
+    this.pendingTopUpAmount = amount;
+    this.showPaymentDialog = true;
+  }
+
+  handleTopUp({ postId, amount }: { postId: number; amount: number }): void {
+    if (amount <= 0) return;
+    this.pendingTopUpAmount = amount;
+    this.showPaymentDialog = true;
+  }
+
+  onPaymentSelected(method: PaymentMethod): void {
+    this.showPaymentDialog = false;
+    const amount = this.pendingTopUpAmount;
+    this.pendingTopUpAmount = 0;
+    this.performTopUp(this.postId, amount, method);
+    this.topUpAmount = null;
+  }
+
+  onPaymentCancelled(): void {
+    this.showPaymentDialog = false;
+    this.pendingTopUpAmount = 0;
+  }
+
+  private performTopUp(postId: number, amount: number, paymentMethod: PaymentMethod): void {
+    if (amount <= 0) return;
+    const token = localStorage.getItem('carwash_auth_token') || '';
+    fetch(`/api/posts/${postId}/topup`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ amount, paymentMethod }),
+    })
+    .then(async (res) => {
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.error || `HTTP ${res.status}`);
       }
-
-      const res = await firstValueFrom<any>(
-        this.http.get('/api/reports/range', {
-          params: { from: from.toISOString(), to: to.toISOString() },
-        })
+      return res.json();
+    })
+    .then((data) => {
+      if (typeof data.balance === 'number') this.balance = data.balance;
+      if (typeof data.receiptNumber === 'number') {
+        this.currentAdvanceReceiptNumber = data.receiptNumber;
+      }
+      const label = paymentMethod === 'cash' ? 'нал.' : 'безнал.';
+      const receipt = data.receiptNumber
+        ? `, авансовый чек №${data.receiptNumber}`
+        : '';
+      this.notify.success(
+        `Пост ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
       );
+    })
+    .catch((err) => {
+      this.notify.error(`Пополнение не выполнено: ${err.message}`);
+    });
+  }
 
-      this.rangeStart = from;
-      this.rangeEnd = to;
-
-      const receipts: any[] = Array.isArray(res) ? res : (res?.receipts ?? []);
-      const agg = new Map<string, { count: number; sum: number }>();
-      let revenue = 0;
-
-      for (const rc of receipts) {
-        // итоговые чеки услуг (operation 'sell'/нет поля); пополнения баланса — отдельная агрегация
-        const isTopup = rc.operation === 'topup';
-        revenue += Number(rc.totalCost) || 0;
-        const items: any[] = rc.items || [];
-        if (!items.length) continue;
-        for (const it of items) {
-          const key = isTopup ? '💳 Пополнение баланса' : (it.name || 'Услуга');
-          const cur = agg.get(key) || { count: 0, sum: 0 };
-          cur.count += 1;
-          cur.sum += Number(it.cost) || 0;
-          agg.set(key, cur);
-        }
+  private sendCommand(command: string): void {
+    const token = localStorage.getItem('carwash_auth_token') || '';
+    console.log(`[PostCard ${this.postId}] → ${command}`);
+    fetch(`/api/posts/${this.postId}/command`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ command }),
+    })
+    .then(async (res) => {
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `HTTP ${res.status}`);
       }
-
-      this.rows = [...agg.entries()]
-        .map(([service, v]) => ({ service, count: v.count, sum: Math.round(v.sum * 100) / 100, icon: this.iconFor(service) }))
-        .sort((a, b) => b.sum - a.sum);
-
-      this.totals.revenue = Math.round(revenue * 100) / 100;
-      this.totals.receipts = receipts.length;
-      this.totals.avgCheck = receipts.length ? Math.round(revenue / receipts.length) : 0;
-      const top = [...this.rows].sort((a, b) => b.count - a.count)[0];
-      this.topService = top?.service.replace(/^[^\p{L}]+/u, '').trim() || '—';
-      this.topCount = top?.count || 0;
-      this.lastUpdated = new Date();
-    } catch (e: any) {
-      this.error = 'Не удалось загрузить данные отчёта. Проверьте подключение к серверу.';
-    } finally {
-      this.loading = false;
-      this.recalc();
-    }
-  }
-
-  private iconFor(name: string): string {
-    const n = name.toLowerCase();
-    if (n.includes('пополн')) return '💳';
-    if (n.includes('премиум') || n.includes('люкс')) return '✨';
-    if (n.includes('стандарт') || n.includes('комплекс')) return '🚿';
-    if (n.includes('пылесос')) return '🧹';
-    if (n.includes('шин') || n.includes('чернен')) return '🛞';
-    if (n.includes('салон') || n.includes('хим')) return '🪑';
-    if (n.includes('воск') || n.includes('полир')) return '🧴';
-    return '💧';
-  }
-
-  refresh(): void {
-    this.load();
-  }
-
-  private recalc(): void {
-    this.totals.revenue = this.rows.reduce((s, r) => s + r.sum, 0) || this.totals.revenue;
-    const top = [...this.rows].sort((a, b) => b.count - a.count)[0];
-    this.topService = top?.service.replace(/^[^\p{L}]+/u, '').trim() || '—';
-    this.topCount = top?.count || 0;
-  }
-
-  filteredRows = () => {
-    const q = this.search.trim().toLowerCase();
-    if (!q) return this.rows;
-    return this.rows.filter(r => r.service.toLowerCase().includes(q));
-  };
-
-  percent(sum: number): number {
-    return this.totals.revenue ? (sum / this.totals.revenue) * 100 : 0;
-  }
-
-  barColor(sum: number): string {
-    const p = this.percent(sum);
-    if (p > 25) return 'linear-gradient(90deg, #6d28d9, #8b5cf6)';
-    if (p > 15) return 'linear-gradient(90deg, #3b82f6, #60a5fa)';
-    if (p > 8) return 'linear-gradient(90deg, #10b981, #34d399)';
-    return 'linear-gradient(90deg, #f59e0b, #fbbf24)';
-  }
-
-  exportCSV(): void {
-    const header = 'Услуга;Количество;Сумма\n';
-    const body = this.rows
-      .map(r => `${r.service};${r.count};${r.sum}`)
-      .join('\n');
-    const blob = new Blob(['\uFEFF' + header + body], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `report_${this.period()}_${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
-  print(): void {
-    window.print();
+      console.log(`[PostCard ${this.postId}] ✅ ${command}`);
+    })
+    .catch((err) => {
+      console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
+      this.notify.error(`Команда не выполнена: ${err.message}`);
+    });
   }
 }

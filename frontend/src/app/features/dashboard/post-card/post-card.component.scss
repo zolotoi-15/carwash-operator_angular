@@ -31,6 +31,18 @@
   z-index: 10;
 }
 
+.active-card-number {
+  display: block;
+  margin: 4px 0;
+  font-size: 0.9em;
+  font-weight: 600;
+  white-space: nowrap;      // номер карты не переносится
+  overflow: hidden;
+  text-overflow: ellipsis;  // если номер длинный — обрезается, а не ломает вёрстку
+  position: relative;       // чтобы не всплывал над соседями
+  z-index: 0;
+}
+
 @keyframes flashIn {
   from { transform: scale(0.7); opacity: 0; }
   to   { transform: scale(1);   opacity: 1; }

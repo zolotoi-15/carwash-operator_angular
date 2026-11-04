@@ -18,7 +18,6 @@ interface CardScanFlash {
   timestamp: number;
 }
 
-/** ★ Тип активной услуги, приходящей из DashboardComponent */
 export interface ActiveService {
   name: string;
   price: number;
@@ -39,8 +38,6 @@ export interface ActiveService {
 })
 export class PostCardComponent implements OnInit, OnDestroy {
   @Input() postId!: number;
-
-  /** ★ Активные услуги, приходят из DashboardComponent (зависят от блока «Услуги») */
   @Input() activeServices: ActiveService[] = [];
 
   private realtime = inject(RealtimeService);
@@ -58,26 +55,32 @@ export class PostCardComponent implements OnInit, OnDestroy {
   sum = 0;
   lastSeen: number | null = null;
 
-  /** Номер текущего авансового чека по этому посту */
   currentAdvanceReceiptNumber: number | null = null;
+
+  // ★ Активная карта клиента
+  clientCard: string | null = null;
+
+  /**
+   * ★ Защита от двойного перевода баланса на карту.
+   * Пока true — новые события активации карты не триггерят перевод.
+   */
+  private transferring = false;
 
   // ============================================================
   // Пополнение
   // ============================================================
   topUpAmount: number | null = null;
   showTopUpModal = false;
-
   showPaymentDialog = false;
   pendingTopUpAmount = 0;
 
   // ============================================================
-  // Flash при сканировании карты
+  // Flash при сканировании карты (4 сек)
   // ============================================================
   lastCardScan: CardScanFlash | null = null;
   cardFlashVisible = false;
   private flashTimeout: any = null;
 
-  /** ★ Кнопки программ теперь вычисляются из activeServices */
   get functions(): string[] {
     return (this.activeServices || []).map(s => s.name);
   }
@@ -119,6 +122,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
     }
 
     if (msg.type !== 'mqtt') return;
+
     const topic = msg.topic || '';
 
     if (topic === `posts/${postIdStr}/lwt`) {
@@ -145,6 +149,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
           const raw = data.currentProgram.trim();
           this.activeFunction = raw === '-' ? '' : raw;
         }
+        this.maybeClearInactiveCard();
       } catch { /* ignore */ }
       return;
     }
@@ -161,12 +166,11 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (topic === `posts/${postIdStr}/receipt_number`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
-        
-        // ⭐ ИСПРАВЛЕНИЕ: Разрешаем принимать null или 0, чтобы сбрасывать номер
         if (data.receiptNumber !== undefined) {
-          this.currentAdvanceReceiptNumber = data.receiptNumber ? Number(data.receiptNumber) : null;
+          this.currentAdvanceReceiptNumber = data.receiptNumber
+            ? Number(data.receiptNumber)
+            : null;
         }
-        
         if (typeof data.balanceAfter === 'number') {
           this.balance = data.balanceAfter;
         }
@@ -191,17 +195,43 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
     if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
 
-    // ⭐ ИСПРАВЛЕНИЕ: Если пост свободен (busy = false) и баланс <= 0, сбрасываем номер аванса
+    // Если снапшот принёс карту — тоже триггерим возможный перевод
+    if (typeof d.clientCard === 'string' && d.clientCard) {
+      this.handleCardActivated(d.clientCard);
+    }
+
     if (this.busy === false && this.balance <= 0) {
       this.currentAdvanceReceiptNumber = null;
     }
+
+    this.maybeClearInactiveCard();
+  }
+
+  /**
+   * Карта считается неактивной, когда:
+   *   – пост НЕ занят,
+   *   – баланс израсходован (<= 0),
+   *   – подсветка от сканирования уже погасла.
+   */
+  private maybeClearInactiveCard(): void {
+    if (this.cardFlashVisible) return;
+    if (this.busy) return;
+    if (this.balance > 0) return;
+
+    this.clientCard = null;
+    this.lastCardScan = null;
   }
 
   // ============================================================
-  // Flash при сканировании карты
+  // Flash при сканировании карты + перевод баланса
   // ============================================================
   private showCardFlash(card: string): void {
     if (!card) return;
+
+    // ★ Активация карты — возможный перевод баланса поста на карту
+    this.handleCardActivated(card);
+
+    // Кратковременная подсветка
     this.lastCardScan = {
       card,
       postId: String(this.postId),
@@ -212,31 +242,104 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (this.flashTimeout) clearTimeout(this.flashTimeout);
     this.flashTimeout = setTimeout(() => {
       this.cardFlashVisible = false;
+      this.maybeClearInactiveCard();
     }, 4000);
+  }
+
+  /**
+   * ★ Обработчик активации карты клиента.
+   * Если на балансе поста есть средства — переводим их на карту
+   * как пополнение с баланса поста.
+   */
+  private handleCardActivated(card: string): void {
+    if (!card) return;
+
+    this.clientCard = card;
+
+    if (this.balance > 0 && !this.transferring) {
+      const amount = this.balance;
+      this.transferPostBalanceToCard(card, amount);
+    }
+  }
+
+  /**
+   * ★ Перевод всего баланса поста на карту клиента.
+   * POST /api/posts/{postId}/transfer-to-card  { card, amount }
+   */
+  private transferPostBalanceToCard(card: string, amount: number): void {
+    if (amount <= 0) return;
+
+    this.transferring = true;
+    const token = localStorage.getItem('carwash_auth_token') || '';
+    const postId = this.postId;
+
+    console.log(`[PostCard ${postId}] → transfer-to-card ${card}: ${amount} ₽`);
+
+    fetch(`/api/posts/${postId}/transfer-to-card`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ card, amount }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({}));
+          throw new Error(errBody.error || `HTTP ${res.status}`);
+        }
+        return res.json();
+      })
+      .then((data: any) => {
+        // Бэкенд подтвердил перевод — обнуляем баланс поста
+        this.balance = 0;
+        if (typeof data?.receiptNumber === 'number') {
+          this.currentAdvanceReceiptNumber = data.receiptNumber;
+        }
+        const cardBalance = typeof data?.cardBalance === 'number'
+          ? `, баланс карты: ${data.cardBalance.toFixed(2)} ₽`
+          : '';
+        const receipt = typeof data?.receiptNumber === 'number'
+          ? `, чек №${data.receiptNumber}`
+          : '';
+        this.notify.success(
+          `Пост ${postId}: ${amount.toFixed(2)} ₽ переведено на карту ${card}${cardBalance}${receipt}`,
+        );
+        console.log(`[PostCard ${postId}] ✅ transfer-to-card ${card}: ${amount} ₽`);
+      })
+      .catch((err) => {
+        console.error(
+          `[PostCard ${postId}] ❌ transfer-to-card ${card}:`,
+          err.message,
+        );
+        // Баланс НЕ трогаем — оператор сможет повторить или разобраться вручную
+        this.notify.error(
+          `Не удалось перевести ${amount.toFixed(2)} ₽ с поста на карту ${card}: ${err.message}`,
+        );
+      })
+      .finally(() => {
+        this.transferring = false;
+      });
   }
 
   // ============================================================
   // Команды
   // ============================================================
-  
-  // ⭐ ИСПРАВЛЕНИЕ: Добавлен сброс номера аванса и активной функции при стопе
-  stop(): void { 
-    this.sendCommand('stop'); 
-    this.currentAdvanceReceiptNumber = null;
-    this.activeFunction = '';
+  printReceipt(): void {
+    this.sendCommand('print_receipt');
   }
 
-  pause(): void { this.sendCommand('pause'); }
-
-  // ⭐ ИСПРАВЛЕНИЕ: Добавлен сброс номера аванса, баланса и активной функции при сбросе
-  reset(): void { 
-    this.sendCommand('reset'); 
-    this.currentAdvanceReceiptNumber = null;
-    this.activeFunction = '';
-    this.balance = 0;
+  stop(): void {
+    this.sendCommand('stop');
   }
 
-  printReceipt(): void { this.sendCommand('print_receipt'); }
+  pause(): void {
+    this.sendCommand('pause');
+  }
+
+  reset(): void {
+    this.sendCommand('reset');
+  }
 
   activateFunction(programName: string): void {
     this.sendCommand(`program ${programName}`);
@@ -278,7 +381,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
   private performTopUp(postId: number, amount: number, paymentMethod: PaymentMethod): void {
     if (amount <= 0) return;
     const token = localStorage.getItem('carwash_auth_token') || '';
-
     fetch(`/api/posts/${postId}/topup`, {
       method: 'POST',
       headers: {
@@ -287,36 +389,34 @@ export class PostCardComponent implements OnInit, OnDestroy {
       },
       body: JSON.stringify({ amount, paymentMethod }),
     })
-      .then(async (res) => {
-        if (!res.ok) {
-          const e = await res.json().catch(() => ({}));
-          throw new Error(e.error || `HTTP ${res.status}`);
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (typeof data.balance === 'number') this.balance = data.balance;
-        if (typeof data.receiptNumber === 'number') {
-          this.currentAdvanceReceiptNumber = data.receiptNumber;
-        }
-        const label = paymentMethod === 'cash' ? 'нал.' : 'безнал.';
-        const receipt = data.receiptNumber ? `, авансовый чек №${data.receiptNumber}` : '';
-        this.notify.success(
-          `Пост ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
-        );
-      })
-      .catch((err) => {
-        this.notify.error(`Пополнение не выполнено: ${err.message}`);
-      });
+    .then(async (res) => {
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    })
+    .then((data) => {
+      if (typeof data.balance === 'number') this.balance = data.balance;
+      if (typeof data.receiptNumber === 'number') {
+        this.currentAdvanceReceiptNumber = data.receiptNumber;
+      }
+      const label = paymentMethod === 'cash' ? 'нал.' : 'безнал.';
+      const receipt = data.receiptNumber
+        ? `, авансовый чек №${data.receiptNumber}`
+        : '';
+      this.notify.success(
+        `Пост ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
+      );
+    })
+    .catch((err) => {
+      this.notify.error(`Пополнение не выполнено: ${err.message}`);
+    });
   }
 
-  // ============================================================
-  // Отправка команд поста
-  // ============================================================
   private sendCommand(command: string): void {
     const token = localStorage.getItem('carwash_auth_token') || '';
     console.log(`[PostCard ${this.postId}] → ${command}`);
-
     fetch(`/api/posts/${this.postId}/command`, {
       method: 'POST',
       headers: {
@@ -325,16 +425,16 @@ export class PostCardComponent implements OnInit, OnDestroy {
       },
       body: JSON.stringify({ command }),
     })
-      .then(async (res) => {
-        if (!res.ok) {
-          const errBody = await res.json().catch(() => ({}));
-          throw new Error(errBody.error || `HTTP ${res.status}`);
-        }
-        console.log(`[PostCard ${this.postId}] ✅ ${command}`);
-      })
-      .catch((err) => {
-        console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
-        this.notify.error(`Команда не выполнена: ${err.message}`);
-      });
+    .then(async (res) => {
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || `HTTP ${res.status}`);
+      }
+      console.log(`[PostCard ${this.postId}] ✅ ${command}`);
+    })
+    .catch((err) => {
+      console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
+      this.notify.error(`Команда не выполнена: ${err.message}`);
+    });
   }
 }

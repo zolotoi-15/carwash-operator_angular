@@ -53,8 +53,10 @@ export class ReportListComponent implements OnInit {
 
   expanded: Record<string, boolean> = {};
 
-  start!: Date;
-  end!: Date;
+  // ★ Инициализируем значениями по умолчанию, чтобы rangeLabel()
+  //   не падал при первом рендере, пока идёт HTTP-запрос смены.
+  start: Date = new Date();
+  end: Date = new Date();
 
   private currentShiftOpenedAt: string | null = null;
 
@@ -102,11 +104,9 @@ export class ReportListComponent implements OnInit {
 
     if (p === 'shift') {
       if (!this.currentShiftOpenedAt) {
-        // смена не открыта — показываем день вместо пустого экрана
         this.setPeriod('day');
         return;
       }
-      // Точно от openedAt до сейчас, БЕЗ обрезки до 00:00
       start = new Date(this.currentShiftOpenedAt);
       end   = new Date();
     } else {
@@ -154,11 +154,12 @@ export class ReportListComponent implements OnInit {
     switch (pm) {
       case 'cash': return '💵 Наличные';
       case 'client_card': return '💳 Карта клиента';
-      case 'card': return '💳 Банковская карта';
+      case 'card': return '💳 Безнал';
       case 'sbp': return '🔗 СБП';
       case 'qr': return '🔗 СБП (QR)';
       case 'online': return '🌐 Онлайн';
       case 'topup': return '💰 Пополнение';
+      case 'post_balance': return '🔁 Перевод с поста';
       case null:
       case undefined:
       case '': return '—';
@@ -178,7 +179,15 @@ export class ReportListComponent implements OnInit {
   }
 
   rangeLabel(): string {
-    const f = (d: Date) => d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    // ★ Защита от undefined/null — на случай, если шаблон отрендерится
+    //   раньше, чем придёт ответ HTTP и установятся start/end.
+    const f = (d: Date | null | undefined): string => {
+      if (!d) return '—';
+      return d.toLocaleString('ru-RU', {
+        day: '2-digit', month: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+    };
     return `${f(this.start)} — ${f(this.end)}`;
   }
 
@@ -261,11 +270,9 @@ export class ReportListComponent implements OnInit {
     let end: Date;
 
     if (startInput && endInput) {
-      // Явный диапазон (day/week/month/shift) — НЕ трогаем часы
       start = new Date(startInput);
       end   = new Date(endInput);
     } else {
-      // Ручной диапазон — обрезаем по дню
       start = this.dateFrom ? new Date(this.dateFrom) : new Date(0);
       start.setHours(0, 0, 0, 0);
       end = this.dateTo ? new Date(this.dateTo) : new Date();
@@ -336,9 +343,7 @@ export class ReportListComponent implements OnInit {
       noncashPct: total > 0 ? Math.round((noncash / total) * 100) : 0,
     };
 
-    // пончик способов оплаты
     const slices: { label: string; value: number; pct: number; color: string }[] = [];
-    let acc = 0;
     const sortedPay = [...payMap.entries()].sort((a, b) => b[1] - a[1]);
     for (const [key, value] of sortedPay) {
       if (value <= 0) continue;
@@ -349,10 +354,9 @@ export class ReportListComponent implements OnInit {
         pct,
         color: ReportListComponent.PAY_COLORS[key] || ReportListComponent.PAY_COLORS['other'],
       });
-      acc += pct;
     }
     this.paymentSlices = slices;
-    // conic-gradient через накопление процентов
+
     let cum = 0;
     const stops: string[] = [];
     for (const s of slices) {
@@ -362,7 +366,6 @@ export class ReportListComponent implements OnInit {
     }
     this.donutStyle = slices.length ? `background: conic-gradient(${stops.join(', ')})` : '';
 
-    // бары по постам
     const maxPost = Math.max(...[...postMap.values()].map(p => p.sum), 1);
     this.postBars = [...postMap.entries()]
       .map(([postId, v]) => ({ postId, sum: v.sum, count: v.count, pct: Math.round((v.sum / maxPost) * 100) }))

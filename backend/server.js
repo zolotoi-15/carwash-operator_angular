@@ -19,8 +19,10 @@ require('dotenv').config();
 
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
+// ★ Перевод с баланса поста на карту — это внутреннее перемещение, а не выручка.
+//   Исключаем такие чеки из всех отчётов (shift/x/z/range/grouped/pdf).
 const REPORT_RECEIPT_FILTER = {
-  kind: { $ne: 'advance_post' },
+  kind: { $nin: ['advance_post', 'transfer_post_to_card'] },
   isAdvance: { $ne: true },
 };
 
@@ -2063,6 +2065,120 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
   }
 });
 
+// ---------- Перевод с баланса поста на карту клиента ----------
+// Вызывается фронтом при активации карты, если на посте есть средства.
+// Тело: { card: '8C8ADC80', amount: 150.00 }
+// Семантика: внутреннее перемещение, НЕ выручка. В отчёты не попадает
+// (kind = 'transfer_post_to_card' исключён в REPORT_RECEIPT_FILTER).
+app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
+  const postId = String(req.params.postId);
+  const cardNumber = String(req.body?.card || '').trim().toUpperCase();
+  const amountInput = Number(req.body?.amount);
+
+  if (!cardNumber) {
+    return res.status(400).json({ error: 'card обязателен' });
+  }
+  if (!amountInput || amountInput <= 0) {
+    return res.status(400).json({ error: 'amount должен быть положительным' });
+  }
+
+  try {
+    const n = settings.numberOfPosts || 8;
+    if (Number(postId) < 1 || Number(postId) > n) {
+      return res.status(404).json({ error: `Пост ${postId} не найден` });
+    }
+
+    const state = getPostState(postId);
+    const postBalance = Math.round((state.balance || 0) * 100) / 100;
+    if (postBalance <= 0.01) {
+      return res.status(409).json({ error: 'На посте нет средств для перевода' });
+    }
+
+    // Переводим ровно столько, сколько есть на посту (или меньше, если amount < postBalance)
+    const amount = Math.min(Math.round(amountInput * 100) / 100, postBalance);
+
+    const card = await ClientCard.findOne({ card: cardNumber });
+    if (!card) {
+      return res.status(404).json({ error: `Карта ${cardNumber} не найдена` });
+    }
+
+    // 1) Списать с поста
+    state.balance = Math.round((state.balance - amount) * 100) / 100;
+    if (state.balance < 0) state.balance = 0;
+
+    // 2) Зачислить на карту
+    card.balance = Math.round((card.balance + amount) * 100) / 100;
+    await card.save();
+
+    // 3) Чек перемещения — kind 'transfer_post_to_card' исключён из отчётов
+    const receipt = await createReceipt({
+      postId:        Number(postId),
+      kind:          'transfer_post_to_card',
+      operation:     'transfer',
+      isAdvance:     false,
+      items: [{
+        name:           'Перевод с баланса поста на карту клиента',
+        seconds:        0,
+        cost:           amount,
+        pricePerSecond: 0,
+      }],
+      totalCost:     amount,
+      balanceAfter:  state.balance,
+      paymentMethod: 'post_balance',
+    });
+
+    // 4) Зафиксировать карту на посте + обновить её баланс в state
+    state.clientCard = card.card;
+    state.clientCardBalance = card.balance;
+    state.clientCardType = card.type;
+    state._clientCardInitialBalance = card.balance;
+    state._lastEspBalance = null;
+
+    // 5) Опубликовать события для UI
+    if (mqttClient) {
+      mqttClient.publish(`posts/${postId}/receipt_number`, JSON.stringify({
+        receiptNumber: receipt.receiptNumber,
+        kind:          'transfer_post_to_card',
+        amount,
+        paymentMethod: 'post_balance',
+        balanceAfter:  state.balance,
+        timestamp:     new Date().toISOString(),
+      }), { qos: 1, retain: true });
+
+      mqttClient.publish(`posts/${postId}/clientcardbalance`, JSON.stringify({
+        card:    card.card,
+        balance: card.balance,
+        type:    card.type,
+      }), { qos: 1 });
+
+      publishStatus(postId);
+    }
+
+    // 6) Обновить баланс этой карты на всех постах, где она сейчас активна
+    if (app.locals.publishCardBalanceToPosts) {
+      await app.locals.publishCardBalanceToPosts(card.card);
+    }
+
+    console.log(
+      `🔁 [Post ${postId}] Перевод ${amount.toFixed(2)} ₽ с баланса поста на карту ${card.card}` +
+      ` → баланс поста: ${state.balance.toFixed(2)} ₽, баланс карты: ${card.balance.toFixed(2)} ₽`
+    );
+
+    res.json({
+      ok:            true,
+      postId:        Number(postId),
+      card:          card.card,
+      amount,
+      balance:       state.balance,
+      cardBalance:   card.balance,
+      receiptNumber: receipt.receiptNumber,
+    });
+  } catch (err) {
+    console.error('Ошибка transfer-to-card:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/api/tank-levels', auth, adminOnly, async (req, res) => {
   const { tank, level } = req.body;
   if (settings.tankLevels?.hasOwnProperty(tank)) {
@@ -2464,10 +2580,12 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: 1 }).lean();
 
+  // ★ 'Карта' → 'Безнал' (требование UI), добавлена отдельная метка для перевода.
   const PAY_LABELS = {
     cash:          'Наличные',
-    card_terminal: 'Карта',
+    card_terminal: 'Безнал',
     client_card:   'Карта клиента',
+    post_balance:  'Перевод с баланса поста',
   };
 
   const days = {};
