@@ -90,6 +90,24 @@
           <div class="kpi-label">Безнал · {{ kpi.noncashPct }}%</div>
         </div>
       </div>
+
+      <!-- ★ ДОБАВЛЕНЫ 2 НОВЫЕ КАРТОЧКИ -->
+      <div class="kpi-card kpi-cards-clients">
+        <span class="kpi-icon">💳</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.clientCardsBalance | number:'1.0-0' }} ₽</div>
+          <div class="kpi-label">Баланс карт клиентов</div>
+        </div>
+      </div>
+      <div class="kpi-card kpi-cards-clients-cash">
+        <span class="kpi-icon">💰</span>
+        <div class="kpi-body">
+          <div class="kpi-value">{{ kpi.clientCardsReceipts | number:'1.0-0' }} ₽</div>
+          <div class="kpi-label">Чеки карт клиентов</div>
+        </div>
+      </div>
+      <!-- ★ КОНЕЦ ДОБАВЛЕНИЯ -->
+      
     </section>
 
     @if (paymentSlices.length || postBars.length) {

@@ -19,11 +19,17 @@ require('dotenv').config();
 
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
-// ★ Перевод с баланса поста на карту — это внутреннее перемещение, а не выручка.
-//   Исключаем такие чеки из всех отчётов (shift/x/z/range/grouped/pdf).
+// ★ Показываем все финальные чеки, незавершённые авансы и пополнения карт.
+//   Завершённые авансы (у которых есть finalReceiptNumber) исключаем,
+//   чтобы не было двойного счёта вместе с финальным чеком.
+//   Внутренние переводы на карту (transfer_post_to_card) также исключаем.
 const REPORT_RECEIPT_FILTER = {
-  kind: { $nin: ['advance_post', 'transfer_post_to_card'] },
-  isAdvance: { $ne: true },
+  kind: { $ne: 'transfer_post_to_card' },
+  $or: [
+    { isAdvance: { $ne: true } },
+    { kind: 'advance_post', finalReceiptNumber: null },
+    { operation: 'topup' } // Чеки пополнения карт клиента
+  ]
 };
 
 function reportReceiptsQuery(range = {}) {
@@ -204,21 +210,15 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/lwt');
     mqttClient.subscribe('posts/+/receipt_number');
     subscribeRelayTopics();
-    refreshRelayRetained(); // перечитать retained lwt/ip реле → статусы сразу после старта
+    refreshRelayRetained();
     if (settings.posts) publishConfigToAllPosts();
   });
 
-  // ---------- Топики реле (relay_<MAC>/...) ----------
   function subscribeRelayTopics() {
     if (!mqttClient || !mqttClient.connected) return;
     const subs = new Set([
-      'relay_+',
-      'relay_+/postnum',
-      'relay_+/udp',
-      'relay_+/status_relay',
-      'relay_+/active',
-      'relay_+/ip',
-      'relay_+/lwt',
+      'relay_+', 'relay_+/postnum', 'relay_+/udp', 'relay_+/status_relay',
+      'relay_+/active', 'relay_+/ip', 'relay_+/lwt',
     ]);
     for (const t of subs) {
       mqttClient.subscribe(t, { qos: 0 }, (err) => {
@@ -261,14 +261,8 @@ function connectMqtt(settings) {
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
 
-    broadcast({
-      type: 'mqtt',
-      topic,
-      payload,
-      timestamp: Date.now(),
-    });
+    broadcast({ type: 'mqtt', topic, payload, timestamp: Date.now() });
 
-    // ---------- Сообщения от реле (relay_<MAC>/...) ----------
     const relayMatch = topic.match(/^relay_([0-9A-Fa-f:]{12})\/?(.*)$/);
     if (relayMatch) {
       const mac = relayMatch[1].toUpperCase();
@@ -311,30 +305,23 @@ function connectMqtt(settings) {
           const m = topic.match(/^posts\/(\d+)\//);
           if (m) receiptData.postId = parseInt(m[1], 10);
         }
-
-        if (receiptData.skipDbCreation) {
-          console.log(`🖨️ kkm/print (печать без записи в БД): №${receiptData.receiptNumber} postId=${receiptData.postId}`);
-          return;
-        }
-
+        if (receiptData.skipDbCreation) return;
         const items = Array.isArray(receiptData.items) ? receiptData.items : [];
         const totalCost = items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
-
         await createReceipt({
-          postId:        receiptData.postId || 0,
-          kind:          receiptData.kind || 'session',
-          operation:     receiptData.operation || 'sell',
-          isAdvance:     !!receiptData.isAdvance,
+          postId: receiptData.postId || 0,
+          kind: receiptData.kind || 'session',
+          operation: receiptData.operation || 'sell',
+          isAdvance: !!receiptData.isAdvance,
           advanceReceiptNumber: receiptData.advanceReceiptNumber ?? null,
           items,
-          totalCost:     Math.round(totalCost * 10) / 10,
-          balanceAfter:  receiptData.balance || 0,
+          totalCost: Math.round(totalCost * 10) / 10,
+          balanceAfter: receiptData.balance || 0,
           paymentMethod: receiptData.paymentMethod || null,
           discountTotal: receiptData.discountTotal || 0,
           correctionInfo: receiptData.correctionInfo || null,
-          timestamp:     receiptData.timestamp,
+          timestamp: receiptData.timestamp,
         });
-        console.log(`✅ Чек сохранён (kkm/print fallback, postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'}, adv=${receiptData.advanceReceiptNumber || '—'})`);
       } catch (err) {
         console.error(`Ошибка сохранения чека из kkm/print:`, err.message);
       }
@@ -346,14 +333,8 @@ function connectMqtt(settings) {
         const rPostId = String(receiptData.postId);
         const rState = getPostState(rPostId);
 
-        if (rState._espOfflineAtStart) {
-          console.log(`[Post ${rPostId}] ℹ️ ESP32 был offline при старте — игнорируем чек ESP32`);
-          return;
-        }
-        if (rState._finalReceiptSentByEsp) {
-          console.log(`[Post ${rPostId}] ℹ️ Чек ESP32 уже применён в этой сессии`);
-          return;
-        }
+        if (rState._espOfflineAtStart) return;
+        if (rState._finalReceiptSentByEsp) return;
 
         const capturedClientCard = rState.clientCard;
         const capturedInitialBalance = rState._clientCardInitialBalance || 0;
@@ -378,9 +359,6 @@ function connectMqtt(settings) {
 
           let totalCost = Math.round(items.reduce((s, i) => s + i.cost, 0) * 100) / 100;
 
-          // ★ Убрана принудительная доводка до аванса.
-          //   Если аванс больше реальных трат — это возврат клиенту,
-          //   а не завышение цены последней услуги.
           if (advanceAmount > 0.01 && items.length > 0) {
             const discrepancy = Math.round((advanceAmount - totalCost) * 100) / 100;
             if (discrepancy > 0.001) {
@@ -428,7 +406,6 @@ function connectMqtt(settings) {
             timestamp: new Date(),
           });
           const finalNumber = finalReceipt.receiptNumber;
-          console.log(`[Post ${rPostId}] 💾 Финальный чек (ESP32) создан в БД: №${finalNumber} (adv=${advanceReceiptNumber}, payment=${paymentMethod || '—'})`);
 
           if (advances.length) {
             await Receipt.updateMany(
@@ -465,7 +442,6 @@ function connectMqtt(settings) {
           rState.servicesUsage = {};
           rState.receiptCount++;
           publishStatus(rPostId);
-          console.log(`[Post ${rPostId}] 📤 QR + печать отправлены с номером №${finalNumber}`);
         })().catch(err => {
           console.error(`[Post ${rPostId}] Ошибка обработки чека ESP32: ${err.message}`);
         });
@@ -478,23 +454,15 @@ function connectMqtt(settings) {
       const postId = topic.split('/')[1];
       try {
         const { command } = JSON.parse(payload);
-        console.log(`📨 Пост ${postId}: ${command}`);
-        if (command.startsWith('program ')) {
-          handleProgram(postId, command.substring(8).trim());
-        } else if (command === 'stop') {
-          stopPost(postId, true, true);
-        } else if (command === 'pause') {
-          togglePause(postId);
-        } else if (command.startsWith('add_balance ')) {
+        if (command.startsWith('program ')) handleProgram(postId, command.substring(8).trim());
+        else if (command === 'stop') stopPost(postId, true, true);
+        else if (command === 'pause') togglePause(postId);
+        else if (command.startsWith('add_balance ')) {
           const amount = parseFloat(command.substring(12).trim());
           if (!isNaN(amount) && amount > 0) addBalance(postId, amount);
-        } else if (command === 'get_status') {
-          publishStatus(postId);
-        } else if (command === 'reset') {
-          resetPost(postId);
-        } else if (command === 'print_receipt') {
-          printReceipt(postId);
-        }
+        } else if (command === 'get_status') publishStatus(postId);
+        else if (command === 'reset') resetPost(postId);
+        else if (command === 'print_receipt') printReceipt(postId);
       } catch (e) {
         console.error(`Ошибка обработки команды для поста ${postId}:`, e.message);
       }
@@ -506,9 +474,7 @@ function connectMqtt(settings) {
         const data = JSON.parse(payload);
         if (!postsState[postId]) postsState[postId] = {};
         const state = postsState[postId];
-        const cc = state.clientCard;
-        const ccb = state.clientCardBalance;
-        const cct = state.clientCardType;
+        const cc = state.clientCard, ccb = state.clientCardBalance, cct = state.clientCardType;
         const newEspBalance = typeof data.balance === 'number' ? data.balance : null;
         const lastEspBalance = typeof state._lastEspBalance === 'number' ? state._lastEspBalance : null;
         if (cc && newEspBalance !== null && lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
@@ -519,9 +485,7 @@ function connectMqtt(settings) {
           }
         }
         Object.assign(state, data, { lastSeen: Date.now() });
-        state.clientCard = cc;
-        state.clientCardBalance = ccb;
-        state.clientCardType = cct;
+        state.clientCard = cc; state.clientCardBalance = ccb; state.clientCardType = cct;
         state._lastEspBalance = newEspBalance;
         if (cc) state.balance = typeof ccb === 'number' ? ccb : 0;
       } catch { /* ignore */ }
@@ -531,20 +495,13 @@ function connectMqtt(settings) {
       const postId = topic.split('/')[1];
       const status = (payload || '').trim().toLowerCase();
       const isOnline = (status === 'online');
-
       if (!postsState[postId]) postsState[postId] = {};
       postsState[postId].online = isOnline;
-
       if (!isOnline) {
         const state = postsState[postId];
         if (state && state.clientCard) {
-          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
-          state.balance = 0;
-          state.busy = false;
+          delete state.clientCard; delete state.clientCardBalance; delete state.clientCardType;
+          state._lastEspBalance = null; state.balance = 0; state.busy = false;
         }
       }
     }
@@ -559,23 +516,14 @@ function connectMqtt(settings) {
 
         if (!cardNumber || cardNumber === 'NULL') {
           const hadCard = !!state.clientCard;
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
+          delete state.clientCard; delete state.clientCardBalance; delete state.clientCardType;
           state._lastEspBalance = null;
           if (hadCard) {
-            state.balance = 0;
-            state.totalPaid = 0;
-            state.receiptCount = 0;
-            state.servicesUsage = {};
-            state.elapsedSec = 0;
-            state.busy = false;
-            state.paused = false;
-            state.currentProgram = null;
+            state.balance = 0; state.totalPaid = 0; state.receiptCount = 0; state.servicesUsage = {}; state.elapsedSec = 0;
+            state.busy = false; state.paused = false; state.currentProgram = null;
             if (state.timer) { clearInterval(state.timer); state.timer = null; }
             mqttClient.publish(`posts/${postId}/command`, JSON.stringify({ command: 'reset' }), { qos: 1 });
-            publishStatus(postId);
-            publishRelayStatus(postId);
+            publishStatus(postId); publishRelayStatus(postId);
           }
           mqttClient.publish(`posts/${postId}/message`, JSON.stringify({ "": "" }), { qos: 0 });
           return;
@@ -583,17 +531,13 @@ function connectMqtt(settings) {
 
         const busyPostId = findPostWithCard(cardNumber, postId);
         if (busyPostId) {
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
+          delete state.clientCard; delete state.clientCardBalance; delete state.clientCardType;
           state._lastEspBalance = null;
           mqttClient.publish(`posts/${postId}/message`,
             JSON.stringify({ ERR: `КАРТА УЖЕ ИСПОЛЬЗУЕТСЯ НА ПОСТУ ${busyPostId}` }), { qos: 1 });
           broadcast({
-            type: 'card-scan',
-            postId, card: cardNumber, balance: 0, cardType: 'busy', known: false,
-            error: `Карта уже используется на посту ${busyPostId}`,
-            timestamp: Date.now(),
+            type: 'card-scan', postId, card: cardNumber, balance: 0, cardType: 'busy', known: false,
+            error: `Карта уже используется на посту ${busyPostId}`, timestamp: Date.now(),
           });
           return;
         }
@@ -602,13 +546,10 @@ function connectMqtt(settings) {
         state.clientCard = cardNumber;
         const clientCard = await ClientCard.findOne({ card: cardNumber });
         if (!clientCard) {
-          console.warn(`⚠️ Пост ${postId}: карта ${cardNumber} не найдена в БД`);
-          delete state.clientCardBalance;
-          delete state.clientCardType;
+          delete state.clientCardBalance; delete state.clientCardType;
           state._lastEspBalance = null;
           broadcast({
-            type: 'card-scan',
-            postId, card: cardNumber, balance: 0, cardType: 'unknown', known: false,
+            type: 'card-scan', postId, card: cardNumber, balance: 0, cardType: 'unknown', known: false,
             timestamp: Date.now(),
           });
           return;
@@ -634,13 +575,8 @@ function connectMqtt(settings) {
         publishStatus(postId);
 
         broadcast({
-          type: 'card-scan',
-          postId,
-          card: clientCard.card,
-          balance: clientCard.balance,
-          cardType: clientCard.type,
-          known: true,
-          timestamp: Date.now(),
+          type: 'card-scan', postId, card: clientCard.card, balance: clientCard.balance,
+          cardType: clientCard.type, known: true, timestamp: Date.now(),
         });
       } catch (err) {
         console.error(`Ошибка обработки posts/${postId}/clientcard:`, err.message);
@@ -659,27 +595,6 @@ function connectMqtt(settings) {
           }
         }
       } catch { /* ignore */ }
-    }
-
-    if (topic === 'reports/request') {
-      try {
-        const { from, to, responseTopic } = JSON.parse(payload);
-        if (!from || !to) return;
-        const start = new Date(from);
-        const end = new Date(to);
-        const receipts = await Receipt.find(
-          reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-        ).sort({ timestamp: -1 });
-        const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-        const translatedReceipts = receipts.map(r => ({
-          ...r.toObject(), items: translateReceiptItems(r.items)
-        }));
-        mqttClient.publish(responseTopic || 'reports/response',
-          JSON.stringify({ totalSum, count: translatedReceipts.length, receipts: translatedReceipts }),
-          { qos: 0 });
-      } catch (err) {
-        console.error('Ошибка MQTT-запроса отчёта:', err);
-      }
     }
   });
 
@@ -744,8 +659,7 @@ const FiscalRegistration = mongoose.model('FiscalRegistration', fiscalRegistrati
 const Setting = mongoose.model('Setting', settingSchema);
 
 initReceiptService({
-  Counter,
-  Shift,
+  Counter, Shift,
   broadcastShiftTotal: (...a) => broadcastShiftTotal(...a),
   publishKkmStatus:    (...a) => publishKkmStatus(...a),
   ensureOpenShift:     (...a) => ensureOpenShift(...a),
@@ -791,6 +705,7 @@ function buildServicesPayloadForPost(postId) {
   const dimmer = p.dimmerMask || {};
   const buttons = p.buttonInputs || {};
   const delays = p.relayDelays || {};
+  const dimmerDosing = p.dimmerDosing || {};
 
   let services = p.services || [];
 
@@ -800,15 +715,10 @@ function buildServicesPayloadForPost(postId) {
       ...Object.keys(relayMask).filter(k => !k.includes('_')),
       ...Object.keys(buttons).filter(k => !k.includes('_')),
     ]);
-    services = [...names].map(name => ({
-      name,
-      price: prices[name] ?? 0,
-      free_time_sec: 0,
-      enabled: true,
-    }));
+    services = [...names].map(name => ({ name, price: prices[name] ?? 0, free_time_sec: 0, enabled: true }));
   }
 
-  return services.map(svc => ({
+  const servicesPayload = services.map(svc => ({
     name: svc.name,
     price: prices[svc.name] ?? svc.price ?? 0,
     free_time_sec: svc.free_time_sec ?? 0,
@@ -820,6 +730,8 @@ function buildServicesPayloadForPost(postId) {
     buttonInput: buttons[svc.name] ?? 0,
     enabled: svc.enabled !== false,
   }));
+
+  return { services: servicesPayload, dimmerDosing };
 }
 
 function publishConfigToAllPosts() {
@@ -835,10 +747,9 @@ function publishConfigToAllPosts() {
   console.log(`📤 publishConfigToAllPosts: публикуем в ${n} постов`);
   for (let i = 1; i <= n; i++) {
     const payload = buildServicesPayloadForPost(i);
-    const names = payload.map(s => s.name).join(', ');
-    console.log(`   posts/${i}/config → ${payload.length} услуг: ${names}`);
+    console.log(`   posts/${i}/config → ${payload.services.length} услуг, дозация:`, payload.dimmerDosing);
     mqttClient.publish(`posts/${i}/config`,
-      JSON.stringify({ services: payload }), { qos: 1, retain: true });
+      JSON.stringify(payload), { qos: 1, retain: true });
   }
   console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
@@ -847,9 +758,7 @@ async function fetchKkmStatusFromDriver() {
   try {
     const r = await axios.get(`${KKM_DRIVER_URL}/status`, { timeout: 2000 });
     return r.data || null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
 async function publishKkmStatus() {
@@ -860,18 +769,9 @@ async function publishKkmStatus() {
 
   if (driverData) {
     let changed = false;
-    if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) {
-      settings.kkmManual.kkNumber = driverData.kkNumber;
-      changed = true;
-    }
-    if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) {
-      settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber;
-      changed = true;
-    }
-    if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) {
-      settings.kkmManual.cashierName = driverData.cashierName;
-      changed = true;
-    }
+    if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) { settings.kkmManual.kkNumber = driverData.kkNumber; changed = true; }
+    if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) { settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber; changed = true; }
+    if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) { settings.kkmManual.cashierName = driverData.cashierName; changed = true; }
     if (changed) saveSettings(settings).catch(() => {});
   }
 
@@ -901,9 +801,7 @@ async function broadcastShiftTotal() {
     broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
     return;
   }
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: currentShift.openedAt }
-  }));
+  const receipts = await Receipt.find(reportReceiptsQuery({ timestamp: { $gte: currentShift.openedAt } }));
   const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
   const payload = JSON.stringify({ total, count: receipts.length });
   if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
@@ -942,7 +840,7 @@ async function loadSettings() {
       for (let i = 1; i <= n; i++) {
         posts[i] = {
           prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-          buttonInputs: {}, relayDelays: {},
+          buttonInputs: {}, relayDelays: {}, dimmerDosing: {},
           services: defaultServices.map(s => ({ ...s }))
         };
       }
@@ -952,8 +850,6 @@ async function loadSettings() {
       console.log('Настройки созданы в БД');
     } else {
       settings = doc.value;
-      console.log('[loadSettings] posts[1].services:',
-        JSON.stringify(settings.posts?.['1']?.services?.map(s => ({ n: s.name, e: s.enabled }))));
       if (!settings.posts) {
         const n = settings.numberOfPosts || 8;
         const posts = {};
@@ -966,6 +862,7 @@ async function loadSettings() {
             dimmerMask: settings.dimmerMask ? { ...settings.dimmerMask } : {},
             buttonInputs: settings.buttonInputs ? { ...settings.buttonInputs } : {},
             relayDelays: settings.relayDelays ? { ...settings.relayDelays } : {},
+            dimmerDosing: {},
             services: services.map(s => ({ ...s }))
           };
         }
@@ -981,10 +878,14 @@ async function loadSettings() {
           if (!settings.posts[i]) {
             settings.posts[i] = {
               prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-              buttonInputs: {}, relayDelays: {}, services: defaultServices2.map(s => ({ ...s }))
+              buttonInputs: {}, relayDelays: {}, dimmerDosing: {},
+              services: defaultServices2.map(s => ({ ...s }))
             };
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
+          }
+          if (!settings.posts[i].dimmerDosing) {
+            settings.posts[i].dimmerDosing = {};
           }
           settings.posts[i].services = settings.posts[i].services.map(s => ({
             ...s, enabled: s.enabled !== false
@@ -1267,8 +1168,6 @@ async function _doPrintReceiptFromBackend(postId) {
     }
   }
 
-  // ★ Убрана принудительная доводка до аванса.
-  //   Реально потраченная сумма фиксируется как есть.
   totalCost = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
 
   if (advanceAmount > 0.01 && items.length > 0) {
@@ -1849,7 +1748,7 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
     const newSettings = req.body;
     if (newSettings.prices || newSettings.relayMask || newSettings.vfdFrequencies ||
         newSettings.dimmerMask || newSettings.buttonInputs || newSettings.relayDelays ||
-        newSettings.services) {
+        newSettings.services || newSettings.dimmerDosing) {
       const n = newSettings.numberOfPosts || settings.numberOfPosts || 8;
       const posts = {};
       const services = newSettings.services || settings.posts?.[1]?.services || [];
@@ -1861,13 +1760,14 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           dimmerMask: newSettings.dimmerMask ? { ...newSettings.dimmerMask } : {},
           buttonInputs: newSettings.buttonInputs ? { ...newSettings.buttonInputs } : {},
           relayDelays: newSettings.relayDelays ? { ...newSettings.relayDelays } : {},
+          dimmerDosing: newSettings.dimmerDosing ? { ...newSettings.dimmerDosing } : {},
           services: services.map(s => ({ ...s, enabled: s.enabled !== false }))
         };
       }
       newSettings.posts = posts;
       delete newSettings.prices; delete newSettings.relayMask; delete newSettings.vfdFrequencies;
       delete newSettings.dimmerMask; delete newSettings.buttonInputs; delete newSettings.relayDelays;
-      delete newSettings.services;
+      delete newSettings.dimmerDosing; delete newSettings.services;
     }
     settings = { ...settings, ...newSettings };
     if (newSettings.posts) {
@@ -1878,6 +1778,9 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
+        }
+        if (!settings.posts[postId].dimmerDosing) {
+          settings.posts[postId].dimmerDosing = {};
         }
         if ('relay' in postData) {
           const rawMac = postData.relay?.mac;
@@ -1941,6 +1844,27 @@ app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   }
 });
 
+// ★ Прокачка диммера
+app.post('/api/posts/:postId/pump-dimmer', auth, adminOnly, (req, res) => {
+  const postId = String(req.params.postId);
+  const dimmer = req.body?.dimmer;
+  const percent = req.body?.percent;
+  if (!dimmer) return res.status(400).json({ error: 'Параметр dimmer обязателен' });
+  if (!mqttClient || !mqttClient.connected) return res.status(503).json({ error: 'MQTT не подключён' });
+  try {
+    const command = {
+      command: 'pump_dimmer',
+      dimmer: dimmer,
+      percent: percent !== undefined ? Number(percent) : undefined
+    };
+    mqttClient.publish(`posts/${postId}/command`, JSON.stringify(command), { qos: 1 });
+    console.log(`📤 [API] posts/${postId}/command → pump_dimmer ${dimmer} (${percent}%)`);
+    res.json({ ok: true, message: `Команда прокачки отправлена на диммер ${dimmer}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------- Пополнение поста (АВАНС) ----------
 app.post('/api/posts/:postId/topup', auth, async (req, res) => {
   const postId = String(req.params.postId);
@@ -1961,7 +1885,6 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
     }
 
     const state = getPostState(postId);
-
     const expectedNewBalance = Math.round((state.balance + amount) * 100) / 100;
 
     const receipt = await createReceipt({
@@ -2527,6 +2450,7 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
   const days = {};
   let grandTotal = 0;
   let grandCount = 0;
+  let clientCardsReceiptsSum = 0;
 
   for (const r of receipts) {
     const dt = new Date(r.timestamp);
@@ -2536,6 +2460,10 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     const pmRaw = r.paymentMethod || 'other';
     const postId = r.postId;
     const totalCost = Number(r.totalCost) || 0;
+
+    if (pmRaw === 'client_card') {
+      clientCardsReceiptsSum += totalCost;
+    }
 
     if (!days[dayKey]) {
       days[dayKey] = { date: dayKey, posts: {}, total: 0, count: 0 };
@@ -2552,8 +2480,6 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     }
     const pmGroup = p.paymentMethods[pmRaw];
 
-    // ★ ИСПРАВЛЕНИЕ: Цена за секунду в рублях, рассчитывается из фактической стоимости,
-    //   так как pricePerSecond из БД/ESP32 может приходить в копейках.
     const items = (r.items || []).map(it => {
       const cost  = Number(it.cost)    || 0;
       const secs  = Number(it.seconds) || 0;
@@ -2612,10 +2538,20 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     })),
   }));
 
+  let totalCardsBalance = 0;
+  try {
+    const agg = await ClientCard.aggregate([{ $group: { _id: null, total: { $sum: "$balance" } } }]);
+    totalCardsBalance = agg[0]?.total || 0;
+  } catch (e) {
+    console.error('Ошибка подсчёта баланса карт:', e);
+  }
+
   res.json({
     from, to,
     grandTotal: Math.round(grandTotal * 100) / 100,
     grandCount,
+    totalCardsBalance: Math.round(totalCardsBalance * 100) / 100,
+    clientCardsReceiptsSum: Math.round(clientCardsReceiptsSum * 100) / 100,
     days: resultDays,
   });
 });

@@ -22,6 +22,8 @@ interface KpiCards {
   cashPct: number;
   noncash: number;
   noncashPct: number;
+  clientCardsBalance: number;
+  clientCardsReceipts: number;
 }
 
 @Component({
@@ -46,23 +48,21 @@ export class ReportListComponent implements OnInit {
   viewMode: ViewMode = 'table';
   search = '';
 
-  kpi: KpiCards = { total: 0, receiptsCount: 0, avgCheck: 0, cash: 0, cashPct: 0, noncash: 0, noncashPct: 0 };
+  kpi: KpiCards = {
+    total: 0, receiptsCount: 0, avgCheck: 0, cash: 0, cashPct: 0, noncash: 0, noncashPct: 0,
+    clientCardsBalance: 0, clientCardsReceipts: 0
+  };
   paymentSlices: { label: string; value: number; pct: number; color: string }[] = [];
   donutStyle = '';
   postBars: { postId: number; sum: number; count: number; pct: number }[] = [];
 
   expanded: Record<string, boolean> = {};
 
-  // ★ Инициализируем значениями по умолчанию, чтобы rangeLabel()
-  //   не падал при первом рендере, пока идёт HTTP-запрос смены.
   start: Date = new Date();
   end: Date = new Date();
 
   private currentShiftOpenedAt: string | null = null;
 
-  // ★ Ключи — сырые коды paymentMethod, которые возвращает бэкенд.
-  //   card_terminal — оплата терминалом (в UI «Безнал»).
-  //   post_balance  — перевод с баланса поста на карту (в отчёты не попадает).
   private static readonly PAY_COLORS: Record<string, string> = {
     cash:          '#2e7d32',
     card_terminal: '#1976d2',
@@ -102,9 +102,6 @@ export class ReportListComponent implements OnInit {
     else this.load();
   }
 
-  // ============================================================
-  // Периоды
-  // ============================================================
   setPeriod(p: Period): void {
     this.period = p;
 
@@ -160,8 +157,6 @@ export class ReportListComponent implements OnInit {
     this.expanded[key] = !this.expanded[key];
   }
 
-  // ★ Метка для UI. Принимает и сырые коды ('cash', 'card_terminal'),
-  //   и (для старых данных) русские метки ('Наличные', 'Безнал').
   payLabel(pm: string | null | undefined): string {
     switch (pm) {
       case 'cash':          return '💵 Наличные';
@@ -177,7 +172,7 @@ export class ReportListComponent implements OnInit {
       case null:
       case undefined:
       case '':              return '—';
-      default:              return pm;   // на случай старых русских меток
+      default:              return pm;
     }
   }
 
@@ -193,8 +188,6 @@ export class ReportListComponent implements OnInit {
   }
 
   rangeLabel(): string {
-    // ★ Защита от undefined/null — на случай, если шаблон отрендерится
-    //   раньше, чем придёт ответ HTTP и установятся start/end.
     const f = (d: Date | null | undefined): string => {
       if (!d) return '—';
       return d.toLocaleString('ru-RU', {
@@ -205,7 +198,6 @@ export class ReportListComponent implements OnInit {
     return `${f(this.start)} — ${f(this.end)}`;
   }
 
-  /** Плоский список чеков для режима «Чеки» (с учётом поиска) */
   get flatReceipts(): any[] {
     if (!this.report) return [];
     const out: any[] = [];
@@ -226,7 +218,6 @@ export class ReportListComponent implements OnInit {
     return out.sort((a, b) => (b.time || b.timestamp || '').localeCompare(a.time || a.timestamp || ''));
   }
 
-  /** Чеки, проходящие поиск (для фильтрации таблицы) */
   receiptMatchesSearch(rcp: any): boolean {
     const q = this.search.trim().toLowerCase();
     if (!q) return true;
@@ -241,9 +232,6 @@ export class ReportListComponent implements OnInit {
     this.load();
   }
 
-  // ============================================================
-  // Хелперы rowspan
-  // ============================================================
   countDayRows(day: GroupedDay): number {
     let n = 0;
     for (const post of day.posts) {
@@ -276,19 +264,14 @@ export class ReportListComponent implements OnInit {
     return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   }
 
-  // ============================================================
-  // Загрузка / PDF
-  // ============================================================
   private load(startInput?: Date, endInput?: Date): void {
     let start: Date;
     let end: Date;
 
     if (startInput && endInput) {
-      // Явный диапазон (day/week/month/shift) — НЕ трогаем часы
       start = new Date(startInput);
       end   = new Date(endInput);
     } else {
-      // Ручной диапазон — обрезаем по дню
       start = this.dateFrom ? new Date(this.dateFrom) : new Date(0);
       start.setHours(0, 0, 0, 0);
       end = this.dateTo ? new Date(this.dateTo) : new Date();
@@ -302,7 +285,7 @@ export class ReportListComponent implements OnInit {
     this.errorMsg = '';
 
     this.receiptService.loadGrouped(start, end).subscribe({
-      next: (r) => {
+      next: (r: any) => {
         this.report = r;
         this.computeAnalytics();
         this.loading = false;
@@ -310,7 +293,10 @@ export class ReportListComponent implements OnInit {
       error: (err) => {
         console.error('[reports] grouped load failed:', err);
         this.report = null;
-        this.kpi = { total: 0, receiptsCount: 0, avgCheck: 0, cash: 0, cashPct: 0, noncash: 0, noncashPct: 0 };
+        this.kpi = {
+          total: 0, receiptsCount: 0, avgCheck: 0, cash: 0, cashPct: 0, noncash: 0, noncashPct: 0,
+          clientCardsBalance: 0, clientCardsReceipts: 0
+        };
         this.paymentSlices = [];
         this.postBars = [];
         this.donutStyle = '';
@@ -320,9 +306,8 @@ export class ReportListComponent implements OnInit {
     });
   }
 
-  /** KPI + диаграммы по загруженной группировке */
   private computeAnalytics(): void {
-    const rep = this.report;
+    const rep: any = this.report;
     if (!rep) return;
 
     let total = rep.grandTotal ?? 0;
@@ -335,23 +320,22 @@ export class ReportListComponent implements OnInit {
       for (const post of day.posts) {
         let postSum = 0;
         for (const pm of post.paymentMethods) {
-          const pmSum = pm.receipts.reduce((s, r) => s + (r.total ?? 0), 0);
-          // ★ Ключ — исходный paymentMethod из API. Ожидаем сырые коды
-          //   ('cash', 'card_terminal'), но на случай старых данных
-          //   подстрахуемся и русскими метками ниже.
+          const pmSum = pm.receipts.reduce((s: number, r: any) => s + (r.total ?? 0), 0);
           const key = pm.paymentMethod || 'other';
           payMap.set(key, (payMap.get(key) || 0) + pmSum);
           postSum += pmSum;
         }
-        const prev = postMap.get(post.postId) || { sum: 0, count: 0 };
-        prev.sum += postSum;
-        prev.count += post.paymentMethods.reduce((s, pm) => s + pm.receipts.length, 0);
-        postMap.set(post.postId, prev);
+
+        // ★ Пропускаем "Пост 0" (или null/undefined) в графике "Выручка по постам"
+        if (post.postId && Number(post.postId) !== 0) {
+          const prev = postMap.get(post.postId) || { sum: 0, count: 0 };
+          prev.sum += postSum;
+          prev.count += post.paymentMethods.reduce((s: number, pm: any) => s + pm.receipts.length, 0);
+          postMap.set(post.postId, prev);
+        }
       }
     }
 
-    // ★ Cash считаем и по сырому 'cash', и по старой русской метке 'Наличные'.
-    //   Если бэкенд ещё не обновлён — KPI всё равно покажут правильную сумму.
     const cash =
       (payMap.get('cash')      || 0) +
       (payMap.get('Наличные')  || 0);
@@ -365,9 +349,10 @@ export class ReportListComponent implements OnInit {
       cashPct: total > 0 ? Math.round((cash / total) * 100) : 0,
       noncash,
       noncashPct: total > 0 ? Math.round((noncash / total) * 100) : 0,
+      clientCardsBalance: rep.totalCardsBalance || 0,
+      clientCardsReceipts: rep.clientCardsReceiptsSum || 0,
     };
 
-    // Легенда: метку формируем через payLabel() по сырому ключу
     const slices: { label: string; value: number; pct: number; color: string }[] = [];
     const sortedPay = [...payMap.entries()].sort((a, b) => b[1] - a[1]);
     for (const [key, value] of sortedPay) {
@@ -383,7 +368,6 @@ export class ReportListComponent implements OnInit {
     }
     this.paymentSlices = slices;
 
-    // Donut — conic-gradient через накопление процентов
     let cum = 0;
     const stops: string[] = [];
     for (const s of slices) {
@@ -393,7 +377,6 @@ export class ReportListComponent implements OnInit {
     }
     this.donutStyle = slices.length ? `background: conic-gradient(${stops.join(', ')})` : '';
 
-    // Бары по постам
     const maxPost = Math.max(...[...postMap.values()].map(p => p.sum), 1);
     this.postBars = [...postMap.entries()]
       .map(([postId, v]) => ({ postId, sum: v.sum, count: v.count, pct: Math.round((v.sum / maxPost) * 100) }))

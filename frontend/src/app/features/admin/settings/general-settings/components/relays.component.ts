@@ -58,7 +58,6 @@ import { Subject, takeUntil } from 'rxjs';
               <span *ngIf="!r.assignedPost" class="muted">свободно</span>
             </td>
             <td>
-              <!-- Кнопка «снять» доступна ВСЕГДА для любого занятого реле (не только выбранного поста) -->
               <button *ngIf="!r.assignedPost" type="button" class="mini-btn assign"
                       [disabled]="assignBusy"
                       (click)="assignRelay(r.mac)">
@@ -114,6 +113,7 @@ import { Subject, takeUntil } from 'rxjs';
         </select>
       </label>
     </div>
+
     <form *ngIf="form" [formGroup]="form" (ngSubmit)="save()">
       <div *ngFor="let service of serviceKeys" class="relay-group">
         <strong>{{ service }}</strong>
@@ -125,12 +125,28 @@ import { Subject, takeUntil } from 'rxjs';
             </label>
           </div>
         </div>
+        
         <div class="relay-section">
           <span class="section-label">Диммеры (4 бита):</span>
           <div [formGroupName]="service" class="relay-checkboxes">
             <label *ngFor="let d of dimmerNumbers" class="relay-label">
               <input type="checkbox" [formControlName]="'dimmer' + d" /> D{{ d }}
             </label>
+          </div>
+        </div>
+
+        <!-- ★ Блок дозации и прокачки (появляется, если выбран хотя бы один диммер) -->
+        <div class="dosing-section" *ngIf="hasAnyDimmerSelected(service)">
+          <div *ngFor="let d of dimmerNumbers" class="dimmer-dosing-row">
+            <ng-container *ngIf="form.get(service + '.dimmer' + d)?.value">
+              <label>
+                D{{ d }} дозация:
+                <input type="number" min="0" max="100" [(ngModel)]="dosingConfig[service][d]" [ngModelOptions]="{standalone: true}"> %
+              </label>
+              <button type="button" class="pump-btn" (click)="pumpDimmer(service, d)" [disabled]="pumpingDimmer">
+                🚿 Прокачать
+              </button>
+            </ng-container>
           </div>
         </div>
       </div>
@@ -145,8 +161,20 @@ import { Subject, takeUntil } from 'rxjs';
     .section-label { font-size: 0.85rem; color: #555; margin-right: 0.5rem; }
     .relay-checkboxes { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.3rem; }
     .relay-label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.9rem; }
+    
+    /* ★ Стили для дозации */
+    .dosing-section { margin-top: 8px; padding: 8px 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; }
+    .dimmer-dosing-row { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+    .dimmer-dosing-row:last-child { margin-bottom: 0; }
+    .dimmer-dosing-row label { display: flex; align-items: center; gap: 4px; font-size: 0.85rem; color: #166534; margin: 0; }
+    .dimmer-dosing-row input { width: 60px; padding: 2px 4px; border: 1px solid #86efac; border-radius: 4px; text-align: right; }
+    .pump-btn { background: #22c55e; color: white; border: none; border-radius: 4px; padding: 2px 8px; font-size: 0.75rem; cursor: pointer; transition: 0.2s; }
+    .pump-btn:hover:not(:disabled) { background: #16a34a; }
+    .pump-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    
     .save-btn { background: #27ae60; color: white; border: none; padding: 8px 16px; border-radius: 30px; cursor: pointer; margin-top: 1rem; }
     .loading { text-align: center; color: #666; }
+    
     /* --- topics card --- */
     .topics-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 1rem; margin-bottom: 1.25rem; }
     .topics-header { display: flex; justify-content: space-between; align-items: center; }
@@ -191,23 +219,20 @@ export class RelaysComponent implements OnInit, OnDestroy {
   postIds: number[] = [];
   private destroy$ = new Subject<void>();
 
-  // ===== Топики реле (relay_<MAC>/...) =====
+  dosingConfig: Record<string, Record<number, number>> = {};
+  pumpingDimmer = false;
+
   relays: RelayInfo[] = [];
   relaysLoading = false;
   relaysError = '';
   assignBusy = false;
   currentRelayMac: string | null = null;
   manualMac = '';
-  /** Пост для ручного назначения по MAC (по умолчанию = выбранный вверху) */
   get manualPost(): number { return this._manualPost ?? this.selectedPost; }
   set manualPost(v: number) { this._manualPost = Number(v); }
   private _manualPost: number | null = null;
-
-  /** Автообновление списка реле и статусов каждые 10 секунд */
   autoRefresh = true;
   private refreshTimer: any = null;
-
-  /** Валидность MAC, введённого вручную (xx:xx:xx:xx:xx:xx) */
   get validManualMac(): boolean {
     return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(this.manualMac.trim().toUpperCase());
   }
@@ -228,32 +253,26 @@ export class RelaysComponent implements OnInit, OnDestroy {
     this.loadRelays();
     this.startAutoRefresh();
 
-    // Мгновенное обновление статусов реле при любых MQTT-сообщениях relay_<MAC>/*
-    // (бэкенд рассылает type:'relay-status' через WebSocket realtime)
-    this.realtime.messages$
-      .pipe(takeUntil(this.destroy$))
-      .subscribe((msg: any) => {
-        if (msg?.type === 'relay-status' && msg.mac) {
-          const mac = String(msg.mac).toUpperCase();
-          const r = this.relays.find(x => x.mac === mac);
-          if (r && msg.state) {
-            // Статус онлайн/офлайн — только из /lwt (msg.subTopic === 'lwt' задаёт state.online на бэкенде)
-            if (msg.subTopic === 'lwt') r.online = msg.state.online;
-            else r.online = msg.state.online ?? r.online;
-            r.ip = msg.state.ip ?? r.ip;
-            r.active = msg.state.active ?? r.active;
-            r.statusRelay = msg.state.statusRelay ?? r.statusRelay;
-            r.lastSeen = msg.state.lastSeen ?? r.lastSeen;
-          } else if (!r) {
-            this.loadRelays(); // новое реле появилось на брокере — обновить список
-          }
-        }
-        if (msg?.type === 'relay-assigned') { this.loadRelays(); }
-      });
+    this.realtime.messages$.pipe(takeUntil(this.destroy$)).subscribe((msg: any) => {
+      if (msg?.type === 'relay-status' && msg.mac) {
+        const mac = String(msg.mac).toUpperCase();
+        const r = this.relays.find(x => x.mac === mac);
+        if (r && msg.state) {
+          if (msg.subTopic === 'lwt') r.online = msg.state.online;
+          else r.online = msg.state.online ?? r.online;
+          r.ip = msg.state.ip ?? r.ip;
+          r.active = msg.state.active ?? r.active;
+          r.statusRelay = msg.state.statusRelay ?? r.statusRelay;
+          r.lastSeen = msg.state.lastSeen ?? r.lastSeen;
+        } else if (!r) this.loadRelays();
+      }
+      if (msg?.type === 'relay-assigned') this.loadRelays();
+    });
 
-    this.settingsUpdate.settingsUpdated$
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(() => { this.loadPostSettings(); this.loadRelays(); });
+    this.settingsUpdate.settingsUpdated$.pipe(takeUntil(this.destroy$)).subscribe(() => {
+      this.loadPostSettings();
+      this.loadRelays();
+    });
   }
 
   ngOnDestroy(): void {
@@ -262,13 +281,10 @@ export class RelaysComponent implements OnInit, OnDestroy {
     this.destroy$.complete();
   }
 
-  /** Автообновление списка каждые 10 с (только GET, без тяжёлого discover) */
   startAutoRefresh(): void {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
     this.refreshTimer = setInterval(() => {
-      if (this.autoRefresh && !this.assignBusy && !this.relaysLoading) {
-        this.loadRelays();
-      }
+      if (this.autoRefresh && !this.assignBusy && !this.relaysLoading) this.loadRelays();
     }, 10000);
   }
 
@@ -276,9 +292,15 @@ export class RelaysComponent implements OnInit, OnDestroy {
     this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
       const services = ps.services || [];
       this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
-
-      // Актуальное назначение реле посту (posts[i].relay.mac)
       this.currentRelayMac = ps.relay?.mac ? String(ps.relay.mac).toUpperCase() : null;
+
+      this.dosingConfig = ps.dimmerDosing ? structuredClone(ps.dimmerDosing) : {};
+      this.serviceKeys.forEach(name => {
+        if (!this.dosingConfig[name]) this.dosingConfig[name] = {};
+        for (let d = 1; d <= 4; d++) {
+          if (this.dosingConfig[name][d] === undefined) this.dosingConfig[name][d] = 100;
+        }
+      });
 
       const currentMask: Record<string, any> = ps.relayMask || {};
       const currentDimmer: Record<string, any> = ps.dimmerMask || {};
@@ -299,6 +321,8 @@ export class RelaysComponent implements OnInit, OnDestroy {
     const raw = this.form.value;
     const relayMask: any = {};
     const dimmerMask: any = {};
+    const dimmerDosing: any = {};
+
     this.serviceKeys.forEach(name => {
       const group = raw[name];
       let mask = 0, dimmer = 0;
@@ -306,49 +330,57 @@ export class RelaysComponent implements OnInit, OnDestroy {
       for (let d = 1; d <= 4; d++) if (group['dimmer' + d]) dimmer |= (1 << (d - 1));
       relayMask[name] = mask;
       dimmerMask[name] = dimmer;
+      dimmerDosing[name] = { ...this.dosingConfig[name] };
     });
-    this.admin.updatePostSettings(this.selectedPost, { relayMask, dimmerMask })
-      .subscribe(() => alert('Настройки реле и диммеров для поста ' + this.selectedPost + ' сохранены'));
+
+    this.admin.updatePostSettings(this.selectedPost, { relayMask, dimmerMask, dimmerDosing })
+      .subscribe(() => alert('Настройки реле, диммеров и дозации сохранены'));
   }
 
-  // ================= Топики реле (relay_<MAC>/...) =================
+  hasAnyDimmerSelected(service: string): boolean {
+    const group = this.form.get(service);
+    if (!group) return false;
+    return this.dimmerNumbers.some(d => group.get('dimmer' + d)?.value === true);
+  }
 
-  /** Загрузить список реле с брокера */
-  loadRelays(discover = false): void {
-    this.relaysLoading = true;
-    this.relaysError = '';
-    this.admin.getRelays(discover).pipe(takeUntil(this.destroy$)).subscribe({
-      next: (list) => {
-        this.relays = list || [];
-        this.relaysLoading = false;
+  pumpDimmer(service: string, dimmer: number): void {
+    if (this.pumpingDimmer) return;
+    this.pumpingDimmer = true;
+    const percent = this.dosingConfig[service]?.[dimmer] ?? 100;
+    this.admin.pumpDimmer(this.selectedPost, `D${dimmer}`, percent).subscribe({
+      next: () => {
+        this.pumpingDimmer = false;
+        alert(`Команда прокачки D${dimmer} (${percent}%) отправлена`);
       },
       error: (err) => {
-        this.relaysLoading = false;
-        this.relaysError = 'Не удалось получить список реле: ' + (err?.error?.error || err?.message || 'ошибка запроса') +
-          '. Убедитесь, что бэкенд и MQTT-брокер запущены.';
+        this.pumpingDimmer = false;
+        alert(`Ошибка прокачки D${dimmer}: ` + (err?.error?.error || err?.message));
       }
     });
   }
 
-  /** Принудительное обнаружение реле на брокере */
-  discoverRelays(): void {
-    this.loadRelays(true);
+  loadRelays(discover = false): void {
+    this.relaysLoading = true;
+    this.relaysError = '';
+    this.admin.getRelays(discover).pipe(takeUntil(this.destroy$)).subscribe({
+      next: (list) => { this.relays = list || []; this.relaysLoading = false; },
+      error: (err) => {
+        this.relaysLoading = false;
+        this.relaysError = 'Не удалось получить список реле: ' + (err?.error?.error || err?.message);
+      }
+    });
   }
 
-  /** Статус реле — берётся ТОЛЬКО из топика relay_<MAC>/lwt (last will).
-   *  online === true → ● онлайн; false/unknown → ○ офлайн. */
-  online(r: RelayInfo): boolean {
-    return r.online === true;
-  }
+  discoverRelays(): void { this.loadRelays(true); }
 
-  /** Человекочитаемая подпись источника статуса для диагностики */
+  online(r: RelayInfo): boolean { return r.online === true; }
+
   statusTitle(r: RelayInfo): string {
     if (r.online === true) return 'lwt · online';
     if (r.online === false) return 'lwt · offline';
     return 'нет lwt · offline';
   }
 
-  /** Назначить выбранному посту реле (mac = null — снять назначение) */
   assignRelay(mac: string | null): void {
     if (this.assignBusy) return;
     this.assignBusy = true;
@@ -358,15 +390,10 @@ export class RelaysComponent implements OnInit, OnDestroy {
         this.currentRelayMac = mac ? String(mac).toUpperCase() : null;
         this.loadRelays();
       },
-      error: (err) => {
-        this.assignBusy = false;
-        const msg = err?.error?.error || err?.message || 'неизвестная ошибка';
-        alert('Не удалось назначить реле: ' + msg);
-      }
+      error: (err) => { this.assignBusy = false; alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message)); }
     });
   }
 
-  /** Снять реле с того поста, которому оно реально назначено (кнопка есть у каждой занятой строки) */
   unassignRelay(r: RelayInfo): void {
     if (this.assignBusy || !r.assignedPost) return;
     const post = Number(r.assignedPost);
@@ -374,19 +401,15 @@ export class RelaysComponent implements OnInit, OnDestroy {
     this.admin.assignPostRelay(post, null).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         this.assignBusy = false;
-        this.selectedPost = post;              // показать освобождённый пост — можно сразу назначить другое реле
-        this.currentRelayMac = null;           // реле снято — блок топиков для выбранного поста скрывается
+        this.selectedPost = post;
+        this.currentRelayMac = null;
         this.loadPostSettings();
         this.loadRelays();
       },
-      error: (err) => {
-        this.assignBusy = false;
-        alert('Не удалось снять реле с поста ' + post + ': ' + (err?.error?.error || err?.message || 'неизвестная ошибка'));
-      }
+      error: (err) => { this.assignBusy = false; alert('Не удалось снять реле: ' + (err?.error?.error || err?.message)); }
     });
   }
 
-  /** Назначить реле по MAC, введённому вручную (пост берётся из manualPost) */
   assignManual(): void {
     if (!this.validManualMac) return;
     const mac = this.manualMac.trim().toUpperCase();
@@ -395,16 +418,13 @@ export class RelaysComponent implements OnInit, OnDestroy {
     this.admin.assignPostRelay(post, mac).pipe(takeUntil(this.destroy$)).subscribe({
       next: () => {
         this.assignBusy = false;
-        this.selectedPost = post;          // показать блок топиков этого поста
+        this.selectedPost = post;
         this.currentRelayMac = mac;
         this.manualMac = '';
         this.loadPostSettings();
         this.loadRelays();
       },
-      error: (err) => {
-        this.assignBusy = false;
-        alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message || 'неизвестная ошибка'));
-      }
+      error: (err) => { this.assignBusy = false; alert('Не удалось назначить реле: ' + (err?.error?.error || err?.message)); }
     });
   }
 }

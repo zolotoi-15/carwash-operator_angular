@@ -35,7 +35,6 @@ h2 {
 
   &.simple {
     padding: 16px;
-
     h3 { margin: 0 0 6px; font-size: 15px; color: #0f172a; }
     p  { margin: 0 0 10px; font-size: 13px; color: #64748b; }
   }
@@ -75,7 +74,6 @@ h2 {
   }
 }
 
-// ---------- Группы MQTT ----------
 .mqtt-group {
   border: 1px solid #e2e8f0;
   border-radius: 6px;
@@ -114,7 +112,6 @@ h2 {
   }
 }
 
-// ---------- Строки услуг в блоках Цены/Частоты/Реле/Задержки/Кнопки ----------
 .service-row {
   padding: 10px 0;
   border-bottom: 1px dashed #e2e8f0;
@@ -145,38 +142,6 @@ h2 {
   }
 }
 
-// ---------- Чекбоксы реле/диммеров ----------
-.check-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 6px;
-
-  .row-label {
-    font-size: 12px;
-    color: #64748b;
-    min-width: 130px;
-  }
-
-  .checks {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-
-    .check {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      font-size: 12px;
-      color: #334155;
-      cursor: pointer;
-
-      input { margin: 0; }
-    }
-  }
-}
-
-// ---------- Таблица услуг ----------
 .services-table {
   width: 100%;
   border-collapse: collapse;
@@ -241,7 +206,6 @@ h2 {
   }
 }
 
-// ---------- Кнопки в блоке «Услуги» ----------
 .services-actions {
   display: flex;
   gap: 8px;
@@ -258,7 +222,6 @@ h2 {
   }
 }
 
-// ---------- Общая кнопка ----------
 button {
   padding: 8px 14px;
   border: none;
@@ -270,4 +233,16 @@ button {
   transition: background 0.15s ease;
 
   &:hover { background: #2563eb; }
+}
+
+@media (max-width: 640px) {
+  .settings-page { padding: 12px; }
+
+  .mqtt-group {
+    padding: 10px 12px;
+    label input { max-width: 100%; }
+  }
+
+  .section-body > label input,
+  .section-body > label select { max-width: 100%; }
 }
