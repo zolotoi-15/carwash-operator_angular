@@ -60,9 +60,20 @@ export class ReportListComponent implements OnInit {
 
   private currentShiftOpenedAt: string | null = null;
 
+  // ★ Ключи — сырые коды paymentMethod, которые возвращает бэкенд.
+  //   card_terminal — оплата терминалом (в UI «Безнал»).
+  //   post_balance  — перевод с баланса поста на карту (в отчёты не попадает,
+  //                   но цвет пригодится, если когда-то попадёт).
   private static readonly PAY_COLORS: Record<string, string> = {
-    cash: '#2e7d32', client_card: '#1565c0', card: '#1976d2',
-    sbp: '#6a1b9a', qr: '#8e24aa', online: '#00838f', other: '#757575',
+    cash:          '#2e7d32',
+    card_terminal: '#1976d2',
+    card:          '#1976d2',
+    client_card:   '#1565c0',
+    post_balance:  '#6b7280',
+    sbp:           '#6a1b9a',
+    qr:            '#8e24aa',
+    online:        '#00838f',
+    other:         '#757575',
   };
 
   ngOnInit(): void {
@@ -150,20 +161,24 @@ export class ReportListComponent implements OnInit {
     this.expanded[key] = !this.expanded[key];
   }
 
+  // ★ Метка для UI. Принимает и сырые коды ('cash', 'card_terminal'),
+  //   и (для старых данных) русские метки ('Наличные', 'Безнал').
   payLabel(pm: string | null | undefined): string {
     switch (pm) {
-      case 'cash': return '💵 Наличные';
-      case 'client_card': return '💳 Карта клиента';
-      case 'card': return '💳 Безнал';
-      case 'sbp': return '🔗 СБП';
-      case 'qr': return '🔗 СБП (QR)';
-      case 'online': return '🌐 Онлайн';
-      case 'topup': return '💰 Пополнение';
-      case 'post_balance': return '🔁 Перевод с поста';
+      case 'cash':          return '💵 Наличные';
+      case 'card_terminal': return '💳 Безнал';
+      case 'card':          return '💳 Безнал';
+      case 'client_card':   return '💳 Карта клиента';
+      case 'sbp':           return '🔗 СБП';
+      case 'qr':            return '🔗 СБП (QR)';
+      case 'online':        return '🌐 Онлайн';
+      case 'topup':         return '💰 Пополнение';
+      case 'post_balance':  return '🔁 Перевод с поста';
+      case 'other':         return '—';
       case null:
       case undefined:
-      case '': return '—';
-      default: return pm;
+      case '':              return '—';
+      default:              return pm;   // на случай старых русских меток
     }
   }
 
@@ -270,9 +285,11 @@ export class ReportListComponent implements OnInit {
     let end: Date;
 
     if (startInput && endInput) {
+      // Явный диапазон (day/week/month/shift) — НЕ трогаем часы
       start = new Date(startInput);
       end   = new Date(endInput);
     } else {
+      // Ручной диапазон — обрезаем по дню
       start = this.dateFrom ? new Date(this.dateFrom) : new Date(0);
       start.setHours(0, 0, 0, 0);
       end = this.dateTo ? new Date(this.dateTo) : new Date();
@@ -320,7 +337,11 @@ export class ReportListComponent implements OnInit {
         let postSum = 0;
         for (const pm of post.paymentMethods) {
           const pmSum = pm.receipts.reduce((s, r) => s + (r.total ?? 0), 0);
-          payMap.set(pm.paymentMethod || 'other', (payMap.get(pm.paymentMethod || 'other') || 0) + pmSum);
+          // ★ Ключ — исходный paymentMethod из API. Ожидаем сырые коды
+          //   ('cash', 'card_terminal'), но на случай старых данных
+          //   подстрахуемся и русскими метками ниже.
+          const key = pm.paymentMethod || 'other';
+          payMap.set(key, (payMap.get(key) || 0) + pmSum);
           postSum += pmSum;
         }
         const prev = postMap.get(post.postId) || { sum: 0, count: 0 };
@@ -330,7 +351,11 @@ export class ReportListComponent implements OnInit {
       }
     }
 
-    const cash = payMap.get('cash') || 0;
+    // ★ Cash считаем и по сырому 'cash', и по старой русской метке 'Наличные'.
+    //   Если бэкенд ещё не обновлён — KPI всё равно покажут правильную сумму.
+    const cash =
+      (payMap.get('cash')      || 0) +
+      (payMap.get('Наличные')  || 0);
     const noncash = total - cash;
 
     this.kpi = {
@@ -343,6 +368,7 @@ export class ReportListComponent implements OnInit {
       noncashPct: total > 0 ? Math.round((noncash / total) * 100) : 0,
     };
 
+    // Легенда: метку формируем через payLabel() по сырому ключу
     const slices: { label: string; value: number; pct: number; color: string }[] = [];
     const sortedPay = [...payMap.entries()].sort((a, b) => b[1] - a[1]);
     for (const [key, value] of sortedPay) {
@@ -352,11 +378,13 @@ export class ReportListComponent implements OnInit {
         label: this.payLabel(key),
         value,
         pct,
-        color: ReportListComponent.PAY_COLORS[key] || ReportListComponent.PAY_COLORS['other'],
+        color: ReportListComponent.PAY_COLORS[key]
+            || ReportListComponent.PAY_COLORS['other'],
       });
     }
     this.paymentSlices = slices;
 
+    // Donut — conic-gradient через накопление процентов
     let cum = 0;
     const stops: string[] = [];
     for (const s of slices) {
@@ -366,6 +394,7 @@ export class ReportListComponent implements OnInit {
     }
     this.donutStyle = slices.length ? `background: conic-gradient(${stops.join(', ')})` : '';
 
+    // Бары по постам
     const maxPost = Math.max(...[...postMap.values()].map(p => p.sum), 1);
     this.postBars = [...postMap.entries()]
       .map(([postId, v]) => ({ postId, sum: v.sum, count: v.count, pct: Math.round((v.sum / maxPost) * 100) }))
