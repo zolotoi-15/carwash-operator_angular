@@ -1,0 +1,5 @@
+{
+  "brokerUrl": "mqtt://192.168.31.211:1883",
+  "username": "admin",
+  "password": "Zavulon56"
+}

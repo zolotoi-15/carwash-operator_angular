@@ -56,7 +56,7 @@ function generateAngularServerAppEngineManifest(i18nOptions, allowedHosts, baseH
         for (const locale of i18nOptions.inlineLocales) {
             const { subPath } = i18nOptions.locales[locale];
             const importPath = `${subPath ? `${subPath}/` : ''}${MAIN_SERVER_OUTPUT_FILENAME}`;
-            entryPoints[subPath] = `() => import('./${importPath}')`;
+            entryPoints[subPath] = `() => import(${JSON.stringify(`./${importPath}`)})`;
             supportedLocales[locale] = subPath;
         }
     }
@@ -71,12 +71,12 @@ function generateAngularServerAppEngineManifest(i18nOptions, allowedHosts, baseH
     }
     const manifestContent = `
 export default {
-  basePath: '${basePath}',
+  basePath: ${JSON.stringify(basePath)},
   allowedHosts: ${JSON.stringify(allowedHosts, undefined, 2)},
   supportedLocales: ${JSON.stringify(supportedLocales, undefined, 2)},
   entryPoints: {
     ${Object.entries(entryPoints)
-        .map(([key, value]) => `'${key}': ${value}`)
+        .map(([key, value]) => `${JSON.stringify(key)}: ${value}`)
         .join(',\n    ')}
   },
 };
@@ -123,8 +123,11 @@ function generateAngularServerAppManifest(additionalHtmlOutputFiles, outputFiles
             // This is needed because JavaScript engines script parser convert `\r\n` to `\n` in template literals,
             // which can result in an incorrect byte length.
             const size = (0, node_vm_1.runInThisContext)(`new TextEncoder().encode(\`${escapedContent}\`).byteLength`);
+            // Asset paths are derived from route paths and can contain arbitrary characters, so they are
+            // serialized rather than interpolated into the generated executable manifest.
             serverAssets[file.path] =
-                `{size: ${size}, hash: '${file.hash}', text: () => import('./${jsChunkFilePath}').then(m => m.default)}`;
+                `{size: ${size}, hash: ${JSON.stringify(file.hash)}, ` +
+                    `text: () => import(${JSON.stringify(`./${jsChunkFilePath}`)}).then(m => m.default)}`;
         }
     }
     // When routes have been extracted, mappings are no longer needed, as preloads will be included in the metadata.
@@ -136,13 +139,13 @@ function generateAngularServerAppManifest(additionalHtmlOutputFiles, outputFiles
 export default {
   bootstrap: () => import('./main.server.mjs').then(m => m.default),
   inlineCriticalCss: ${inlineCriticalCss},
-  baseHref: '${baseHref}',
+  baseHref: ${JSON.stringify(baseHref)},
   locale: ${JSON.stringify(locale)},
   routes: ${JSON.stringify(routes, undefined, 2)},
   entryPointToBrowserMapping: ${JSON.stringify(entryPointToBrowserMapping, undefined, 2)},
   assets: {
     ${Object.entries(serverAssets)
-        .map(([key, value]) => `'${key}': ${value}`)
+        .map(([key, value]) => `${JSON.stringify(key)}: ${value}`)
         .join(',\n    ')}
   },
 };
