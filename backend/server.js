@@ -209,13 +209,10 @@ function connectMqtt(settings) {
   });
 
   // ---------- Топики реле (relay_<MAC>/...) ----------
-  // Подписка на все подтопики назначенных постам реле:
-  // relay_<MAC>, relay_<MAC>/postnum, relay_<MAC>/udp, relay_<MAC>/status_relay,
-  // relay_<MAC>/active, relay_<MAC>/ip, relay_<MAC>/lwt
   function subscribeRelayTopics() {
     if (!mqttClient || !mqttClient.connected) return;
     const subs = new Set([
-      'relay_+',              // базовый топик (общий статус/команды ретранслятора)
+      'relay_+',
       'relay_+/postnum',
       'relay_+/udp',
       'relay_+/status_relay',
@@ -231,16 +228,8 @@ function connectMqtt(settings) {
     console.log(`📡 Подписка на топики реле активна (${subs.size} шаблонов)`);
   }
 
-  /**
-   * Активное перечитывание retained-топиков реле сразу после подключения.
-   * Ключевой момент: ESP32 публикует relay_<MAC>/lwt с флагом retain — подписываясь
-   * на relay_+/lwt ДО перечисленных ниже повторных подписок и делая «переподписку»
-   * с задержкой, мы гарантированно получаем retained lwt каждого реле и проставляем
-   * онлайн/офлайн без ожидания следующих сообщений устройства.
-   */
   function refreshRelayRetained() {
     if (!mqttClient || !mqttClient.connected) return;
-    // Повторная подписка заставляет брокера заново доставить retained-сообщения.
     for (const subT of ['relay_+/lwt', 'relay_+/ip', 'relay_+/active', 'relay_+/status_relay']) {
       try {
         mqttClient.unsubscribe(subT, () => {
@@ -253,13 +242,11 @@ function connectMqtt(settings) {
     setTimeout(() => discoverRelayMacsFromBroker().catch(() => {}), 1200);
   }
 
-  /** MAC реле, назначенного посту (из настроек), или null */
   function getRelayMacForPost(postId) {
     const p = settings.posts?.[postId] || {};
     return (p.relay && p.relay.mac) ? String(p.relay.mac).toUpperCase() : null;
   }
 
-  /** Публикация команды в топик назначенного поста реле (relay_<MAC>/...) */
   function publishToPostRelay(postId, subTopic, payloadObj, opts = { qos: 1 }) {
     if (!mqttClient || !mqttClient.connected) return false;
     const mac = getRelayMacForPost(postId);
@@ -294,9 +281,6 @@ function connectMqtt(settings) {
         rs.lastSeen = Date.now();
         switch (sub) {
           case 'lwt':
-            // Единственный источник истины статуса — топик /lwt (last will):
-            // живое устройство публикует retained-состояние (часто пустое),
-            // при обрыве связи брокер публикует will → офлайн.
             rs.online = parseRelayLwt(payload);
             rs.lwtRaw = payload.length > 64 ? payload.slice(0, 64) + '…' : payload;
             rs.lwtAt = Date.now();
@@ -318,7 +302,6 @@ function connectMqtt(settings) {
       } catch (e) {
         console.warn(`⚠️ Ошибка обработки сообщения реле ${topic}: ${e.message}`);
       }
-      // сообщения реле не обрабатываем дальше как posts/*
     }
 
     if (topic === 'kkm/print') {
@@ -372,7 +355,6 @@ function connectMqtt(settings) {
           return;
         }
 
-        // ⭐ CAPTURE state SYNCHRONOUSLY до любых await — иначе clientcard: NULL затрёт данные
         const capturedClientCard = rState.clientCard;
         const capturedInitialBalance = rState._clientCardInitialBalance || 0;
 
@@ -396,12 +378,17 @@ function connectMqtt(settings) {
 
           let totalCost = Math.round(items.reduce((s, i) => s + i.cost, 0) * 100) / 100;
 
+          // ★ Убрана принудительная доводка до аванса.
+          //   Если аванс больше реальных трат — это возврат клиенту,
+          //   а не завышение цены последней услуги.
           if (advanceAmount > 0.01 && items.length > 0) {
             const discrepancy = Math.round((advanceAmount - totalCost) * 100) / 100;
             if (discrepancy > 0.001) {
-              items[items.length - 1].cost = Math.round((items[items.length - 1].cost + discrepancy) * 100) / 100;
-              totalCost = advanceAmount;
-              console.log(`[Post ${rPostId}] ⚖️ Доводим до аванса: +${discrepancy} ₽`);
+              console.log(
+                `[Post ${rPostId}] ℹ️ Аванс ${advanceAmount.toFixed(2)} ₽, ` +
+                `израсходовано ${totalCost.toFixed(2)} ₽, ` +
+                `возврат клиенту ${discrepancy.toFixed(2)} ₽`
+              );
             }
           }
 
@@ -411,8 +398,6 @@ function connectMqtt(settings) {
           }
           if (items.length === 0) return;
 
-          // ⭐ ОПРЕДЕЛЯЕМ СПОСОБ ОПЛАТЫ
-          // Приоритет: clientCard > advance > ESP32-report
           let paymentMethod = advancePaymentMethod;
           let cardNumber = null;
           let initialBalance = 0;
@@ -1027,23 +1012,11 @@ async function loadSettings() {
 // Состояние постов
 // ============================================================
 let postsState = {};
-// Состояния реле (relay_<MAC>) — агрегируются из MQTT-топиков relay_+/*
 const relayStates = {};
 
-/**
- * Парсинг статуса реле из топика relay_<MAC>/lwt (last will).
- * Единственный источник истины онлайн/офлайн.
- *  - пустой payload / ""                → онлайн (retained-живой, will ещё не сработал)
- *  - "1"/"true"/"on"/"online"/"connect"/"up"/"alive"/"ok" → онлайн
- *  - JSON {"online":true} / {"state":"online"}            → по значению
- *  - unix-timestamp (>= 1700000000)                       → онлайн (heartbeat)
- *  - "0"/"false"/"off"/"offline"/"disconnect"/"down"/"lost" → офлайн
- *  - прочий непустой текст (will-сообщение)               → офлайн
- */
 function parseRelayLwt(raw) {
   const s = String(raw ?? '').trim();
-  if (s === '') return true; // retained-пустота = устройство живо
-  // JSON-варианты
+  if (s === '') return true;
   if (s.startsWith('{')) {
     try {
       const o = JSON.parse(s);
@@ -1052,14 +1025,14 @@ function parseRelayLwt(raw) {
       if (st) return ['online', 'on', '1', 'true', 'connected', 'up', 'alive'].includes(st);
       const n = Number(Object.values(o)[0]);
       if (Number.isFinite(n)) return n >= 1700000000 ? true : n > 0;
-    } catch { /* не JSON — дальше как строка */ }
+    } catch { /* не JSON */ }
   }
   const low = s.toLowerCase();
   if (['1', 'true', 'on', 'online', 'connect', 'connected', 'up', 'alive', 'ok'].includes(low)) return true;
   if (['0', 'false', 'off', 'offline', 'disconnect', 'disconnected', 'down', 'lost', 'dead'].includes(low)) return false;
   const num = Number(s);
-  if (Number.isFinite(num)) return num >= 1700000000 ? true : num > 0; // heartbeat-время или счётчик
-  return false; // непустой неизвестный текст считаем will-сообщением → офлайн
+  if (Number.isFinite(num)) return num >= 1700000000 ? true : num > 0;
+  return false;
 }
 
 function getPostState(postId) {
@@ -1279,7 +1252,6 @@ async function _doPrintReceiptFromBackend(postId) {
   const advanceAmount = newestAdvance?.totalCost || 0;
   const advancePaymentMethod = newestAdvance?.paymentMethod || null;
 
-  // ⭐ Сначала получаем аванс, потом определяем способ оплаты
   let paymentMethod = advancePaymentMethod;
   let cardNumber = null;
   let initialBalance = 0;
@@ -1295,16 +1267,19 @@ async function _doPrintReceiptFromBackend(postId) {
     }
   }
 
-  if (balanceAfter < 0.01 && advanceAmount > 0.01 && items.length > 0) {
-    const sumItems = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
-    const discrepancy = Math.round((advanceAmount - sumItems) * 100) / 100;
+  // ★ Убрана принудительная доводка до аванса.
+  //   Реально потраченная сумма фиксируется как есть.
+  totalCost = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
+
+  if (advanceAmount > 0.01 && items.length > 0) {
+    const discrepancy = Math.round((advanceAmount - totalCost) * 100) / 100;
     if (discrepancy > 0.001) {
-      items[items.length - 1].cost = Math.round((items[items.length - 1].cost + discrepancy) * 100) / 100;
-      console.log(`[Post ${postId}] ⚖️ Доводим до аванса: +${discrepancy} ₽`);
+      console.log(
+        `[Post ${postId}] ℹ️ Аванс ${advanceAmount.toFixed(2)} ₽, ` +
+        `израсходовано ${totalCost.toFixed(2)} ₽, ` +
+        `возврат клиенту ${discrepancy.toFixed(2)} ₽`
+      );
     }
-    totalCost = advanceAmount;
-  } else {
-    totalCost = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
   }
 
   let finalItems = items;
@@ -1550,7 +1525,6 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// Просмотр отчётов разрешён администраторам, разработчикам и наблюдателям (viewer)
 function viewerOrAdmin(req, res, next) {
   const role = req.user && req.user.role;
   if (role === 'admin' || role === 'developer' || role === 'viewer') return next();
@@ -1699,26 +1673,17 @@ app.get('/api/posts', auth, (_req, res) => {
 app.get('/api/settings', (_req, res) => res.json(settings));
 
 // ============================================================
-// Реле: список доступных реле из MQTT-брокера + назначение постам
-// Топики реле: relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay,
-//              /active, /ip, /lwt  (пример: relay_30:76:F5:30:5B:A4)
+// Реле
 // ============================================================
-
-/** Нормализация MAC: "30:76:f5:30:5b:a4" → "30:76:F5:30:5B:A4" */
 function normalizeMac(mac) {
   const s = String(mac || '').trim().toUpperCase();
   return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(s) ? s : null;
 }
 
-/**
- * Запрос retained-топиков реле у брокера ($CONTROL/LISTNREQ → LISTNRET).
- * Помимо MAC дополнительно извлекает retained-значения relay_<MAC>/lwt, /ip —
- * чтобы статус ●/○ был корректен сразу после обнаружения (источник — /lwt).
- */
 async function discoverRelayMacsFromBroker() {
   if (!mqttClient || !mqttClient.connected) return [];
   const topics = await new Promise((resolve) => {
-    const acc = new Map(); // topic -> payload
+    const acc = new Map();
     let done = false;
     const finish = () => { if (!done) { done = true; try { mqttClient.removeListener('message', onData); } catch {} resolve(acc); } };
     const collect = (line) => {
@@ -1763,24 +1728,15 @@ async function discoverRelayMacsFromBroker() {
   return [...new Set(macs)];
 }
 
-/** Все реле, известные broker'у, + агрегированные состояния.
- *  Источники MAC: 1) накопленные relayStates (подписка relay_+/* слушается всегда —
- *  любое сообщение от реле сразу делает его «известным»);
- *  2) retained-топики MQTT-брокера через штатный запрос LISTNRET (работает с mosquitto,
- *  EMQX и др.; не требует доступа к $SYS);
- *  3) сохранённые назначения в settings.posts[i].relay.mac. */
 async function listKnownRelays() {
   const macs = new Set(Object.keys(relayStates).map(m => m.toUpperCase()));
 
-  // Retained-топики реле, публикуемые самим устройством при подключении:
-  // relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay, /active, /ip, /lwt
   if (mqttClient && mqttClient.connected) {
     try {
       for (const mac of await discoverRelayMacsFromBroker()) macs.add(mac);
-    } catch { /* брокер не ответил — используем то, что уже известно */ }
+    } catch { /* ignore */ }
   }
 
-  // Реле, уже назначенные постами в настройках (видны даже при недоступном брокере)
   {
     const n = settings.numberOfPosts || 8;
     for (let i = 1; i <= n; i++) {
@@ -1802,8 +1758,8 @@ async function listKnownRelays() {
       mac,
       topic: `relay_${mac}`,
       online: rs.online ?? null,
-      lwtRaw: rs.lwtRaw ?? null,   // сырое значение /lwt (для диагностики статуса)
-      lwtAt: rs.lwtAt ?? null,     // когда получен последний /lwt
+      lwtRaw: rs.lwtRaw ?? null,
+      lwtAt: rs.lwtAt ?? null,
       ip: rs.ip ?? null,
       statusRelay: rs.statusRelay ?? null,
       active: rs.active ?? null,
@@ -1815,7 +1771,6 @@ async function listKnownRelays() {
   });
 }
 
-// GET /api/relays — список доступных реле для назначения поста
 app.get('/api/relays', auth, async (_req, res) => {
   try {
     res.json({ relays: await listKnownRelays() });
@@ -1825,7 +1780,6 @@ app.get('/api/relays', auth, async (_req, res) => {
   }
 });
 
-// POST /api/relays/discover — принудительно перечитать топики с брокера
 app.post('/api/relays/discover', auth, adminOnly, async (_req, res) => {
   try {
     res.json({ relays: await listKnownRelays() });
@@ -1834,7 +1788,6 @@ app.post('/api/relays/discover', auth, adminOnly, async (_req, res) => {
   }
 });
 
-// PUT /api/posts/:postId/relay — назначить посту реле ({ mac }) или снять ({ mac: null })
 app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
   const postId = String(req.params.postId);
   try {
@@ -1845,7 +1798,6 @@ app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
       if (!mac) return res.status(400).json({ error: `Некорректный MAC реле: ${rawMac}` });
     }
 
-    // Реле не может быть назначено двум постам
     if (mac) {
       const n = settings.numberOfPosts || 8;
       for (let i = 1; i <= n; i++) {
@@ -1862,7 +1814,6 @@ app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
 
     await saveSettings(settings);
 
-    // Публикуем конфиг посту (ESP32 узнаёт своё реле) и сообщаем реле его номер поста
     publishConfigToAllPosts();
     if (mac) publishToPostRelay(postId, 'postnum', { postnum: Number(postId) });
 
@@ -1874,8 +1825,6 @@ app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
   }
 });
 
-// POST /api/relays/:mac/command — прямая команда реле (публикация в relay_<MAC>[/<sub>])
-// body: { subTopic?, payload }
 app.post('/api/relays/:mac/command', auth, adminOnly, (req, res) => {
   const mac = normalizeMac(req.params.mac);
   if (!mac) return res.status(400).json({ error: 'Некорректный MAC' });
@@ -1930,7 +1879,6 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
             ...s, enabled: s.enabled !== false
           }));
         }
-        // ★ Назначение реле посту из настроек: posts[i].relay = { mac } | null
         if ('relay' in postData) {
           const rawMac = postData.relay?.mac;
           if (rawMac) {
@@ -2066,10 +2014,6 @@ app.post('/api/posts/:postId/topup', auth, async (req, res) => {
 });
 
 // ---------- Перевод с баланса поста на карту клиента ----------
-// Вызывается фронтом при активации карты, если на посте есть средства.
-// Тело: { card: '8C8ADC80', amount: 150.00 }
-// Семантика: внутреннее перемещение, НЕ выручка. В отчёты не попадает
-// (kind = 'transfer_post_to_card' исключён в REPORT_RECEIPT_FILTER).
 app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
   const postId = String(req.params.postId);
   const cardNumber = String(req.body?.card || '').trim().toUpperCase();
@@ -2094,7 +2038,6 @@ app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
       return res.status(409).json({ error: 'На посте нет средств для перевода' });
     }
 
-    // Переводим ровно столько, сколько есть на посту (или меньше, если amount < postBalance)
     const amount = Math.min(Math.round(amountInput * 100) / 100, postBalance);
 
     const card = await ClientCard.findOne({ card: cardNumber });
@@ -2102,15 +2045,12 @@ app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
       return res.status(404).json({ error: `Карта ${cardNumber} не найдена` });
     }
 
-    // 1) Списать с поста
     state.balance = Math.round((state.balance - amount) * 100) / 100;
     if (state.balance < 0) state.balance = 0;
 
-    // 2) Зачислить на карту
     card.balance = Math.round((card.balance + amount) * 100) / 100;
     await card.save();
 
-    // 3) Чек перемещения — kind 'transfer_post_to_card' исключён из отчётов
     const receipt = await createReceipt({
       postId:        Number(postId),
       kind:          'transfer_post_to_card',
@@ -2127,14 +2067,12 @@ app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
       paymentMethod: 'post_balance',
     });
 
-    // 4) Зафиксировать карту на посте + обновить её баланс в state
     state.clientCard = card.card;
     state.clientCardBalance = card.balance;
     state.clientCardType = card.type;
     state._clientCardInitialBalance = card.balance;
     state._lastEspBalance = null;
 
-    // 5) Опубликовать события для UI
     if (mqttClient) {
       mqttClient.publish(`posts/${postId}/receipt_number`, JSON.stringify({
         receiptNumber: receipt.receiptNumber,
@@ -2154,7 +2092,6 @@ app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
       publishStatus(postId);
     }
 
-    // 6) Обновить баланс этой карты на всех постах, где она сейчас активна
     if (app.locals.publishCardBalanceToPosts) {
       await app.locals.publishCardBalanceToPosts(card.card);
     }
@@ -2580,7 +2517,6 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
   ).sort({ timestamp: 1 }).lean();
 
-  // ★ 'Карта' → 'Безнал' (требование UI), добавлена отдельная метка для перевода.
   const PAY_LABELS = {
     cash:          'Наличные',
     card_terminal: 'Безнал',
@@ -2597,7 +2533,7 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     const dayKey =
       `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 
-    const pm = PAY_LABELS[r.paymentMethod] || 'Прочее';
+    const pmRaw = r.paymentMethod || 'other';
     const postId = r.postId;
     const totalCost = Number(r.totalCost) || 0;
 
@@ -2611,20 +2547,21 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
     }
     const p = d.posts[postId];
 
-    if (!p.paymentMethods[pm]) {
-      p.paymentMethods[pm] = { paymentMethod: pm, receipts: [], total: 0, count: 0 };
+    if (!p.paymentMethods[pmRaw]) {
+      p.paymentMethods[pmRaw] = { paymentMethod: pmRaw, receipts: [], total: 0, count: 0 };
     }
-    const pmGroup = p.paymentMethods[pm];
+    const pmGroup = p.paymentMethods[pmRaw];
 
+    // ★ ИСПРАВЛЕНИЕ: Цена за секунду в рублях, рассчитывается из фактической стоимости,
+    //   так как pricePerSecond из БД/ESP32 может приходить в копейках.
     const items = (r.items || []).map(it => {
       const cost  = Number(it.cost)    || 0;
       const secs  = Number(it.seconds) || 0;
-      const price = Number(it.pricePerSecond)
-                    || (secs > 0 ? Math.round((cost / secs) * 10000) / 10000 : 0);
+      const price = secs > 0 ? cost / secs : 0;
 
       return {
         name:           programNamesRu[it.name] || it.name || '—',
-        pricePerSecond: price,
+        pricePerSecond: Math.round(price * 10000) / 10000,
         quantity:       Math.round(secs * 10) / 10,
         unit:           'секунда',
         timeWorkedSec:  Math.round(secs * 10) / 10,
@@ -2636,7 +2573,7 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
       receiptNumber: r.receiptNumber,
       date:          r.timestamp,
       postId,
-      paymentMethod: pm,
+      paymentMethod: pmRaw,
       kind:          r.kind || 'session',
       isAdvance:     !!r.isAdvance,
       advanceReceiptNumber: r.advanceReceiptNumber ?? null,

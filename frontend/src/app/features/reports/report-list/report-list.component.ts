@@ -62,8 +62,7 @@ export class ReportListComponent implements OnInit {
 
   // ★ Ключи — сырые коды paymentMethod, которые возвращает бэкенд.
   //   card_terminal — оплата терминалом (в UI «Безнал»).
-  //   post_balance  — перевод с баланса поста на карту (в отчёты не попадает,
-  //                   но цвет пригодится, если когда-то попадёт).
+  //   post_balance  — перевод с баланса поста на карту (в отчёты не попадает).
   private static readonly PAY_COLORS: Record<string, string> = {
     cash:          '#2e7d32',
     card_terminal: '#1976d2',
