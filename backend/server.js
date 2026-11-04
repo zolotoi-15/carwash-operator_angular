@@ -201,8 +201,73 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/receipt');
     mqttClient.subscribe('posts/+/lwt');
     mqttClient.subscribe('posts/+/receipt_number');
+    subscribeRelayTopics();
+    refreshRelayRetained(); // перечитать retained lwt/ip реле → статусы сразу после старта
     if (settings.posts) publishConfigToAllPosts();
   });
+
+  // ---------- Топики реле (relay_<MAC>/...) ----------
+  // Подписка на все подтопики назначенных постам реле:
+  // relay_<MAC>, relay_<MAC>/postnum, relay_<MAC>/udp, relay_<MAC>/status_relay,
+  // relay_<MAC>/active, relay_<MAC>/ip, relay_<MAC>/lwt
+  function subscribeRelayTopics() {
+    if (!mqttClient || !mqttClient.connected) return;
+    const subs = new Set([
+      'relay_+',              // базовый топик (общий статус/команды ретранслятора)
+      'relay_+/postnum',
+      'relay_+/udp',
+      'relay_+/status_relay',
+      'relay_+/active',
+      'relay_+/ip',
+      'relay_+/lwt',
+    ]);
+    for (const t of subs) {
+      mqttClient.subscribe(t, { qos: 0 }, (err) => {
+        if (err) console.warn(`⚠️ Не удалось подписаться на ${t}: ${err.message}`);
+      });
+    }
+    console.log(`📡 Подписка на топики реле активна (${subs.size} шаблонов)`);
+  }
+
+  /**
+   * Активное перечитывание retained-топиков реле сразу после подключения.
+   * Ключевой момент: ESP32 публикует relay_<MAC>/lwt с флагом retain — подписываясь
+   * на relay_+/lwt ДО перечисленных ниже повторных подписок и делая «переподписку»
+   * с задержкой, мы гарантированно получаем retained lwt каждого реле и проставляем
+   * онлайн/офлайн без ожидания следующих сообщений устройства.
+   */
+  function refreshRelayRetained() {
+    if (!mqttClient || !mqttClient.connected) return;
+    // Повторная подписка заставляет брокера заново доставить retained-сообщения.
+    for (const subT of ['relay_+/lwt', 'relay_+/ip', 'relay_+/active', 'relay_+/status_relay']) {
+      try {
+        mqttClient.unsubscribe(subT, () => {
+          mqttClient.subscribe(subT, { qos: 0 }, (err) => {
+            if (err) console.warn(`⚠️ refreshRelayRetained ${subT}: ${err.message}`);
+          });
+        });
+      } catch { /* ignore */ }
+    }
+    setTimeout(() => discoverRelayMacsFromBroker().catch(() => {}), 1200);
+  }
+
+  /** MAC реле, назначенного посту (из настроек), или null */
+  function getRelayMacForPost(postId) {
+    const p = settings.posts?.[postId] || {};
+    return (p.relay && p.relay.mac) ? String(p.relay.mac).toUpperCase() : null;
+  }
+
+  /** Публикация команды в топик назначенного поста реле (relay_<MAC>/...) */
+  function publishToPostRelay(postId, subTopic, payloadObj, opts = { qos: 1 }) {
+    if (!mqttClient || !mqttClient.connected) return false;
+    const mac = getRelayMacForPost(postId);
+    if (!mac) return false;
+    const topic = subTopic ? `relay_${mac}/${subTopic}` : `relay_${mac}`;
+    const payload = typeof payloadObj === 'string' ? payloadObj : JSON.stringify(payloadObj);
+    mqttClient.publish(topic, payload, opts);
+    console.log(`🔌 [RELAY] ${topic} → ${payload}`);
+    return true;
+  }
 
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
@@ -213,6 +278,46 @@ function connectMqtt(settings) {
       payload,
       timestamp: Date.now(),
     });
+
+    // ---------- Сообщения от реле (relay_<MAC>/...) ----------
+    const relayMatch = topic.match(/^relay_([0-9A-Fa-f:]{12})\/?(.*)$/);
+    if (relayMatch) {
+      const mac = relayMatch[1].toUpperCase();
+      const sub = (relayMatch[2] || '').trim();
+      try {
+        let data;
+        try { data = JSON.parse(payload); } catch { data = payload.trim(); }
+        relayStates[mac] = relayStates[mac] || { mac, lastSeen: 0 };
+        const rs = relayStates[mac];
+        rs.lastSeen = Date.now();
+        switch (sub) {
+          case 'lwt':
+            // Единственный источник истины статуса — топик /lwt (last will):
+            // живое устройство публикует retained-состояние (часто пустое),
+            // при обрыве связи брокер публикует will → офлайн.
+            rs.online = parseRelayLwt(payload);
+            rs.lwtRaw = payload.length > 64 ? payload.slice(0, 64) + '…' : payload;
+            rs.lwtAt = Date.now();
+            break;
+          case 'ip':
+            rs.ip = typeof data === 'string' ? data : (data?.ip ?? data?.value ?? null); break;
+          case 'active':
+            rs.active = typeof data === 'object' ? data : String(data); break;
+          case 'status_relay':
+            rs.statusRelay = typeof data === 'object' ? data : String(data); break;
+          case 'postnum':
+            rs.postnum = typeof data === 'object' ? (data?.postnum ?? data) : String(data); break;
+          case 'udp':
+            rs.udp = typeof data === 'object' ? data : String(data); break;
+          default:
+            rs.lastMessage = { topic: sub || '(base)', payload: data, at: Date.now() };
+        }
+        broadcast({ type: 'relay-status', mac, subTopic: sub, state: rs, timestamp: Date.now() });
+      } catch (e) {
+        console.warn(`⚠️ Ошибка обработки сообщения реле ${topic}: ${e.message}`);
+      }
+      // сообщения реле не обрабатываем дальше как posts/*
+    }
 
     if (topic === 'kkm/print') {
       try {
@@ -920,6 +1025,40 @@ async function loadSettings() {
 // Состояние постов
 // ============================================================
 let postsState = {};
+// Состояния реле (relay_<MAC>) — агрегируются из MQTT-топиков relay_+/*
+const relayStates = {};
+
+/**
+ * Парсинг статуса реле из топика relay_<MAC>/lwt (last will).
+ * Единственный источник истины онлайн/офлайн.
+ *  - пустой payload / ""                → онлайн (retained-живой, will ещё не сработал)
+ *  - "1"/"true"/"on"/"online"/"connect"/"up"/"alive"/"ok" → онлайн
+ *  - JSON {"online":true} / {"state":"online"}            → по значению
+ *  - unix-timestamp (>= 1700000000)                       → онлайн (heartbeat)
+ *  - "0"/"false"/"off"/"offline"/"disconnect"/"down"/"lost" → офлайн
+ *  - прочий непустой текст (will-сообщение)               → офлайн
+ */
+function parseRelayLwt(raw) {
+  const s = String(raw ?? '').trim();
+  if (s === '') return true; // retained-пустота = устройство живо
+  // JSON-варианты
+  if (s.startsWith('{')) {
+    try {
+      const o = JSON.parse(s);
+      if (typeof o.online === 'boolean') return o.online;
+      const st = String(o.state ?? o.status ?? '').toLowerCase();
+      if (st) return ['online', 'on', '1', 'true', 'connected', 'up', 'alive'].includes(st);
+      const n = Number(Object.values(o)[0]);
+      if (Number.isFinite(n)) return n >= 1700000000 ? true : n > 0;
+    } catch { /* не JSON — дальше как строка */ }
+  }
+  const low = s.toLowerCase();
+  if (['1', 'true', 'on', 'online', 'connect', 'connected', 'up', 'alive', 'ok'].includes(low)) return true;
+  if (['0', 'false', 'off', 'offline', 'disconnect', 'disconnected', 'down', 'lost', 'dead'].includes(low)) return false;
+  const num = Number(s);
+  if (Number.isFinite(num)) return num >= 1700000000 ? true : num > 0; // heartbeat-время или счётчик
+  return false; // непустой неизвестный текст считаем will-сообщением → офлайн
+}
 
 function getPostState(postId) {
   if (!postsState[postId]) {
@@ -1557,6 +1696,203 @@ app.get('/api/posts', auth, (_req, res) => {
 // ---------- Settings ----------
 app.get('/api/settings', (_req, res) => res.json(settings));
 
+// ============================================================
+// Реле: список доступных реле из MQTT-брокера + назначение постам
+// Топики реле: relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay,
+//              /active, /ip, /lwt  (пример: relay_30:76:F5:30:5B:A4)
+// ============================================================
+
+/** Нормализация MAC: "30:76:f5:30:5b:a4" → "30:76:F5:30:5B:A4" */
+function normalizeMac(mac) {
+  const s = String(mac || '').trim().toUpperCase();
+  return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(s) ? s : null;
+}
+
+/**
+ * Запрос retained-топиков реле у брокера ($CONTROL/LISTNREQ → LISTNRET).
+ * Помимо MAC дополнительно извлекает retained-значения relay_<MAC>/lwt, /ip —
+ * чтобы статус ●/○ был корректен сразу после обнаружения (источник — /lwt).
+ */
+async function discoverRelayMacsFromBroker() {
+  if (!mqttClient || !mqttClient.connected) return [];
+  const topics = await new Promise((resolve) => {
+    const acc = new Map(); // topic -> payload
+    let done = false;
+    const finish = () => { if (!done) { done = true; try { mqttClient.removeListener('message', onData); } catch {} resolve(acc); } };
+    const collect = (line) => {
+      const parts = String(line).trim().split(/\s+/);
+      const t = parts[0];
+      if (/^relay_[0-9A-Fa-f:]{12}(\/(postnum|udp|status_relay|active|ip|lwt))?$/i.test(t)) {
+        acc.set(t, parts.slice(1).join(' '));
+      }
+    };
+    const onData = (topic, payload) => {
+      if (!/\bLISTNRET\b/i.test(topic) && !/RETNILTSNI/.test(topic)) return;
+      try { String(payload).split(/\r?\n/).forEach(collect); } catch { /* ignore */ }
+    };
+    try {
+      mqttClient.on('message', onData);
+      let ok = false;
+      for (const req of ['$CONTROL/LISTNREQ', '$CONTROL/RETNILTSNI']) {
+        try { mqttClient.publish(req, 'LISTNRET', { qos: 0, retain: false }, () => {}); ok = true; } catch { /* ignore */ }
+      }
+      if (!ok) return finish();
+      setTimeout(finish, 1000);
+    } catch { finish(); }
+  }).catch(() => new Map());
+
+  const macs = [];
+  for (const [t, val] of (topics instanceof Map ? topics : [])) {
+    const m = t.match(/^relay_([0-9A-Fa-f:]{12})(?:\/(lwt|ip))?$/i);
+    if (!m) continue;
+    const mac = m[1].toUpperCase();
+    macs.push(mac);
+    relayStates[mac] = relayStates[mac] || { mac, lastSeen: 0 };
+    const rs = relayStates[mac];
+    const sub = (m[2] || '').toLowerCase();
+    if (sub === 'lwt') {
+      rs.online = parseRelayLwt(val);
+      rs.lwtRaw = val.length > 64 ? val.slice(0, 64) + '…' : val;
+      rs.lwtAt = Date.now();
+    } else if (sub === 'ip' && !rs.ip) {
+      rs.ip = val.trim() || null;
+    }
+  }
+  return [...new Set(macs)];
+}
+
+/** Все реле, известные broker'у, + агрегированные состояния.
+ *  Источники MAC: 1) накопленные relayStates (подписка relay_+/* слушается всегда —
+ *  любое сообщение от реле сразу делает его «известным»);
+ *  2) retained-топики MQTT-брокера через штатный запрос LISTNRET (работает с mosquitto,
+ *  EMQX и др.; не требует доступа к $SYS);
+ *  3) сохранённые назначения в settings.posts[i].relay.mac. */
+async function listKnownRelays() {
+  const macs = new Set(Object.keys(relayStates).map(m => m.toUpperCase()));
+
+  // Retained-топики реле, публикуемые самим устройством при подключении:
+  // relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay, /active, /ip, /lwt
+  if (mqttClient && mqttClient.connected) {
+    try {
+      for (const mac of await discoverRelayMacsFromBroker()) macs.add(mac);
+    } catch { /* брокер не ответил — используем то, что уже известно */ }
+  }
+
+  // Реле, уже назначенные постами в настройках (видны даже при недоступном брокере)
+  {
+    const n = settings.numberOfPosts || 8;
+    for (let i = 1; i <= n; i++) {
+      const rm = normalizeMac(settings.posts?.[i]?.relay?.mac);
+      if (rm) macs.add(rm);
+    }
+  }
+  return [...macs].sort().map(mac => {
+    const rs = relayStates[mac] || {};
+    const assignedPost = (() => {
+      const n = settings.numberOfPosts || 8;
+      for (let i = 1; i <= n; i++) {
+        const rm = settings.posts?.[i]?.relay?.mac;
+        if (rm && String(rm).toUpperCase() === mac) return i;
+      }
+      return null;
+    })();
+    return {
+      mac,
+      topic: `relay_${mac}`,
+      online: rs.online ?? null,
+      lwtRaw: rs.lwtRaw ?? null,   // сырое значение /lwt (для диагностики статуса)
+      lwtAt: rs.lwtAt ?? null,     // когда получен последний /lwt
+      ip: rs.ip ?? null,
+      statusRelay: rs.statusRelay ?? null,
+      active: rs.active ?? null,
+      postnum: rs.postnum ?? null,
+      udp: rs.udp ?? null,
+      lastSeen: rs.lastSeen || null,
+      assignedPost,
+    };
+  });
+}
+
+// GET /api/relays — список доступных реле для назначения поста
+app.get('/api/relays', auth, async (_req, res) => {
+  try {
+    res.json({ relays: await listKnownRelays() });
+  } catch (err) {
+    console.error('❌ /api/relays:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/relays/discover — принудительно перечитать топики с брокера
+app.post('/api/relays/discover', auth, adminOnly, async (_req, res) => {
+  try {
+    res.json({ relays: await listKnownRelays() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/posts/:postId/relay — назначить посту реле ({ mac }) или снять ({ mac: null })
+app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
+  const postId = String(req.params.postId);
+  try {
+    const rawMac = req.body?.mac;
+    let mac = null;
+    if (rawMac !== null && rawMac !== undefined && String(rawMac).trim() !== '') {
+      mac = normalizeMac(String(rawMac).replace(/^relay_/, ''));
+      if (!mac) return res.status(400).json({ error: `Некорректный MAC реле: ${rawMac}` });
+    }
+
+    // Реле не может быть назначено двум постам
+    if (mac) {
+      const n = settings.numberOfPosts || 8;
+      for (let i = 1; i <= n; i++) {
+        if (i !== Number(postId) && String(settings.posts?.[i]?.relay?.mac || '').toUpperCase() === mac) {
+          return res.status(409).json({ error: `Реле ${mac} уже назначено посту ${i}` });
+        }
+      }
+    }
+
+    if (!settings.posts) settings.posts = {};
+    if (!settings.posts[postId]) settings.posts[postId] = {};
+    if (mac) settings.posts[postId].relay = { mac };
+    else delete settings.posts[postId].relay;
+
+    await saveSettings(settings);
+
+    // Публикуем конфиг посту (ESP32 узнаёт своё реле) и сообщаем реле его номер поста
+    publishConfigToAllPosts();
+    if (mac) publishToPostRelay(postId, 'postnum', { postnum: Number(postId) });
+
+    broadcast({ type: 'relay-assigned', postId: Number(postId), mac, timestamp: Date.now() });
+    res.json({ ok: true, postId: Number(postId), relay: mac ? { mac, topic: `relay_${mac}` } : null });
+  } catch (err) {
+    console.error('❌ PUT /api/posts/:postId/relay:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/relays/:mac/command — прямая команда реле (публикация в relay_<MAC>[/<sub>])
+// body: { subTopic?, payload }
+app.post('/api/relays/:mac/command', auth, adminOnly, (req, res) => {
+  const mac = normalizeMac(req.params.mac);
+  if (!mac) return res.status(400).json({ error: 'Некорректный MAC' });
+  if (!mqttClient || !mqttClient.connected) return res.status(503).json({ error: 'MQTT не подключён' });
+  try {
+    const sub = String(req.body?.subTopic || '').replace(/^\/+/, '');
+    if (sub && !/^(postnum|udp|status_relay|active|ip|lwt)$/.test(sub)) {
+      return res.status(400).json({ error: `Недопустимый подтопик: ${sub}` });
+    }
+    const payload = req.body?.payload ?? {};
+    const topic = sub ? `relay_${mac}/${sub}` : `relay_${mac}`;
+    mqttClient.publish(topic, typeof payload === 'string' ? payload : JSON.stringify(payload), { qos: 1 });
+    console.log(`🔌 [RELAY API] ${topic}`);
+    res.json({ ok: true, topic });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put('/api/settings', auth, adminOnly, async (req, res) => {
   try {
     const newSettings = req.body;
@@ -1591,6 +1927,24 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           settings.posts[postId].services = settings.posts[postId].services.map(s => ({
             ...s, enabled: s.enabled !== false
           }));
+        }
+        // ★ Назначение реле посту из настроек: posts[i].relay = { mac } | null
+        if ('relay' in postData) {
+          const rawMac = postData.relay?.mac;
+          if (rawMac) {
+            const norm = normalizeMac(String(rawMac).replace(/^relay_/, ''));
+            if (!norm) return res.status(400).json({ error: `Некорректный MAC реле для поста ${postId}: ${rawMac}` });
+            let conflict = null;
+            for (let i = 1; i <= (settings.numberOfPosts || 8); i++) {
+              if (String(i) !== String(postId) &&
+                  String(settings.posts[i]?.relay?.mac || '').toUpperCase() === norm) { conflict = i; break; }
+            }
+            if (conflict) return res.status(409).json({ error: `Реле ${norm} уже назначено посту ${conflict}` });
+            settings.posts[postId].relay = { mac: norm };
+            publishToPostRelay(postId, 'postnum', { postnum: Number(postId) });
+          } else {
+            delete settings.posts[postId].relay;
+          }
         }
       }
     }

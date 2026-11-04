@@ -12,12 +12,13 @@ import {
 } from '../../../../core/services/admin.service';
 import { NotificationService } from '../../../../core/services/notification.service';
 import { SettingsUpdateService } from '../../../../core/services/settings-update.service';
+import { RelaysComponent } from './components/relays.component';
 import { Subject, takeUntil } from 'rxjs';
 
 @Component({
   selector: 'app-general-settings',
   standalone: true,
-  imports: [FormsModule],
+  imports: [FormsModule, RelaysComponent],
   templateUrl: './general-settings.component.html',
   styleUrls: ['./general-settings.component.scss'],
 })

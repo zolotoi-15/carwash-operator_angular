@@ -1,0 +1,24 @@
+From a618e35877c9daabe6e3829309173b59c1972fcb Mon Sep 17 00:00:00 2001
+From: "qwen.ai[bot]" <qwenlm-intl@service.alibaba.com>
+Date: Tue, 3 Nov 2026 23:17:55 +0000
+Subject: [PATCH 0/1] *** SUBJECT HERE ***
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+*** BLURB HERE ***
+
+qwen.ai[bot] (1):
+  relays: статус реле берётся только из топика relay_<MAC>/lwt (парсер
+    пустого/1/0/JSON/timestamp), активное перечитывание retained lwt/ip
+    при подключении, диагностика lwtRaw в API и tooltip статуса на
+    фронте
+
+ backend/server.js                             | 153 ++++++++++++++----
+ .../src/app/core/services/admin.service.ts    |   4 +-
+ .../components/relays.component.ts            |  23 ++-
+ 3 files changed, 138 insertions(+), 42 deletions(-)
+
+-- 
+2.39.5
+

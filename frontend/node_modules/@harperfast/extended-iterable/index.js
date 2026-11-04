@@ -138,10 +138,10 @@ export class ExtendedIterable {
 	[Symbol.asyncIterator](options) {
 		if (options) options = { ...options, async: true };
 		else options = { async: true };
-		return (this.iterator = this.iterate(options));
+		return this.iterate(options);
 	}
 	[Symbol.iterator](options) {
-		return (this.iterator = this.iterate(options));
+		return this.iterate(options);
 	}
 	filter(func) {
 		let iterable = this.map((element) => {
@@ -162,7 +162,7 @@ export class ExtendedIterable {
 	}
 
 	forEach(callback) {
-		let iterator = (this.iterator = this.iterate());
+		let iterator = this.iterate();
 		let result;
 		while ((result = iterator.next()).done !== true) {
 			callback(result.value);
@@ -171,7 +171,7 @@ export class ExtendedIterable {
 	concat(secondIterable) {
 		let concatIterable = new ExtendedIterable();
 		concatIterable.iterate = (options = NO_OPTIONS) => {
-			let iterator = (this.iterator = this.iterate(options));
+			let iterator = this.iterate(options);
 			let isFirst = true;
 			function iteratorDone(result) {
 				if (isFirst) {
@@ -249,7 +249,7 @@ export class ExtendedIterable {
 	flatMap(callback) {
 		let mappedIterable = new ExtendedIterable();
 		mappedIterable.iterate = (options = NO_OPTIONS) => {
-			let iterator = (this.iterator = this.iterate(options));
+			let iterator = this.iterate(options);
 			let isFirst = true;
 			let currentSubIterator;
 			return {
