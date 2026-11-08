@@ -61,6 +61,13 @@ export class PostCardComponent implements OnInit, OnDestroy {
   clientCard: string | null = null;
   // ★ Баланс активной карты клиента (НЕ путать с balance поста)
   clientCardBalance = 0;
+  // ★ Пост-кэш: сколько денег ещё лежит на посте и ждёт перевода
+  postCashBalance = 0;
+
+  // ★ Если есть карта, показываем её баланс, иначе — баланс поста
+  get displayBalance(): number {
+    return this.clientCard ? this.clientCardBalance : this.balance;
+  }
 
   /**
    * ★ Защита от двойного перевода баланса на карту.
@@ -119,6 +126,10 @@ export class PostCardComponent implements OnInit, OnDestroy {
       // ★ Если сообщение содержит баланс карты — запоминаем его
       if (typeof (msg as any).balance === 'number') {
         this.clientCardBalance = (msg as any).balance;
+      }
+      // ★ Пост-кэш, который фронт передаст в transfer-to-card
+      if (typeof (msg as any).postCashBalance === 'number') {
+        this.postCashBalance = (msg as any).postCashBalance;
       }
       this.showCardFlash(msg.card || '');
       return;
@@ -218,11 +229,13 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (typeof d.clientCardBalance === 'number') {
       this.clientCardBalance = d.clientCardBalance;
     }
+    // ★ читаем пост-кэш из status
+    if (typeof d.postCashBalance === 'number') {
+      this.postCashBalance = d.postCashBalance;
+    }
 
     // ★ НЕ триггерим перевод из снапшота: перевод выполняется только
     //   в момент активации карты (card-scan / clientcardbalance).
-    //   Иначе повторный снапшот после пополнения поста запустит
-    //   незапланированный перевод на уже привязанную карту.
     if (typeof d.clientCard === 'string' && d.clientCard) {
       this.clientCard = d.clientCard;
     }
@@ -247,6 +260,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
     this.clientCard = null;
     this.clientCardBalance = 0;
+    this.postCashBalance = 0;
     this.lastCardScan = null;
     this.lastTransferredCard = null;
   }
@@ -284,20 +298,32 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (!card) return;
 
     const isNewCard = this.clientCard !== card;
-
-    // Смена карты — сбрасываем флаг ранее выполненного перевода
     if (isNewCard) {
       this.lastTransferredCard = null;
     }
-
     this.clientCard = card;
 
-    // ★ Уже переводили для этой карты — не повторяем
-    if (this.lastTransferredCard === card) return;
+    if (this.lastTransferredCard === card) {
+      console.log(`[PostCard ${this.postId}] card ${card} already transferred, skip`);
+      return;
+    }
 
-    if (this.balance > 0 && !this.transferring) {
-      const amount = this.balance;
-      this.transferPostBalanceToCard(card, amount);
+    // ★ Приоритет: postCashBalance (пост-кэш) → fallback на balance
+    const cashToTransfer =
+      this.postCashBalance > 0 ? this.postCashBalance : this.balance;
+
+    console.log(
+      `[PostCard ${this.postId}] card ${card} activated: ` +
+      `postCashBalance=${this.postCashBalance}, balance=${this.balance}, ` +
+      `cashToTransfer=${cashToTransfer}, transferring=${this.transferring}`,
+    );
+
+    if (cashToTransfer > 0 && !this.transferring) {
+      this.transferPostBalanceToCard(card, cashToTransfer);
+    } else if (cashToTransfer <= 0) {
+      console.warn(
+        `[PostCard ${this.postId}] card ${card} activated, но пост пуст — перевод пропущен`,
+      );
     }
   }
 
@@ -330,8 +356,13 @@ export class PostCardComponent implements OnInit, OnDestroy {
         return res.json();
       })
       .then((data: any) => {
-        // Бэкенд подтвердил перевод — обнуляем баланс поста
-        this.balance = 0;
+        console.log(`[PostCard ${postId}] ✅ transfer-to-card response:`, data);
+
+        // ★ Обнуляем пост-кэш и пост-баланс
+        this.balance = typeof data?.postBalance === 'number'
+          ? data.postBalance
+          : (typeof data?.balance === 'number' ? data.balance : 0);
+        this.postCashBalance = 0;
         this.lastTransferredCard = card;
 
         if (typeof data?.cardBalance === 'number') {
@@ -340,6 +371,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
         if (typeof data?.receiptNumber === 'number') {
           this.currentAdvanceReceiptNumber = data.receiptNumber;
         }
+
         const cardBalance = typeof data?.cardBalance === 'number'
           ? `, баланс карты: ${data.cardBalance.toFixed(2)} ₽`
           : '';
@@ -349,7 +381,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
         this.notify.success(
           `Пост ${postId}: ${amount.toFixed(2)} ₽ переведено на карту ${card}${cardBalance}${receipt}`,
         );
-        console.log(`[PostCard ${postId}] ✅ transfer-to-card ${card}: ${amount} ₽`);
       })
       .catch((err) => {
         console.error(
