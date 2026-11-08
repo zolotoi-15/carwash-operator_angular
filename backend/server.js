@@ -17,6 +17,17 @@ const Receipt = require('./models/Receipt');
 const { initReceiptService, createReceipt } = require('./services/receipt.service');
 require('dotenv').config();
 
+// ── Защита от падения процесса на unhandled rejection ───────────────
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ UNHANDLED REJECTION:', reason);
+  if (reason && reason.stack) console.error(reason.stack);
+});
+process.on('uncaughtException', (err) => {
+  console.error('❌ UNCAUGHT EXCEPTION:', err);
+  if (err && err.stack) console.error(err.stack);
+});
+process.on('exit', (code) => console.error(`💀 backend завершился, code=${code}`));
+
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
 // ── Accounting query ────────────────────────────────────────────────
@@ -58,6 +69,8 @@ function annotateReceipt(r) {
   return o;
 }
 
+// Миграция legacy-финальных чеков: приводим totalCost к нетто,
+// чтобы итоги смен не задваивались. Идемпотентно.
 async function migrateLegacyReceipts() {
   try {
     const legacy = await Receipt.find({
@@ -90,6 +103,8 @@ async function migrateLegacyReceipts() {
   }
 }
 
+// Проставляет shiftNumber старым чекам по временным диапазонам смен.
+// Идемпотентна: трогает только чеки с shiftNumber == null.
 async function migrateReceiptShiftNumbers() {
   try {
     const missing = await Receipt.countDocuments({ shiftNumber: null });
@@ -777,45 +792,53 @@ async function fetchKkmStatusFromDriver() {
 
 async function publishKkmStatus() {
   if (!mqttClient) return;
-  const shift = await Shift.findOne({ shiftOpen: true }).lean();
-  const driverData = await fetchKkmStatusFromDriver();
-  if (driverData) {
-    let changed = false;
-    if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) { settings.kkmManual.kkNumber = driverData.kkNumber; changed = true; }
-    if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) { settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber; changed = true; }
-    if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) { settings.kkmManual.cashierName = driverData.cashierName; changed = true; }
-    if (changed) saveSettings(settings).catch(() => {});
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true }).lean();
+    const driverData = await fetchKkmStatusFromDriver();
+    if (driverData) {
+      let changed = false;
+      if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) { settings.kkmManual.kkNumber = driverData.kkNumber; changed = true; }
+      if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) { settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber; changed = true; }
+      if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) { settings.kkmManual.cashierName = driverData.cashierName; changed = true; }
+      if (changed) saveSettings(settings).catch(() => {});
+    }
+    const payload = JSON.stringify({
+      ready:              driverData ? !!driverData.ready       : true,
+      connected:          driverData ? !!driverData.connected   : false,
+      paper:              driverData ? !!driverData.paper       : true,
+      kkNumber:           driverData?.kkNumber || settings.kkmManual.kkNumber || '',
+      shiftNumber:        driverData?.shiftNumber ?? settings.kkmManual.fiscalShiftNumber ?? 0,
+      cashier:            driverData?.cashierName || settings.kkmManual.cashierName || 'Оператор',
+      shiftOpened:        !!shift,
+      shiftOpenedAt:      shift?.openedAt || null,
+      shiftAutoCloseAt:   shift?.autoCloseAt || null,
+      currentShiftNumber: shift?.shiftNumber || 0,
+      errors:             driverData?.errors || [],
+      driverOnline:       !!driverData,
+    });
+    mqttClient.publish('kkm/status', payload, { qos: 0, retain: true });
+    broadcast({ type: 'mqtt', topic: 'kkm/status', payload, timestamp: Date.now() });
+  } catch (err) {
+    console.warn('publishKkmStatus:', err.message);
   }
-  const payload = JSON.stringify({
-    ready:              driverData ? !!driverData.ready       : true,
-    connected:          driverData ? !!driverData.connected   : false,
-    paper:              driverData ? !!driverData.paper       : true,
-    kkNumber:           driverData?.kkNumber || settings.kkmManual.kkNumber || '',
-    shiftNumber:        driverData?.shiftNumber ?? settings.kkmManual.fiscalShiftNumber ?? 0,
-    cashier:            driverData?.cashierName || settings.kkmManual.cashierName || 'Оператор',
-    shiftOpened:        !!shift,
-    shiftOpenedAt:      shift?.openedAt || null,
-    shiftAutoCloseAt:   shift?.autoCloseAt || null,
-    currentShiftNumber: shift?.shiftNumber || 0,
-    errors:             driverData?.errors || [],
-    driverOnline:       !!driverData,
-  });
-  mqttClient.publish('kkm/status', payload, { qos: 0, retain: true });
-  broadcast({ type: 'mqtt', topic: 'kkm/status', payload, timestamp: Date.now() });
 }
 
 async function broadcastShiftTotal() {
-  const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) {
-    const payload = JSON.stringify({ shiftNumber: null, total: 0, count: 0 });
+  try {
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (!currentShift) {
+      const payload = JSON.stringify({ shiftNumber: null, total: 0, count: 0 });
+      broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
+      return;
+    }
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    const payload = JSON.stringify({ shiftNumber: currentShift.shiftNumber, total, count: receipts.length });
+    if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
     broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
-    return;
+  } catch (err) {
+    console.warn('broadcastShiftTotal:', err.message);
   }
-  const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
-  const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
-  const payload = JSON.stringify({ shiftNumber: currentShift.shiftNumber, total, count: receipts.length });
-  if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
-  broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
 }
 
 async function saveSettings(newSettings) {
@@ -1264,30 +1287,55 @@ function getShiftAutoCloseAt(openedAt) {
   return dt;
 }
 
+// ★ НИКОГДА не бросает исключение — иначе process упадёт.
 async function closeExpiredShiftIfNeeded() {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  if (!shift) return null;
-  const autoCloseAt = shift.autoCloseAt || getShiftAutoCloseAt(shift.openedAt);
-  if (new Date() < autoCloseAt) return shift;
-  const closedAt = new Date();
-  shift.shiftOpen = false;
-  shift.closedAt = closedAt;
-  shift.autoClosed = true;
-  const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
-  const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
-  shift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: 'system (auto)' };
-  await shift.save();
-  console.log(`♻️ Смена №${shift.shiftNumber} автозакрыта (прошло 24 часа)`);
-  const nextNumber = await getNextShiftNumber();
-  const openedAt = new Date();
-  const newShift = await Shift.create({
-    shiftNumber: nextNumber, shiftOpen: true, openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: 'system (auto)',
-  });
-  console.log(`♻️ Открыта новая смена №${nextNumber}`);
-  await publishKkmStatus();
-  await broadcastShiftTotal();
-  return newShift;
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    if (!shift) return null;
+
+    const openedTs = shift.openedAt ? new Date(shift.openedAt).getTime() : null;
+    if (!openedTs || isNaN(openedTs)) {
+      console.warn(`⚠️ Смена №${shift.shiftNumber} имеет битый openedAt — пропускаем авто-закрытие`);
+      return shift;
+    }
+    const autoCloseTs = shift.autoCloseAt
+      ? new Date(shift.autoCloseAt).getTime()
+      : getShiftAutoCloseAt(shift.openedAt).getTime();
+    if (Date.now() < autoCloseTs) return shift;
+
+    const closedAt = new Date();
+    shift.shiftOpen = false;
+    shift.closedAt = closedAt;
+    shift.autoClosed = true;
+
+    let total = 0, count = 0;
+    try {
+      const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
+      total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+      count = receipts.length;
+    } catch (e) {
+      console.warn(`⚠️ [shift ${shift.shiftNumber}] Не удалось посчитать итог: ${e.message}`);
+    }
+    shift.zReport = { total, count, generatedAt: closedAt, cashier: 'system (auto)' };
+    await shift.save();
+    console.log(`♻️ Смена №${shift.shiftNumber} автозакрыта (прошло 24 часа)`);
+
+    const nextNumber = await getNextShiftNumber();
+    const openedAt = new Date();
+    const newShift = await Shift.create({
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: 'system (auto)',
+    });
+    console.log(`♻️ Открыта новая смена №${nextNumber}`);
+
+    try { await publishKkmStatus(); } catch (e) { console.warn('publishKkmStatus:', e.message); }
+    try { await broadcastShiftTotal(); } catch (e) { console.warn('broadcastShiftTotal:', e.message); }
+
+    return newShift;
+  } catch (err) {
+    console.error('❌ closeExpiredShiftIfNeeded:', err && err.stack ? err.stack : err);
+    return null;
+  }
 }
 
 async function ensureOpenShift() {
@@ -1509,7 +1557,13 @@ app.get('/api/posts', auth, (_req, res) => {
 });
 
 // ---------- Settings ----------
-app.get('/api/settings', (_req, res) => res.json(settings));
+app.get('/api/settings', (_req, res) => {
+  try { res.json(settings); }
+  catch (err) {
+    console.error('❌ /api/settings:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ============================================================
 // Реле
@@ -2011,92 +2065,127 @@ app.get('/api/kkm/status', auth, adminOnly, async (_req, res) => {
 });
 
 app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
-  const { kkNumber, fiscalShiftNumber, cashierName } = req.body;
-  if (kkNumber !== undefined) settings.kkmManual.kkNumber = kkNumber;
-  if (fiscalShiftNumber !== undefined) settings.kkmManual.fiscalShiftNumber = fiscalShiftNumber;
-  if (cashierName !== undefined) settings.kkmManual.cashierName = cashierName;
-  await saveSettings(settings);
-  if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
-  await publishKkmStatus();
-  res.json(settings.kkmManual);
+  try {
+    const { kkNumber, fiscalShiftNumber, cashierName } = req.body;
+    if (kkNumber !== undefined) settings.kkmManual.kkNumber = kkNumber;
+    if (fiscalShiftNumber !== undefined) settings.kkmManual.fiscalShiftNumber = fiscalShiftNumber;
+    if (cashierName !== undefined) settings.kkmManual.cashierName = cashierName;
+    await saveSettings(settings);
+    if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
+    await publishKkmStatus();
+    res.json(settings.kkmManual);
+  } catch (err) {
+    console.error('❌ PUT /api/kkm/manual:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/current-shift', auth, async (_req, res) => {
-  await closeExpiredShiftIfNeeded();
-  const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
-  if (!shift) return res.json({ exists: false });
-  res.json({
-    shiftNumber: shift.shiftNumber, cashier: shift.cashier,
-    openedAt: shift.openedAt, autoCloseAt: shift.autoCloseAt,
-    fiscalShiftNumber: shift.fiscalShiftNumber, exists: true,
-  });
+  try {
+    await closeExpiredShiftIfNeeded();
+    const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 }).lean();
+    if (!shift) return res.json({ exists: false });
+    res.json({
+      shiftNumber: shift.shiftNumber, cashier: shift.cashier,
+      openedAt: shift.openedAt, autoCloseAt: shift.autoCloseAt,
+      fiscalShiftNumber: shift.fiscalShiftNumber, exists: true,
+    });
+  } catch (err) {
+    console.error('❌ /api/kkm/current-shift:', err);
+    res.status(500).json({ error: err.message, exists: false });
+  }
 });
 
 app.get('/api/kkm/shift-status', auth, async (_req, res) => {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  res.json({ shiftOpen: !!shift });
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    res.json({ shiftOpen: !!shift });
+  } catch (err) {
+    console.error('❌ /api/kkm/shift-status:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/kkm/open-shift', auth, adminOnly, async (req, res) => {
-  await closeExpiredShiftIfNeeded();
-  if (await Shift.findOne({ shiftOpen: true })) return res.status(400).json({ error: 'Уже есть открытая смена' });
-  const nextNumber = await getNextShiftNumber();
-  const openedAt = new Date();
-  const newShift = await Shift.create({
-    shiftNumber: nextNumber, shiftOpen: true, openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: req.user.username,
-  });
-  await publishKkmStatus(); await broadcastShiftTotal();
-  res.json({
-    shiftNumber: newShift.shiftNumber, cashier: newShift.cashier,
-    openedAt: newShift.openedAt, autoCloseAt: newShift.autoCloseAt,
-  });
+  try {
+    await closeExpiredShiftIfNeeded();
+    if (await Shift.findOne({ shiftOpen: true })) return res.status(400).json({ error: 'Уже есть открытая смена' });
+    const nextNumber = await getNextShiftNumber();
+    const openedAt = new Date();
+    const newShift = await Shift.create({
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: req.user.username,
+    });
+    await publishKkmStatus(); await broadcastShiftTotal();
+    res.json({
+      shiftNumber: newShift.shiftNumber, cashier: newShift.cashier,
+      openedAt: newShift.openedAt, autoCloseAt: newShift.autoCloseAt,
+    });
+  } catch (err) {
+    console.error('❌ /api/kkm/open-shift:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/kkm/close-shift', auth, adminOnly, async (req, res) => {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  if (!shift) return res.status(400).json({ error: 'Нет открытой смены' });
-  const closedAt = new Date();
-  shift.shiftOpen = false; shift.closedAt = closedAt; shift.autoClosed = false;
-  const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
-  const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
-  shift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: req.user.username };
-  await shift.save();
-  await publishKkmStatus(); await broadcastShiftTotal();
-  res.json({ message: 'Смена закрыта', shiftNumber: shift.shiftNumber, total, count: receipts.length });
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    if (!shift) return res.status(400).json({ error: 'Нет открытой смены' });
+    const closedAt = new Date();
+    shift.shiftOpen = false; shift.closedAt = closedAt; shift.autoClosed = false;
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    shift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: req.user.username };
+    await shift.save();
+    await publishKkmStatus(); await broadcastShiftTotal();
+    res.json({ message: 'Смена закрыта', shiftNumber: shift.shiftNumber, total, count: receipts.length });
+  } catch (err) {
+    console.error('❌ /api/kkm/close-shift:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
-  const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
-  const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
-  shift.xReports.push({ timestamp: new Date(), total, count: receipts.length, cashier: req.user.username });
-  await shift.save();
-  res.json({ message: 'X-отчёт', shiftNumber: shift.shiftNumber, total, count: receipts.length });
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    shift.xReports.push({ timestamp: new Date(), total, count: receipts.length, cashier: req.user.username });
+    await shift.save();
+    res.json({ message: 'X-отчёт', shiftNumber: shift.shiftNumber, total, count: receipts.length });
+  } catch (err) {
+    console.error('❌ /api/kkm/x-report:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
-  const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
-  const closedAt = new Date();
-  const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
-  const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
-  currentShift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: req.user.username };
-  currentShift.shiftOpen = false; currentShift.closedAt = closedAt;
-  await currentShift.save();
-  const nextNumber = await getNextShiftNumber();
-  const openedAt = new Date();
-  const newShift = await Shift.create({
-    shiftNumber: nextNumber, shiftOpen: true, openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: req.user.username,
-  });
-  await publishKkmStatus(); await broadcastShiftTotal();
-  res.json({
-    message: 'Z-отчёт сформирован, смена закрыта',
-    closed: { shiftNumber: currentShift.shiftNumber, total, count: receipts.length },
-    newShift: { shiftNumber: newShift.shiftNumber, openedAt: newShift.openedAt },
-  });
+  try {
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
+    const closedAt = new Date();
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    currentShift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: req.user.username };
+    currentShift.shiftOpen = false; currentShift.closedAt = closedAt;
+    await currentShift.save();
+    const nextNumber = await getNextShiftNumber();
+    const openedAt = new Date();
+    const newShift = await Shift.create({
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: req.user.username,
+    });
+    await publishKkmStatus(); await broadcastShiftTotal();
+    res.json({
+      message: 'Z-отчёт сформирован, смена закрыта',
+      closed: { shiftNumber: currentShift.shiftNumber, total, count: receipts.length },
+      newShift: { shiftNumber: newShift.shiftNumber, openedAt: newShift.openedAt },
+    });
+  } catch (err) {
+    console.error('❌ /api/kkm/z-report:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.kkm));
@@ -2104,34 +2193,39 @@ app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.k
 // GET /api/shift-total          — текущая открытая смена
 // GET /api/shift-total?shiftNumber=N — любая смена (в т.ч. закрытая)
 app.get('/api/shift-total', auth, adminOnly, async (req, res) => {
-  const { shiftNumber } = req.query;
+  try {
+    const { shiftNumber } = req.query;
 
-  if (shiftNumber != null && shiftNumber !== '') {
-    const n = Number(shiftNumber);
-    if (!Number.isInteger(n)) return res.status(400).json({ error: 'Некорректный shiftNumber' });
-    const shift = await Shift.findOne({ shiftNumber: n }).lean();
-    if (!shift) return res.status(404).json({ error: `Смена №${n} не найдена` });
-    const receipts = await Receipt.find(accountingQuery({ shiftNumber: n }));
-    return res.json({
-      shiftNumber: n,
-      isOpen: !!shift.shiftOpen,
-      openedAt: shift.openedAt,
-      closedAt: shift.closedAt,
+    if (shiftNumber != null && shiftNumber !== '') {
+      const n = Number(shiftNumber);
+      if (!Number.isInteger(n)) return res.status(400).json({ error: 'Некорректный shiftNumber' });
+      const shift = await Shift.findOne({ shiftNumber: n }).lean();
+      if (!shift) return res.status(404).json({ error: `Смена №${n} не найдена` });
+      const receipts = await Receipt.find(accountingQuery({ shiftNumber: n }));
+      return res.json({
+        shiftNumber: n,
+        isOpen: !!shift.shiftOpen,
+        openedAt: shift.openedAt,
+        closedAt: shift.closedAt,
+        total: receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
+        count: receipts.length,
+      });
+    }
+
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (!currentShift) return res.json({ shiftNumber: null, total: 0, count: 0 });
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+    res.json({
+      shiftNumber: currentShift.shiftNumber,
+      isOpen: true,
+      openedAt: currentShift.openedAt,
       total: receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
       count: receipts.length,
     });
+  } catch (err) {
+    console.error('❌ /api/shift-total:', err);
+    res.status(500).json({ error: err.message });
   }
-
-  const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) return res.json({ shiftNumber: null, total: 0, count: 0 });
-  const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
-  res.json({
-    shiftNumber: currentShift.shiftNumber,
-    isOpen: true,
-    openedAt: currentShift.openedAt,
-    total: receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
-    count: receipts.length,
-  });
 });
 
 app.get('/api/kkm/fiscal-registration', auth, adminOnly, async (_req, res) => {
@@ -2154,7 +2248,6 @@ app.post('/api/kkm/fiscal/z-report', auth, adminOnly, (_req, res) => res.json({ 
 // ============================================================
 // Смены — список (для селектора в отчётах)
 // ============================================================
-// GET /api/shifts?limit=50&page=1&includeTotals=1
 app.get('/api/shifts', auth, adminOnly, async (req, res) => {
   try {
     const { limit = 50, page = 1, includeTotals } = req.query;
@@ -2267,7 +2360,6 @@ async function generatePDFReport(receipts, totalSum, header) {
   });
 }
 
-// GET /api/reports/pdf?shiftNumber=N  ИЛИ  ?from=&to=
 app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
   const built = buildTimeOrShiftFilter(req.query);
   if (built.error) return res.status(built.code).json({ error: built.error });
@@ -2288,7 +2380,6 @@ app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
   res.send(pdfData);
 });
 
-// GET /api/reports/shift/:shiftNumber — полный отчёт по одной смене
 app.get('/api/reports/shift/:shiftNumber', auth, adminOnly, async (req, res) => {
   try {
     const n = Number(req.params.shiftNumber);
@@ -2393,7 +2484,6 @@ app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
   });
 });
 
-// GET /api/reports/range?shiftNumber=N  ИЛИ  ?from=&to=
 app.get('/api/reports/range', auth, viewerOrAdmin, async (req, res) => {
   const built = buildTimeOrShiftFilter(req.query);
   if (built.error) return res.status(built.code).json({ error: built.error });
@@ -2410,7 +2500,6 @@ app.get('/api/reports/range', auth, viewerOrAdmin, async (req, res) => {
   res.json(summary);
 });
 
-// GET /api/reports/grouped?shiftNumber=N  ИЛИ  ?from=&to=
 app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
   const built = buildTimeOrShiftFilter(req.query);
   if (built.error) return res.status(built.code).json({ error: built.error });
@@ -2487,7 +2576,6 @@ app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
   });
 });
 
-// GET /api/receipts?shiftNumber=N&type=all&status=done  ИЛИ  ?from=&to=&type=...
 app.get('/api/receipts', auth, async (req, res) => {
   try {
     const { shiftNumber, from, to, type = 'all', status = 'all', postId } = req.query;
@@ -2596,20 +2684,58 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
 });
 
 // ============================================================
+// Health check + глобальный error middleware
+// ВАЖНО: эти два блока должны быть ПОСЛЕ всех роутов,
+// но ДО mongoose.connect / server.listen.
+// ============================================================
+app.get('/api/health', (_req, res) => {
+  try {
+    res.json({
+      ok: true,
+      uptime: Math.round(process.uptime()),
+      ts: Date.now(),
+      mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      mqtt: mqttClient && mqttClient.connected ? 'connected' : 'disconnected',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(`❌ ${req.method} ${req.originalUrl}:`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err?.message || 'Internal error', path: req.originalUrl });
+});
+
+// ============================================================
 // Start
 // ============================================================
 mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
-    await loadSettings();
-    await initShift();
-    setInterval(async () => { try { await closeExpiredShiftIfNeeded(); } catch (e) { /* ignore */ } }, 60_000);
-    setInterval(async () => { try { await publishKkmStatus(); } catch (e) { /* ignore */ } }, 10_000);
+    try { await loadSettings(); } catch (e) { console.error('loadSettings:', e.message); }
+    try { await initShift(); }    catch (e) { console.error('initShift:', e.message); }
+
+    setInterval(async () => {
+      try { await closeExpiredShiftIfNeeded(); } catch (e) { console.error('auto-close-shift:', e.message); }
+    }, 60_000);
+    setInterval(async () => {
+      try { await publishKkmStatus(); } catch (e) { /* ignore */ }
+    }, 10_000);
+
     server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
       console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);
-      migrateLegacyReceipts().catch(() => {});
-      migrateReceiptShiftNumbers().catch(() => {});
+
+      // ★ Миграции — с задержкой, чтобы не блокировать первые запросы.
+      setTimeout(() => {
+        migrateLegacyReceipts().catch((e) => console.warn('[migrate] fail:', e.message));
+      }, 15_000);
+      setTimeout(() => {
+        migrateReceiptShiftNumbers().catch((e) => console.warn('[migrate-shift] fail:', e.message));
+      }, 45_000);
     });
   })
   .catch(err => {
@@ -2617,7 +2743,7 @@ mongoose.connect(MONGO_URI)
     server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
       console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);
-      migrateLegacyReceipts().catch(() => {});
-      migrateReceiptShiftNumbers().catch(() => {});
+      setTimeout(() => migrateLegacyReceipts().catch(() => {}), 15_000);
+      setTimeout(() => migrateReceiptShiftNumbers().catch(() => {}), 45_000);
     });
   });

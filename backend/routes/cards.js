@@ -120,7 +120,7 @@ router.get('/:card/report', auth, async (req, res) => {
 
       const displayAmount =
         r.kind === 'final'
-          ? (grossTotal ?? (Number(r.advanceApplied) || 0) || totalCost)
+          ? (grossTotal ?? (Number(r.advanceApplied) || totalCost))
           : totalCost;
 
       return {

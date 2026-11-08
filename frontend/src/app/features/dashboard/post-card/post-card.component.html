@@ -46,6 +46,11 @@
         <span>💳 Карта клиента:</span>
         <span class="value mono">{{ clientCard }}</span>
       </div>
+      <!-- ★ Баланс активной карты клиента -->
+      <div class="info-row">
+        <span>💰 Баланс карты:</span>
+        <span class="value">{{ clientCardBalance | number:'1.2-2' }} ₽</span>
+      </div>
     }
   </div>
 
