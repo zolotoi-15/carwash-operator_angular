@@ -25,7 +25,7 @@
   <div class="post-info">
     <div class="info-row">
       <span>💰 Баланс:</span>
-      <!-- ★ Используем displayBalance: если карта привязана, показываем баланс карты -->
+      <!-- ★ displayBalance: если есть карта, показываем баланс карты, иначе — баланс поста -->
       <span class="value">{{ displayBalance | number:'1.2-2' }} ₽</span>
     </div>
     <div class="info-row">
@@ -46,11 +46,6 @@
       <div class="info-row">
         <span>💳 Карта клиента:</span>
         <span class="value mono">{{ clientCard }}</span>
-      </div>
-      <!-- Если основной баланс уже показывает карту, эту строку можно скрыть или оставить для наглядности -->
-      <div class="info-row">
-        <span>💰 Баланс карты:</span>
-        <span class="value">{{ clientCardBalance | number:'1.2-2' }} ₽</span>
       </div>
     }
   </div>

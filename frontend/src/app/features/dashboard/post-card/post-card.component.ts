@@ -50,7 +50,10 @@ export class PostCardComponent implements OnInit, OnDestroy {
   esp32Connected = false;
   busy = false;
   paused = false;
+  
+  /** Баланс поста (кэш аванса). При активной карте бэкенд присылает 0. */
   balance = 0;
+  
   activeFunction = '';
   sum = 0;
   lastSeen: number | null = null;
@@ -59,23 +62,18 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
   // ★ Активная карта клиента
   clientCard: string | null = null;
-  // ★ Баланс активной карты клиента (НЕ путать с balance поста)
+  // ★ Баланс активной карты клиента
   clientCardBalance = 0;
   // ★ Пост-кэш: сколько денег ещё лежит на посте и ждёт перевода
   postCashBalance = 0;
 
-  // ★ Если есть карта, показываем её баланс, иначе — баланс поста
+  // ★ Отображение: если есть карта — показываем её баланс, иначе — баланс поста
   get displayBalance(): number {
     return this.clientCard ? this.clientCardBalance : this.balance;
   }
 
-  /**
-   * ★ Защита от двойного перевода баланса на карту.
-   * Пока true — новые события активации карты не триггерят перевод.
-   */
+  // ★ Защита от двойного перевода
   private transferring = false;
-
-  /** ★ Карта, для которой перевод уже был выполнен (защита от повторов) */
   private lastTransferredCard: string | null = null;
 
   // ============================================================
@@ -122,35 +120,60 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
+    // ★ card-scan — событие активации карты (или её удаления).
     if (msg.type === 'card-scan' && String(msg.postId) === postIdStr) {
-      // ★ Если сообщение содержит баланс карты — запоминаем его
+      const card = (msg.card || '').toUpperCase();
+
+      // ★ Если бэкенд говорит, что карты нет (card === null/пусто)
+      if (!card) {
+        this.clientCard = null;
+        this.clientCardBalance = 0;
+        this.postCashBalance = 0;
+        this.balance = 0;
+        this.maybeClearInactiveCard();
+        return;
+      }
+
+      const isNewCard = this.clientCard !== card;
+      if (isNewCard) {
+        this.clientCard = card;
+        this.lastTransferredCard = null;
+        this.clientCardBalance = 0;
+      }
+
       if (typeof (msg as any).balance === 'number') {
         this.clientCardBalance = (msg as any).balance;
       }
-      // ★ Пост-кэш, который фронт передаст в transfer-to-card
       if (typeof (msg as any).postCashBalance === 'number') {
         this.postCashBalance = (msg as any).postCashBalance;
       }
-      this.showCardFlash(msg.card || '');
+
+      this.showCardFlash(card);
+
+      // ★ Перевод — только если на посту есть непереведённый аванс
+      const amount = this.postCashBalance;
+      if (amount > 0.01 && !this.transferring && this.lastTransferredCard !== card) {
+        this.transferPostBalanceToCard(card, amount);
+      }
       return;
     }
 
-    // ★ card-balance — это баланс КАРТЫ, а не поста
+    // ★ card-balance — обновляем отображаемый баланс карты
     if (msg.type === 'card-balance' && String(msg.postId) === postIdStr) {
       if (msg.card) {
+        if (this.clientCard !== msg.card) {
+          this.clientCard = String(msg.card);
+        }
         if (typeof msg.balance === 'number') {
           this.clientCardBalance = msg.balance;
         }
-        this.showCardFlash(String(msg.card));
       } else if (typeof msg.balance === 'number') {
-        // fallback: без карты — считаем балансом поста
         this.balance = msg.balance;
       }
       return;
     }
 
     if (msg.type !== 'mqtt') return;
-
     const topic = msg.topic || '';
 
     if (topic === `posts/${postIdStr}/lwt`) {
@@ -182,14 +205,16 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return;
     }
 
-    // ★ clientcardbalance — баланс КАРТЫ клиента, не поста!
+    // ★ clientcardbalance — обновление баланса карты
     if (topic === `posts/${postIdStr}/clientcardbalance`) {
       try {
         const data = JSON.parse(msg.payload || '{}');
+        if (data.card && this.clientCard !== data.card) {
+          this.clientCard = String(data.card);
+        }
         if (typeof data.balance === 'number') {
           this.clientCardBalance = data.balance;
         }
-        if (data.card) this.showCardFlash(String(data.card));
       } catch { /* ignore */ }
       return;
     }
@@ -202,7 +227,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
             ? Number(data.receiptNumber)
             : null;
         }
-        if (typeof data.balanceAfter === 'number') {
+        if (typeof data.balanceAfter === 'number' && !this.clientCard) {
           this.balance = data.balanceAfter;
         }
       } catch { /* ignore */ }
@@ -217,7 +242,23 @@ export class PostCardComponent implements OnInit, OnDestroy {
     }
     if (typeof d.busy === 'boolean') this.busy = d.busy;
     if (typeof d.paused === 'boolean') this.paused = d.paused;
-    if (typeof d.balance === 'number') this.balance = d.balance;
+
+    if (typeof d.balance === 'number') {
+      this.balance = d.balance;
+      // ★ Если карта активна, ESP32 может присылать актуальный баланс в поле balance.
+      //   Дублируем его в clientCardBalance, чтобы UI обновился во время работы услуги.
+      if (this.clientCard) {
+        this.clientCardBalance = d.balance;
+      }
+    }
+    
+    if (typeof d.clientCardBalance === 'number') {
+      this.clientCardBalance = d.clientCardBalance;
+    }
+    if (typeof d.postCashBalance === 'number') {
+      this.postCashBalance = d.postCashBalance;
+    }
+
     if (typeof d.sum === 'number') this.sum = d.sum;
     else if (typeof d.total === 'number') this.sum = d.total;
 
@@ -226,37 +267,28 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
     if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
 
-    if (typeof d.clientCardBalance === 'number') {
-      this.clientCardBalance = d.clientCardBalance;
-    }
-    // ★ читаем пост-кэш из status
-    if (typeof d.postCashBalance === 'number') {
-      this.postCashBalance = d.postCashBalance;
-    }
-
-    // ★ НЕ триггерим перевод из снапшота: перевод выполняется только
-    //   в момент активации карты (card-scan / clientcardbalance).
-    if (typeof d.clientCard === 'string' && d.clientCard) {
+    // ★ Обрабатываем как наличие карты, так и её отсутствие (null)
+    if (d.clientCard === null || d.clientCard === undefined) {
+      if (d.balance === 0 || !d.busy) {
+        this.clientCard = null;
+        this.clientCardBalance = 0;
+        this.postCashBalance = 0;
+      }
+    } else if (typeof d.clientCard === 'string' && d.clientCard) {
       this.clientCard = d.clientCard;
     }
 
-    if (this.busy === false && this.balance <= 0) {
+    if (this.busy === false && this.displayBalance <= 0) {
       this.currentAdvanceReceiptNumber = null;
     }
 
     this.maybeClearInactiveCard();
   }
 
-  /**
-   * Карта считается неактивной, когда:
-   *   – пост НЕ занят,
-   *   – баланс израсходован (<= 0),
-   *   – подсветка от сканирования уже погасла.
-   */
   private maybeClearInactiveCard(): void {
     if (this.cardFlashVisible) return;
     if (this.busy) return;
-    if (this.balance > 0) return;
+    if (this.displayBalance > 0) return;
 
     this.clientCard = null;
     this.clientCardBalance = 0;
@@ -266,22 +298,16 @@ export class PostCardComponent implements OnInit, OnDestroy {
   }
 
   // ============================================================
-  // Flash при сканировании карты + перевод баланса
+  // Flash при сканировании — ТОЛЬКО визуальный
   // ============================================================
   private showCardFlash(card: string): void {
     if (!card) return;
-
-    // ★ Активация карты — возможный перевод баланса поста на карту
-    this.handleCardActivated(card);
-
-    // Кратковременная подсветка
     this.lastCardScan = {
       card,
       postId: String(this.postId),
       timestamp: Date.now(),
     };
     this.cardFlashVisible = true;
-
     if (this.flashTimeout) clearTimeout(this.flashTimeout);
     this.flashTimeout = setTimeout(() => {
       this.cardFlashVisible = false;
@@ -289,51 +315,11 @@ export class PostCardComponent implements OnInit, OnDestroy {
     }, 4000);
   }
 
-  /**
-   * ★ Обработчик активации карты клиента.
-   * Если на балансе поста есть средства — переводим их на карту
-   * как пополнение с баланса поста.
-   */
-  private handleCardActivated(card: string): void {
-    if (!card) return;
-
-    const isNewCard = this.clientCard !== card;
-    if (isNewCard) {
-      this.lastTransferredCard = null;
-    }
-    this.clientCard = card;
-
-    if (this.lastTransferredCard === card) {
-      console.log(`[PostCard ${this.postId}] card ${card} already transferred, skip`);
-      return;
-    }
-
-    // ★ Приоритет: postCashBalance (пост-кэш) → fallback на balance
-    const cashToTransfer =
-      this.postCashBalance > 0 ? this.postCashBalance : this.balance;
-
-    console.log(
-      `[PostCard ${this.postId}] card ${card} activated: ` +
-      `postCashBalance=${this.postCashBalance}, balance=${this.balance}, ` +
-      `cashToTransfer=${cashToTransfer}, transferring=${this.transferring}`,
-    );
-
-    if (cashToTransfer > 0 && !this.transferring) {
-      this.transferPostBalanceToCard(card, cashToTransfer);
-    } else if (cashToTransfer <= 0) {
-      console.warn(
-        `[PostCard ${this.postId}] card ${card} activated, но пост пуст — перевод пропущен`,
-      );
-    }
-  }
-
-  /**
-   * ★ Перевод всего баланса поста на карту клиента.
-   * POST /api/posts/{postId}/transfer-to-card  { card, amount }
-   */
+  // ============================================================
+  // Перевод баланса поста на карту
+  // ============================================================
   private transferPostBalanceToCard(card: string, amount: number): void {
     if (amount <= 0) return;
-
     this.transferring = true;
     const token = localStorage.getItem('carwash_auth_token') || '';
     const postId = this.postId;
@@ -356,9 +342,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
         return res.json();
       })
       .then((data: any) => {
-        console.log(`[PostCard ${postId}] ✅ transfer-to-card response:`, data);
-
-        // ★ Обнуляем пост-кэш и пост-баланс
         this.balance = typeof data?.postBalance === 'number'
           ? data.postBalance
           : (typeof data?.balance === 'number' ? data.balance : 0);
@@ -381,13 +364,13 @@ export class PostCardComponent implements OnInit, OnDestroy {
         this.notify.success(
           `Пост ${postId}: ${amount.toFixed(2)} ₽ переведено на карту ${card}${cardBalance}${receipt}`,
         );
+        console.log(`[PostCard ${postId}] ✅ transfer-to-card ${card}: ${amount} ₽`);
       })
       .catch((err) => {
         console.error(
           `[PostCard ${postId}] ❌ transfer-to-card ${card}:`,
           err.message,
         );
-        // Баланс НЕ трогаем — оператор сможет повторить или разобраться вручную
         this.notify.error(
           `Не удалось перевести ${amount.toFixed(2)} ₽ с поста на карту ${card}: ${err.message}`,
         );
@@ -400,21 +383,10 @@ export class PostCardComponent implements OnInit, OnDestroy {
   // ============================================================
   // Команды
   // ============================================================
-  printReceipt(): void {
-    this.sendCommand('print_receipt');
-  }
-
-  stop(): void {
-    this.sendCommand('stop');
-  }
-
-  pause(): void {
-    this.sendCommand('pause');
-  }
-
-  reset(): void {
-    this.sendCommand('reset');
-  }
+  printReceipt(): void { this.sendCommand('print_receipt'); }
+  stop(): void { this.sendCommand('stop'); }
+  pause(): void { this.sendCommand('pause'); }
+  reset(): void { this.sendCommand('reset'); }
 
   activateFunction(programName: string): void {
     this.sendCommand(`program ${programName}`);
@@ -424,9 +396,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
   openTopUpModal(): void { this.showTopUpModal = true; }
   closeTopUpModal(): void { this.showTopUpModal = false; }
 
-  // ============================================================
-  // Пополнение поста — аванс
-  // ============================================================
   quickTopUp(): void {
     const amount = Number(this.topUpAmount) || 0;
     if (amount <= 0) return;
@@ -472,7 +441,10 @@ export class PostCardComponent implements OnInit, OnDestroy {
       return res.json();
     })
     .then((data) => {
-      if (typeof data.balance === 'number') this.balance = data.balance;
+      if (typeof data.balance === 'number') {
+        if (data.kind === 'advance_card') this.clientCardBalance = data.balance;
+        else this.balance = data.balance;
+      }
       if (typeof data.receiptNumber === 'number') {
         this.currentAdvanceReceiptNumber = data.receiptNumber;
       }
@@ -480,8 +452,9 @@ export class PostCardComponent implements OnInit, OnDestroy {
       const receipt = data.receiptNumber
         ? `, авансовый чек №${data.receiptNumber}`
         : '';
+      const target = data.kind === 'advance_card' ? 'Карта' : 'Пост';
       this.notify.success(
-        `Пост ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
+        `${target} ${postId}: аванс +${amount} ₽ (${label})${receipt}`,
       );
     })
     .catch((err) => {
@@ -491,7 +464,6 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
   private sendCommand(command: string): void {
     const token = localStorage.getItem('carwash_auth_token') || '';
-    console.log(`[PostCard ${this.postId}] → ${command}`);
     fetch(`/api/posts/${this.postId}/command`, {
       method: 'POST',
       headers: {
@@ -505,10 +477,8 @@ export class PostCardComponent implements OnInit, OnDestroy {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(errBody.error || `HTTP ${res.status}`);
       }
-      console.log(`[PostCard ${this.postId}] ✅ ${command}`);
     })
     .catch((err) => {
-      console.error(`[PostCard ${this.postId}] ❌ ${command}:`, err.message);
       this.notify.error(`Команда не выполнена: ${err.message}`);
     });
   }

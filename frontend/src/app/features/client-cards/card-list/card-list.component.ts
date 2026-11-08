@@ -11,6 +11,7 @@ import {
   ClientCard,
   CardOperation,
   CreateClientCardDto,
+  CardReportResponse,
 } from '../../../core/models/client-card.model';
 import {
   PaymentMethodDialogComponent,
@@ -35,7 +36,10 @@ export class CardListComponent implements OnInit, OnDestroy {
   loading = false;
 
   newCard: CreateClientCardDto = {
-    card: '', type: 'client', fullName: '', phone: '',
+    card: '',
+    type: 'client',       // ★ type обязателен — приведено к CreateClientCardDto
+    fullName: '',
+    phone: '',
   };
 
   topUpAmount: Record<string, number> = {};
@@ -221,15 +225,44 @@ export class CardListComponent implements OnInit, OnDestroy {
     });
   }
 
+  // ============================================================
+  // ★ Отчёт по карте — маппим ответ API в UI-формат CardOperation
+  // ============================================================
   openReport(card: ClientCard): void {
     this.reportCard = card;
     this.reportModalOpen = true;
     this.reportLoading = true;
     this.reportOperations = [];
+
     this.cardService.getCardReport(card.card).subscribe({
-      next: (resp) => { this.reportOperations = resp.operations; this.reportLoading = false; },
+      next: (resp: CardReportResponse) => {
+        this.reportOperations = (resp.operations || []).map(op => this.mapOperation(op));
+        this.reportLoading = false;
+      },
       error: () => { this.notify.error('Ошибка отчёта'); this.reportLoading = false; },
     });
+  }
+
+  /**
+   * ★ Приводим операцию из API (/api/cards/:card/report) к UI-формату,
+   *   который ожидает шаблон: createdAt / type / comment.
+   */
+  private mapOperation(op: CardOperation): CardOperation {
+    // Маппинг kind → type (для бейджа в шаблоне)
+    let type: CardOperation['type'];
+    if (op.kind === 'advance_card' && op.isInflow)          type = 'topup';
+    else if (op.kind === 'transfer_post_to_card')           type = 'topup_from_post';
+    else if (op.kind === 'final' || op.kind === 'session')  type = 'charge';
+    else if (op.kind === 'refund')                          type = 'refund';
+    else if (op.isInflow)                                   type = 'topup';
+    else                                                    type = op.kind || 'charge';
+
+    return {
+      ...op,
+      createdAt: op.timestamp || op.createdAt,
+      type,
+      comment: op.description || '',
+    };
   }
 
   closeReport(): void {
