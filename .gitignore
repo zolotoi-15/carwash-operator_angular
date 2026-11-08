@@ -2,3 +2,4 @@ frontend/dist/
 frontend/.angular/cache/
 frontend/node_modules
 *.png
+/kkm-simulator/receipts
