@@ -15,36 +15,38 @@ const receiptSchema = new mongoose.Schema({
   postId:        { type: Number, default: 0, index: true },
   timestamp:     { type: Date,   default: Date.now, index: true },
 
-  // Тип операции: 'sell' | 'topup' | 'refund' | ...
-  operation:     { type: String, default: 'sell' },
+  // Кассовая смена, к которой относится чек.
+  // Проставляется автоматически в createReceipt по времени чека.
+  // Именно по этому полю фильтруются отчёты «по номеру смены».
+  shiftNumber:   { type: Number, default: null, index: true },
 
-  // Тип чека:
-  //   'session'       — обычная сессия
-  //   'topup_card'    — пополнение карты клиента (без аванса, legacy)
-  //   'topup_post'    — пополнение поста (без аванса, legacy)
-  //   'advance_card'  — аванс: пополнение карты клиента
-  //   'advance_post'  — аванс: пополнение поста
-  //   'final'         — финальный чек, закрывающий аванс
+  operation:     { type: String, default: 'sell' },
   kind:          { type: String, default: 'session', index: true },
 
   items:         { type: [serviceLineSchema], default: [] },
+
+  // totalCost = ДЕНЬГИ, ПОЛУЧЕННЫЕ ИМЕННО ЭТИМ ЧЕКОМ (нетто).
+  //   • пополнение (advance_card / advance_post / topup_*) = сумма пополнения
+  //   • финальный чек с авансом поста  = grossTotal − advanceApplied
+  //   • финальный чек с оплатой картой = 0 (деньги учтены при пополнении карты)
   totalCost:     { type: Number, default: 0 },
+  grossTotal:    { type: Number, default: null, index: true },
+  advanceApplied:{ type: Number, default: 0, index: true },
   balanceAfter:  { type: Number, default: 0 },
 
   paymentMethod: { type: String, default: null, index: true },
   discountTotal: { type: Number, default: 0 },
 
-  // ---------- Авансовые платежи ----------
-  /** Признак авансового платежа (пополнение карты/поста) */
+  status:        { type: String, enum: ['done', 'void'], default: 'done', index: true },
+
   isAdvance: { type: Boolean, default: false, index: true },
+  advanceReceiptNumber: { type: Number, default: null },
+  finalReceiptNumber:   { type: Number, default: null },
 
-  /** Для финального чека: номер авансового чека, который он закрывает */
-  advanceReceiptNumber: { type: Number, default: null, index: true },
+  // Карта клиента (только для advance_card / final с оплатой картой / refund по карте).
+  // Используется для отчёта GET /api/cards/:card/report.
+  cardNumber: { type: String, default: null },
 
-  /** Для авансового чека: номер финального чека, которым он закрыт */
-  finalReceiptNumber: { type: Number, default: null },
-
-  // ---------- Фискальные поля ----------
   fiscalSent:            { type: Boolean, default: false },
   fiscalUuid:            { type: String,  default: null },
   fiscalDocumentNumber:  { type: Number,  default: null },
@@ -57,9 +59,15 @@ const receiptSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+// ── Индексы ────────────────────────────────────────────────────────
 receiptSchema.index({ postId: 1, timestamp: -1 });
 receiptSchema.index({ kind: 1, timestamp: -1 });
 receiptSchema.index({ paymentMethod: 1, timestamp: -1 });
 receiptSchema.index({ isAdvance: 1, postId: 1, timestamp: -1 });
+receiptSchema.index({ status: 1, timestamp: -1 });
+receiptSchema.index({ shiftNumber: 1, timestamp: -1 });
+receiptSchema.index({ cardNumber: 1, timestamp: -1 }, { sparse: true });
+receiptSchema.index({ advanceReceiptNumber: 1 }, { sparse: true });
+receiptSchema.index({ finalReceiptNumber: 1 },   { sparse: true });
 
 module.exports = mongoose.model('Receipt', receiptSchema);
