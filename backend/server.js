@@ -510,6 +510,7 @@ function connectMqtt(settings) {
         const lastEspBalance = typeof state._lastEspBalance === 'number' ? state._lastEspBalance : null;
 
         if (cc) {
+          // Карта активна: дебетуем карту на дельту, если ESP32 «просел»
           if (newEspBalance !== null && lastEspBalance !== null &&
               lastEspBalance > newEspBalance + 0.001) {
             const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
@@ -519,11 +520,8 @@ function connectMqtt(settings) {
                 console.warn(`[Post ${postId}] debit: ${e.message}`));
             }
           }
-          if (newEspBalance !== null) {
-            state.clientCardBalance = newEspBalance;
-            // ★ При наличии карты баланс поста всегда 0, работаем только с картой
-            state.balance           = 0; 
-          }
+          // ★ НЕ перезаписываем state.clientCardBalance из ESP32!
+          state.balance = 0; // ★ Баланс поста всегда 0 при наличии карты
         } else {
           if (newEspBalance !== null) state.balance = newEspBalance;
         }
@@ -1117,7 +1115,7 @@ function publishRelayStatus(postId) {
     JSON.stringify({ busy: state.busy, relayMask: state.busy ? 1 : 0 }), { qos: 0 });
 }
 
-// ★★★ ИСПРАВЛЕНО: при списании баланс поста обнуляется, работаем только с картой
+// ★★★ ИСПРАВЛЕНО: при списании обновляем status для фронтенда
 async function debitCardForPost(postId, amountRub) {
   const state = postsState[postId];
   if (!state || !state.clientCard) return;
@@ -1133,6 +1131,9 @@ async function debitCardForPost(postId, amountRub) {
   
   state.clientCardBalance = card.balance;
   state.balance           = 0; // ★ Баланс поста всегда 0 при наличии карты
+  
+  publishStatus(postId); // ★ Обязательно уведомляем фронтенд
+  
   console.log(`💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с ${card.card} → остаток ${card.balance.toFixed(2)} ₽`);
 }
 

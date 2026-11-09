@@ -243,15 +243,12 @@ export class PostCardComponent implements OnInit, OnDestroy {
     if (typeof d.busy === 'boolean') this.busy = d.busy;
     if (typeof d.paused === 'boolean') this.paused = d.paused;
 
+    // Обновляем баланс поста
     if (typeof d.balance === 'number') {
       this.balance = d.balance;
-      // ★ Если карта активна, ESP32 может присылать актуальный баланс в поле balance.
-      //   Дублируем его в clientCardBalance, чтобы UI обновился во время работы услуги.
-      if (this.clientCard) {
-        this.clientCardBalance = d.balance;
-      }
     }
     
+    // ★ Обновляем баланс карты ТОЛЬКО из d.clientCardBalance
     if (typeof d.clientCardBalance === 'number') {
       this.clientCardBalance = d.clientCardBalance;
     }
@@ -267,7 +264,7 @@ export class PostCardComponent implements OnInit, OnDestroy {
 
     if (typeof d.lastSeen === 'number') this.lastSeen = d.lastSeen;
 
-    // ★ Обрабатываем как наличие карты, так и её отсутствие (null)
+    // Обработка наличия/отсутствия карты
     if (d.clientCard === null || d.clientCard === undefined) {
       if (d.balance === 0 || !d.busy) {
         this.clientCard = null;
