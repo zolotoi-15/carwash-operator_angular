@@ -1,0 +1,60 @@
+
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Кассовый чек</title>
+<style>
+  @page { size: 80mm auto; margin: 0; }
+  body { font-family: 'Courier New', monospace; font-size: 12px; width: 80mm; margin: 0 auto; padding: 5px; }
+  .center { text-align: center; }
+  .bold { font-weight: bold; }
+  .line { border-top: 1px dashed #000; margin: 5px 0; }
+  .qr { text-align: center; margin: 10px 0; }
+  .qr img { width: 80px; height: 80px; }
+  .small { font-size: 10px; }
+</style>
+</head>
+<body>
+  <div class="center bold">ООО 'Мойка Самообслуживания'</div>
+  <div class="center">ИНН: 123456789012</div>
+  <div class="center">г. Москва, ул. Примерная, д. 1</div>
+  <div class="center">Тел: +7 (495) 123-45-67</div>
+  <div class="center">Сайт: example-carwash.ru</div>
+  <div class="line"></div>
+  <div class="center bold">КАССОВЫЙ ЧЕК</div>
+  <div class="center">ПРИХОД</div>
+  <div class="line"></div>
+  <div>Пост №2</div>
+  <div>07.11.2026, 19:26:28</div>
+  <div>Смена №1</div>
+  <div>Чек №590</div>
+  <div class="line"></div>
+  <div class="bold">Оказанные услуги:</div>
+  
+      <div>Антимошка</div>
+      <div>Время: 1.000 сек × 83.00 руб/сек = 0.83 руб.</div>
+      <div class="line" style="margin: 2px 0;"></div>
+    
+      <div>Шампунь</div>
+      <div>Время: 1.000 сек × 63.00 руб/сек = 0.63 руб.</div>
+      <div class="line" style="margin: 2px 0;"></div>
+    
+      <div>Пылесос</div>
+      <div>Время: 994.160 сек × 25.00 руб/сек = 248.54 руб.</div>
+      <div class="line" style="margin: 2px 0;"></div>
+    
+  <div class="line"></div>
+  <div class="bold">ИТОГО: 250.00 руб.</div>
+  <div>Остаток на балансе: 0.00 руб.</div>
+  <div class="line"></div>
+  <div>Форма оплаты: ЭЛЕКТРОННЫМИ</div>
+  <div>НДС: Без НДС</div>
+  <div>Система налогообложения: УСН (Доходы)</div>
+  <div class="line"></div>
+  <div>Фискальный признак: 314051433</div>
+  <div class="line"></div>
+  <div class="center small">Сайт ФНС: www.nalog.ru</div>
+  <div class="center small">QR-код для проверки чека</div>
+  <div class="qr"><img src="qr_2_1794068788852.png" alt="QR-код"></div>
+  <div class="center small">Спасибо за покупку!</div>
+</body>
+</html>

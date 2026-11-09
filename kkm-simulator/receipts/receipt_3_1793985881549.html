@@ -1,0 +1,52 @@
+
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Кассовый чек</title>
+<style>
+  @page { size: 80mm auto; margin: 0; }
+  body { font-family: 'Courier New', monospace; font-size: 12px; width: 80mm; margin: 0 auto; padding: 5px; }
+  .center { text-align: center; }
+  .bold { font-weight: bold; }
+  .line { border-top: 1px dashed #000; margin: 5px 0; }
+  .qr { text-align: center; margin: 10px 0; }
+  .qr img { width: 80px; height: 80px; }
+  .small { font-size: 10px; }
+</style>
+</head>
+<body>
+  <div class="center bold">ООО 'Мойка Самообслуживания'</div>
+  <div class="center">ИНН: 123456789012</div>
+  <div class="center">г. Москва, ул. Примерная, д. 1</div>
+  <div class="center">Тел: +7 (495) 123-45-67</div>
+  <div class="center">Сайт: example-carwash.ru</div>
+  <div class="line"></div>
+  <div class="center bold">КАССОВЫЙ ЧЕК</div>
+  <div class="center">ПРИХОД</div>
+  <div class="line"></div>
+  <div>Пост №3</div>
+  <div>06.11.2026, 20:24:41</div>
+  <div>Смена №1</div>
+  <div>Чек №206</div>
+  <div class="line"></div>
+  <div class="bold">Оказанные услуги:</div>
+  
+      <div>Тефлон</div>
+      <div>Время: 21.000 сек × 75.00 руб/сек = 15.75 руб.</div>
+      <div class="line" style="margin: 2px 0;"></div>
+    
+  <div class="line"></div>
+  <div class="bold">ИТОГО: 15.75 руб.</div>
+  <div>Остаток на балансе: 0.00 руб.</div>
+  <div class="line"></div>
+  <div>Форма оплаты: ЭЛЕКТРОННЫМИ</div>
+  <div>НДС: Без НДС</div>
+  <div>Система налогообложения: УСН (Доходы)</div>
+  <div class="line"></div>
+  <div>Фискальный признак: 322200364</div>
+  <div class="line"></div>
+  <div class="center small">Сайт ФНС: www.nalog.ru</div>
+  <div class="center small">QR-код для проверки чека</div>
+  <div class="qr"><img src="qr_3_1793985881537.png" alt="QR-код"></div>
+  <div class="center small">Спасибо за покупку!</div>
+</body>
+</html>
