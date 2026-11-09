@@ -268,6 +268,17 @@ router.post('/:card/topup', auth, async (req, res) => {
     card.balance = newBalance;
     await card.save();
 
+    const receipt = await createReceipt({
+      postId:        0,
+      kind:          'advance_card',
+      operation:     'topup',
+      isAdvance:     true,
+      items:         [{ name: 'Аванс: пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
+      totalCost:     num,
+      balanceAfter:  card.balance,
+      paymentMethod,
+    });
+
     if (req.app.locals.publishCardBalanceToPosts) {
       await req.app.locals.publishCardBalanceToPosts(card.card);
     }

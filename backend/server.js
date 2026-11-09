@@ -911,6 +911,8 @@ async function loadSettings() {
       console.log('Настройки созданы в БД');
     } else {
       settings = doc.value;
+      console.log('[loadSettings] posts[1].services:',
+        JSON.stringify(settings.posts?.['1']?.services?.map(s => ({ n: s.name, e: s.enabled }))));
       if (!settings.posts) {
         const n = settings.numberOfPosts || 8;
         const posts = {};
@@ -1471,6 +1473,13 @@ function viewerOrAdmin(req, res, next) {
   return res.status(403).json({ error: 'Viewer or admin required' });
 }
 
+// Просмотр отчётов разрешён администраторам, разработчикам и наблюдателям (viewer)
+function viewerOrAdmin(req, res, next) {
+  const role = req.user && req.user.role;
+  if (role === 'admin' || role === 'developer' || role === 'viewer') return next();
+  return res.status(403).json({ error: 'Viewer or admin required' });
+}
+
 // ---------- Init users ----------
 (async () => {
   try {
@@ -1875,6 +1884,24 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
                   String(settings.posts[i]?.relay?.mac || '').toUpperCase() === norm) {
                 conflict = i; break;
               }
+            }
+            if (conflict) return res.status(409).json({ error: `Реле ${norm} уже назначено посту ${conflict}` });
+            settings.posts[postId].relay = { mac: norm };
+            publishToPostRelay(postId, 'postnum', { postnum: Number(postId) });
+          } else {
+            delete settings.posts[postId].relay;
+          }
+        }
+        // ★ Назначение реле посту из настроек: posts[i].relay = { mac } | null
+        if ('relay' in postData) {
+          const rawMac = postData.relay?.mac;
+          if (rawMac) {
+            const norm = normalizeMac(String(rawMac).replace(/^relay_/, ''));
+            if (!norm) return res.status(400).json({ error: `Некорректный MAC реле для поста ${postId}: ${rawMac}` });
+            let conflict = null;
+            for (let i = 1; i <= (settings.numberOfPosts || 8); i++) {
+              if (String(i) !== String(postId) &&
+                  String(settings.posts[i]?.relay?.mac || '').toUpperCase() === norm) { conflict = i; break; }
             }
             if (conflict) return res.status(409).json({ error: `Реле ${norm} уже назначено посту ${conflict}` });
             settings.posts[postId].relay = { mac: norm };

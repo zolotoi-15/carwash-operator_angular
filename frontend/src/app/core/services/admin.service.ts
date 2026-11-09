@@ -245,8 +245,45 @@ export class AdminService {
     }
   }
 
+  /**
+   * ★ Пересчитывает числовые маски реле/диммеров из галочек вида "Имя_1", "Имя_2", …
+   */
+  private rebuildMasks(post: PostSettings): void {
+    const relayMask  = post.relayMask  || (post.relayMask  = {});
+    const dimmerMask = post.dimmerMask || (post.dimmerMask = {});
+
+    for (const svc of post.services) {
+      // Реле: 8 бит
+      let relay = 0;
+      let hasRelayBit = false;
+      for (let r = 1; r <= 8; r++) {
+        const key = `${svc.name}_${r}`;
+        const v = relayMask[key];
+        if (v === true)  { relay |= (1 << (r - 1)); hasRelayBit = true; }
+        if (v === false) { hasRelayBit = true; }
+      }
+      if (hasRelayBit) {
+        relayMask[svc.name] = relay;
+      }
+
+      // Диммеры: 4 бита
+      let dimmer = 0;
+      let hasDimmerBit = false;
+      for (let d = 1; d <= 4; d++) {
+        const key = `${svc.name}_${d}`;
+        const v = dimmerMask[key];
+        if (v === true)  { dimmer |= (1 << (d - 1)); hasDimmerBit = true; }
+        if (v === false) { hasDimmerBit = true; }
+      }
+      if (hasDimmerBit) {
+        dimmerMask[svc.name] = dimmer;
+      }
+    }
+  }
+
   private toServer(settings: GeneralSettings): any {
     const postsObj: any = {};
+
     settings.posts.forEach(p => {
       this.rebuildMasks(p);
       const prices: any = {};
@@ -254,7 +291,7 @@ export class AdminService {
 
       postsObj[p.postId] = {
         prices,
-        relayMask: p.relayMask,
+        relayMask:      p.relayMask,
         vfdFrequencies: p.vfdFrequencies,
         dimmerMask: p.dimmerMask,
         buttonInputs: p.buttonInputs,
@@ -265,6 +302,7 @@ export class AdminService {
         services: p.services.map(s => ({
           name: s.name, price: s.price,
           free_time_sec: s.free_time_sec ?? 0,
+          // ★ enabled: true оставляем как есть (по умолчанию true)
           enabled: s.enabled !== false,
         })),
       };

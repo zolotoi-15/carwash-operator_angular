@@ -12,6 +12,101 @@ import { Subject, takeUntil } from 'rxjs';
   standalone: true,
   imports: [CommonModule, ReactiveFormsModule, FormsModule],
   template: `
+    <!-- ================= Топики реле MQTT-ретрансляторов ================= -->
+    <div class="topics-card">
+      <div class="topics-header">
+        <h4>📡 Реле (MQTT-топики ретрансляторов)</h4>
+        <div class="header-actions">
+          <label class="auto-refresh" title="Список реле и их статусы обновляются каждые 10 секунд">
+            <input type="checkbox" [(ngModel)]="autoRefresh" /> 🔄 Автообновление
+          </label>
+          <button type="button" class="mini-btn" (click)="discoverRelays()" [disabled]="relaysLoading">
+            {{ relaysLoading ? 'Поиск…' : 'Обновить список' }}
+          </button>
+        </div>
+      </div>
+      <p class="hint">
+        Доступные топики: <code>relay_&lt;MAC&gt;</code>, <code>/postnum</code>, <code>/udp</code>,
+        <code>/status_relay</code>, <code>/active</code>, <code>/ip</code>, <code>/lwt</code>.
+        Выберите реле из списка и назначьте его посту. Одно реле — один пост.
+        Статус ● онлайн / ○ офлайн берётся из топика <code>relay_&lt;MAC&gt;/lwt</code> (last will) и обновляется автоматически по MQTT-сообщениям реле.
+      </p>
+
+      <div *ngIf="relaysError" class="error-banner">⚠️ {{ relaysError }}</div>
+
+      <table class="relays-table" *ngIf="relays.length; else noRelays">
+        <thead>
+          <tr>
+            <th>Топик / MAC</th>
+            <th>Статус</th>
+            <th>IP</th>
+            <th>Назначен посту</th>
+            <th>Действие</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let r of relays" [class.row-assigned]="r.assignedPost === selectedPost">
+            <td><code>{{ r.topic }}</code></td>
+            <td>
+              <span class="badge" [ngClass]="online(r) ? 'badge-on' : 'badge-off'" [title]="statusTitle(r)">
+                {{ online(r) ? '● онлайн' : '○ офлайн' }}
+              </span>
+            </td>
+            <td>{{ r.ip || '—' }}</td>
+            <td>
+              <span *ngIf="r.assignedPost" class="badge badge-post">Пост {{ r.assignedPost }}</span>
+              <span *ngIf="!r.assignedPost" class="muted">свободно</span>
+            </td>
+            <td>
+              <!-- Кнопка «снять» доступна ВСЕГДА для любого занятого реле (не только выбранного поста) -->
+              <button *ngIf="!r.assignedPost" type="button" class="mini-btn assign"
+                      [disabled]="assignBusy"
+                      (click)="assignRelay(r.mac)">
+                → назначить посту {{ selectedPost }}
+              </button>
+              <button *ngIf="r.assignedPost" type="button" class="mini-btn unassign"
+                      [disabled]="assignBusy" title="Отвязать реле от поста {{ r.assignedPost }}"
+                      (click)="unassignRelay(r)">
+                ✖ снять с поста {{ r.assignedPost }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <ng-template #noRelays>
+        <div class="empty">
+          {{ relaysLoading ? 'Загрузка реле с брокера…' : 'Реле не обнаружены. Проверьте подключение устройств к MQTT-брокеру и нажмите «Обновить список».' }}
+        </div>
+      </ng-template>
+
+      <div class="current-assignment" *ngIf="currentRelayMac">
+        ✅ Посту <b>{{ selectedPost }}</b> назначено реле: <code>relay_{{ currentRelayMac }}</code>
+        <ul class="topic-list" *ngIf="currentRelayMac">
+          <li><code>relay_{{ currentRelayMac }}</code> — базовый топик (команды)</li>
+          <li><code>relay_{{ currentRelayMac }}/postnum</code> — номер поста</li>
+          <li><code>relay_{{ currentRelayMac }}/udp</code> — UDP-порт</li>
+          <li><code>relay_{{ currentRelayMac }}/status_relay</code> — состояние каналов</li>
+          <li><code>relay_{{ currentRelayMac }}/active</code> — активность</li>
+          <li><code>relay_{{ currentRelayMac }}/ip</code> — IP-адрес</li>
+          <li><code>relay_{{ currentRelayMac }}/lwt</code> — онлайн/офлайн (last will)</li>
+        </ul>
+      </div>
+
+      <!-- Ручной ввод MAC, если автообнаружение недоступно -->
+      <div class="manual-add">
+        <input type="text" [(ngModel)]="manualMac" placeholder="MAC вручную, напр. 30:76:F5:30:5B:A4"
+               (input)="manualMac = manualMac.toUpperCase()" />
+        <label class="post-pick">Пост:
+          <select [(ngModel)]="manualPost">
+            <option *ngFor="let i of postIds" [value]="i">Пост {{ i }}</option>
+          </select>
+        </label>
+        <button type="button" class="mini-btn assign" [disabled]="assignBusy || !validManualMac"
+                (click)="assignManual()">+ назначить посту {{ manualPost }}</button>
+        <span class="muted" *ngIf="manualMac && !validManualMac">некорректный MAC</span>
+      </div>
+    </div>
+
     <div class="post-selector">
       <label>Пост:
         <select [(ngModel)]="selectedPost" (change)="loadPostSettings()">

@@ -40,6 +40,9 @@ export class PostCardComponent implements OnInit, OnDestroy {
   @Input() postId!: number;
   @Input() activeServices: ActiveService[] = [];
 
+  /** ★ Активные услуги, приходят из DashboardComponent (зависят от блока «Услуги») */
+  @Input() activeServices: ActiveService[] = [];
+
   private realtime = inject(RealtimeService);
   private notify = inject(NotificationService);
 
@@ -83,6 +86,9 @@ export class PostCardComponent implements OnInit, OnDestroy {
   // ============================================================
   topUpAmount: number | null = null;
   showTopUpModal = false;
+  showPaymentDialog = false;
+  pendingTopUpAmount = 0;
+
   showPaymentDialog = false;
   pendingTopUpAmount = 0;
 
@@ -489,6 +495,9 @@ export class PostCardComponent implements OnInit, OnDestroy {
     });
   }
 
+  // ============================================================
+  // Отправка команд поста
+  // ============================================================
   private sendCommand(command: string): void {
     const token = localStorage.getItem('carwash_auth_token') || '';
     console.log(`[PostCard ${this.postId}] → ${command}`);
