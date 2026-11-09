@@ -3,30 +3,21 @@
   width: 100%;
 }
 
-/* ===== Верхний ряд: приводим к сетке из 4 колонок (как посты) ===== */
+/* ===== Верхний ряд ===== */
 .top-row {
   display: grid;
-  /* 4 колонки, чтобы идеально совпадало с сеткой постов */
   grid-template-columns: repeat(4, 1fr);
   gap: 12px;
   margin-bottom: 20px;
   align-items: stretch;
   width: 100%;
-  max-width: 1800px; /* Такое же ограничение, как у .posts-grid */
+  max-width: 1800px;
   margin-left: auto;
-  margin-right: auto; /* Центрируем */
+  margin-right: auto;
 
-  > app-kkm-status {
-    grid-column: span 1; /* 1 колонка */
-  }
-
-  > app-tank-levels {
-    grid-column: span 2; /* 2 колонки (по центру) */
-  }
-
-  > app-shift-total {
-    grid-column: span 1; /* 1 колонка */
-  }
+  > app-kkm-status { grid-column: span 1; }
+  > app-tank-levels { grid-column: span 2; }
+  > app-shift-total { grid-column: span 1; }
 
   > app-kkm-status,
   > app-tank-levels,
@@ -62,18 +53,19 @@
   }
 }
 
-/* ===== Ниже — сетка постов ===== */
+/* ===== Сетка постов ===== */
 .section-title {
   margin: 0 auto 12px;
-  max-width: 1800px; /* Выровняли с сеткой */
+  max-width: 1800px;
   color: #334155;
   font-size: 17px;
 }
 
 .posts-grid {
   display: grid;
-  /* Используем 4 равные колонки для десктопа, чтобы совпадало с верхом */
   grid-template-columns: repeat(4, 1fr);
+  /* ★ ДЕЛАЕТ ВСЕ РЯДЫ ОДИНАКОВОЙ ВЫСОТЫ */
+  grid-auto-rows: 1fr; 
   gap: 12px;
   max-width: 1800px;
   margin-left: auto;
@@ -81,22 +73,19 @@
 }
 
 .posts-grid > app-post-card {
-  display: block;
+  display: flex; /* Flex для растягивания внутренней карточки */
   width: 100%;
   min-width: 0;
+  height: 100%; /* ★ Занимаем всю высоту ячейки */
 }
 
 /* ===== Адаптив ===== */
 @media (max-width: 1400px) {
   .top-row, .posts-grid {
-    grid-template-columns: repeat(3, 1fr); /* На узких экранах 3 колонки */
+    grid-template-columns: repeat(3, 1fr);
   }
-  .top-row > app-tank-levels {
-     grid-column: span 1; /* Возвращаем в 1 колонку */
-  }
-  .top-row > app-shift-total {
-     grid-column: span 1;
-  }
+  .top-row > app-tank-levels { grid-column: span 1; }
+  .top-row > app-shift-total { grid-column: span 1; }
 }
 
 @media (max-width: 1024px) {
@@ -110,9 +99,7 @@
     grid-template-columns: 1fr;
   }
   
-  .top-row > app-tank-levels {
-    grid-column: auto;
-  }
+  .top-row > app-tank-levels { grid-column: auto; }
 
   .top-row > app-kkm-status .card,
   .top-row > app-tank-levels .card,

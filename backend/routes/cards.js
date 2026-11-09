@@ -22,10 +22,6 @@ function adminOnly(req, res, next) {
 }
 
 // ── Список карт ─────────────────────────────────────────────────────
-// GET /api/cards                      → массив (для *ngFor)
-// GET /api/cards?paginated=true&…     → { cards, total, page, limit }
-// GET /api/cards?page=1&limit=50      → то же (пагинация по факту)
-// X-Total-Count отдаётся всегда.
 router.get('/', auth, async (req, res) => {
   try {
     const { search, page, limit, type, paginated } = req.query;
@@ -78,14 +74,6 @@ router.get('/:card', auth, async (req, res) => {
 });
 
 // ── Отчёт по карте ──────────────────────────────────────────────────
-// GET /api/cards/:card/report
-//   без параметров            — все операции карты
-//   ?shiftNumber=N            — только по смене N
-//   ?from=ISO&to=ISO          — только за период
-//   ?limit=100&page=1         — пагинация списка (summary считается по всем)
-// В отчёт попадают:
-//   • advance_card / refund  — пополнения и возвраты (приход/расход)
-//   • final, оплаченные картой — стоимость услуг (grossTotal)
 router.get('/:card/report', auth, async (req, res) => {
   try {
     const cardNumber = String(req.params.card || '').trim().toUpperCase();
@@ -253,6 +241,7 @@ router.post('/:card/topup', auth, async (req, res) => {
 
     const newBalance = Math.round((card.balance + amount) * 100) / 100;
 
+    // ✅ Единственное объявление receipt через app.locals (как в остальном проекте)
     const receipt = await req.app.locals.createReceipt({
       postId: 0,
       kind: 'advance_card',
@@ -268,16 +257,8 @@ router.post('/:card/topup', auth, async (req, res) => {
     card.balance = newBalance;
     await card.save();
 
-    const receipt = await createReceipt({
-      postId:        0,
-      kind:          'advance_card',
-      operation:     'topup',
-      isAdvance:     true,
-      items:         [{ name: 'Аванс: пополнение карты', seconds: 0, cost: num, pricePerSecond: 0 }],
-      totalCost:     num,
-      balanceAfter:  card.balance,
-      paymentMethod,
-    });
+    // ❌ УДАЛЕНО: повторный `const receipt = await createReceipt({...})`,
+    //   который ссылался на неопределённые `createReceipt` и `num`.
 
     if (req.app.locals.publishCardBalanceToPosts) {
       await req.app.locals.publishCardBalanceToPosts(card.card);

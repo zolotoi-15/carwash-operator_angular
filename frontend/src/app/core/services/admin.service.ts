@@ -222,29 +222,6 @@ export class AdminService {
   }
 
   // ------- UI → server -------
-  private rebuildMasks(post: PostSettings): void {
-    const relayMask  = post.relayMask  || (post.relayMask  = {});
-    const dimmerMask = post.dimmerMask || (post.dimmerMask = {});
-
-    for (const svc of post.services) {
-      let relay = 0, hasRelayBit = false;
-      for (let r = 1; r <= 8; r++) {
-        const v = relayMask[`${svc.name}_${r}`];
-        if (v === true)  { relay |= (1 << (r - 1)); hasRelayBit = true; }
-        if (v === false) { hasRelayBit = true; }
-      }
-      if (hasRelayBit) relayMask[svc.name] = relay;
-
-      let dimmer = 0, hasDimmerBit = false;
-      for (let d = 1; d <= 4; d++) {
-        const v = dimmerMask[`${svc.name}_${d}`];
-        if (v === true)  { dimmer |= (1 << (d - 1)); hasDimmerBit = true; }
-        if (v === false) { hasDimmerBit = true; }
-      }
-      if (hasDimmerBit) dimmerMask[svc.name] = dimmer;
-    }
-  }
-
   /**
    * ★ Пересчитывает числовые маски реле/диммеров из галочек вида "Имя_1", "Имя_2", …
    */
@@ -302,7 +279,6 @@ export class AdminService {
         services: p.services.map(s => ({
           name: s.name, price: s.price,
           free_time_sec: s.free_time_sec ?? 0,
-          // ★ enabled: true оставляем как есть (по умолчанию true)
           enabled: s.enabled !== false,
         })),
       };
@@ -366,7 +342,6 @@ export class AdminService {
     return this.getSettings().pipe(map(settings => {
       const post = settings.posts.find(p => p.postId === postId);
       if (!post) {
-        // ★ Возвращаем пустой пост вместо ошибки
         return { ...structuredClone(emptyPostSettings), postId };
       }
       return post;
@@ -377,7 +352,6 @@ export class AdminService {
     return this.getSettings().pipe(
       map(settings => {
         let post = settings.posts.find(p => p.postId === postId);
-        // ★ СОЗДАНИЕ-ПОСТА: создаём пост, если его нет
         if (!post) {
           post = {
             postId,
@@ -414,7 +388,6 @@ export class AdminService {
         const newPosts: PostSettings[] = [];
         for (let i = 1; i <= count; i++) {
           const cloned = structuredClone(post1);
-          // ★ НЕ копируем назначение реле на другие посты
           if (i !== 1) cloned.relay = null;
           cloned.postId = i;
           newPosts.push(cloned);

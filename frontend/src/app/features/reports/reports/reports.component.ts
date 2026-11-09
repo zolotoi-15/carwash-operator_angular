@@ -15,6 +15,14 @@ export class ReportsComponent {
   fromDate: string = '';
   toDate: string = '';
 
+  // ★ НОВОЕ: Объект для хранения статистики оплаты
+  paymentSummary = {
+    total: 0,
+    cash: { total: 0, percent: 0 },
+    card_terminal: { total: 0, percent: 0 },
+    client_card: { total: 0, percent: 0 }
+  };
+
   constructor(private http: HttpClient) { }
 
   loadReport(type: string) {
@@ -27,6 +35,7 @@ export class ReportsComponent {
     else if (type === 'shift') url += 'shift';
     else if (type === 'range') url += `range?from=${this.fromDate}&to=${this.toDate}`;
     else return;
+
     this.http.get(url).subscribe((data: any) => {
       if (data && data.receipts) {
         data.totalSum = this.roundOne(data.totalSum);
@@ -35,6 +44,11 @@ export class ReportsComponent {
           totalCost: this.roundOne(r.totalCost),
           items: r.items.map((i: any) => ({ ...i, seconds: this.roundOne(i.seconds), cost: this.roundOne(i.cost) }))
         }));
+        
+        // ★ НОВОЕ: Забираем статистику с бэкенда
+        if (data.paymentSummary) {
+          this.paymentSummary = data.paymentSummary;
+        }
       }
       this.report = data;
     });

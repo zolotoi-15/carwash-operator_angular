@@ -1,5 +1,6 @@
 <div class="reports-container">
   <h2>📊 Отчёты по кассовым чекам</h2>
+  
   <div class="buttons">
     <button (click)="loadReport('day')">День</button>
     <button (click)="loadReport('week')">Неделя</button>
@@ -12,8 +13,48 @@
       <button (click)="downloadPDF()" class="pdf-btn">📄 Скачать PDF</button>
     </div>
   </div>
+
   <div *ngIf="report">
     <h3>Итого: {{ roundOne(report.totalSum) }} руб., чеков: {{ report.count }}</h3>
+    
+    <!-- ★ НОВЫЙ БЛОК: Способы оплаты -->
+    <div class="payment-summary">
+      <div class="summary-header">
+        <span>Способы оплаты</span>
+        <span class="total-amount">{{ paymentSummary.total | number:'1.0-0' }} ₽</span>
+      </div>
+      
+      <div class="summary-row">
+        <div class="summary-label">
+          <span class="icon">💵</span> Наличные
+        </div>
+        <div class="summary-values">
+          <span class="value">{{ paymentSummary.cash.total | number:'1.0-0' }} ₽</span>
+          <span class="percent">{{ paymentSummary.cash.percent }}%</span>
+        </div>
+      </div>
+      
+      <div class="summary-row">
+        <div class="summary-label">
+          <span class="icon">💳</span> Безнал
+        </div>
+        <div class="summary-values">
+          <span class="value">{{ paymentSummary.card_terminal.total | number:'1.0-0' }} ₽</span>
+          <span class="percent">{{ paymentSummary.card_terminal.percent }}%</span>
+        </div>
+      </div>
+      
+      <div class="summary-row">
+        <div class="summary-label">
+          <span class="icon">💳</span> Карта клиента
+        </div>
+        <div class="summary-values">
+          <span class="value">{{ paymentSummary.client_card.total | number:'1.0-0' }} ₽</span>
+          <span class="percent">{{ paymentSummary.client_card.percent }}%</span>
+        </div>
+      </div>
+    </div>
+
     <div class="table-wrapper">
       <table>
         <thead>

@@ -28,10 +28,72 @@ button {
   align-items: center;
 }
 
+/* ★ Стили для блока "Способы оплаты" */
+.payment-summary {
+  background: #fff;
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+  max-width: 400px; /* Ограничиваем ширину, чтобы не растягивался на весь экран */
+  border: 1px solid #e2e8f0;
+}
+
+.summary-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #e2e8f0;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  font-weight: 600;
+  color: #1e293b;
+}
+
+.summary-header .total-amount {
+  font-size: 1.2rem;
+  color: #3b82f6;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px dashed #e2e8f0;
+  font-size: 0.95rem;
+  color: #475569;
+}
+
+.summary-row:last-child {
+  border-bottom: none;
+}
+
+.summary-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.summary-values {
+  display: flex;
+  gap: 16px;
+  font-weight: 500;
+}
+
+.summary-values .value {
+  color: #0f172a;
+}
+
+.summary-values .percent {
+  color: #94a3b8;
+  width: 40px;
+  text-align: right;
+}
+
 /* ---- Обёртка таблицы с прокруткой ---- */
 .table-wrapper {
   overflow: auto;
-  max-height: 500px; /* при необходимости поменяйте под свои нужды */
+  max-height: 500px;
   border: 1px solid #ddd;
   border-radius: 6px;
 }
@@ -49,36 +111,13 @@ td {
   border: 1px solid #ddd;
 }
 
-  th:nth-child(1),
-  td:nth-child(1) {
-    width: 5%;
-  }
-  /* № */
-  th:nth-child(2),
-  td:nth-child(2) {
-    width: 10%;
-  }
-  /* № чека */
-  th:nth-child(3),
-  td:nth-child(3) {
-    width: 8%;
-  }
-  /* Пост */
-  th:nth-child(4),
-  td:nth-child(4) {
-    width: 18%;
-  }
-  /* Дата */
-  th:nth-child(5),
-  td:nth-child(5) {
-    width: 10%;
-  }
-  /* Сумма */
-  th:nth-child(6),
-  td:nth-child(6) {
-    width: 49%;
-  }
-/* Услуги */
+th:nth-child(1), td:nth-child(1) { width: 5%; }
+th:nth-child(2), td:nth-child(2) { width: 10%; }
+th:nth-child(3), td:nth-child(3) { width: 8%; }
+th:nth-child(4), td:nth-child(4) { width: 18%; }
+th:nth-child(5), td:nth-child(5) { width: 10%; }
+th:nth-child(6), td:nth-child(6) { width: 49%; }
+
 th {
   background: #f2f2f2;
   position: sticky;
