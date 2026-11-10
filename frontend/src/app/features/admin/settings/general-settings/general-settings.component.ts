@@ -85,14 +85,14 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
         newPosts.push(existing);
       } else {
         const cloned = structuredClone(template);
-        // ★ НЕ копируем назначение реле на новые посты
-        cloned.relay = null;
+        // ★ Новые посты получают «чистые» маски реле/диммеров — их назначит пользователь
+        //   в разделе «🔌 Номера реле и диммеры».
         newPosts.push({
           postId: i,
           services: cloned.services || [],
-          relayMask: cloned.relayMask || {},
+          relayMask: {},
           vfdFrequencies: cloned.vfdFrequencies || {},
-          dimmerMask: cloned.dimmerMask || {},
+          dimmerMask: {},
           buttonInputs: cloned.buttonInputs || {},
           relayDelays: cloned.relayDelays || {},
           dimmerDosing: cloned.dimmerDosing || {},
@@ -139,7 +139,6 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     });
   }
 
-  // ★ НЕ копируем назначение реле на другие посты
   copyFromFirstToAll(): void {
     const post1 = this.settings.posts?.[0];
     if (!post1) { this.notify.warning('Пост 1 не найден'); return; }
@@ -192,7 +191,6 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     post.dimmerMask[name] = 0;
     post.buttonInputs[name] = 0;
     post.relayDelays[name] = { onDelay: 100, offDelay: 200 };
-    // ★ ДОЗАЦИЯ-0: новая услуга без диммеров → дозация 0
     post.dimmerDosing[name] = { 1: 0, 2: 0, 3: 0, 4: 0 };
     post.services = [...post.services, { name, price: 0, free_time_sec: 0, enabled: true } as ServiceConfig];
     this.settings = { ...this.settings, posts: [...this.settings.posts] };

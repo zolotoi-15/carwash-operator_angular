@@ -1,10 +1,9 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+// src/app/pages/admin/components/dimmers.component.ts
+import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../../../core/services/admin.service';
-import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
-import { Subject, takeUntil } from 'rxjs';
+import { AdminService } from '../../../core/services/admin.service';
 
 @Component({
   selector: 'app-dimmers',
@@ -40,63 +39,60 @@ import { Subject, takeUntil } from 'rxjs';
     .loading { text-align: center; color: #666; }
   `]
 })
-export class DimmersComponent implements OnInit, OnDestroy {
+export class DimmersComponent implements OnInit {
   form!: FormGroup;
   serviceKeys: string[] = [];
   dimmerNumbers = [1, 2, 3, 4];
-  selectedPost = 1;
+  selectedPost: number = 1;
   postIds: number[] = [];
-  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder,
-    private settingsUpdate: SettingsUpdateService
-  ) {}
+    private fb: FormBuilder
+  ) { }
 
-  ngOnInit(): void {
-    this.admin.getSettings().subscribe(s => {
-      const count = s.numberOfPosts || 8;
+  ngOnInit() {
+    this.admin.getSettings().subscribe(settings => {
+      const count = settings.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
       this.loadPostSettings();
     });
-
-    this.settingsUpdate.settingsUpdated$
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(() => this.loadPostSettings());
   }
 
-  ngOnDestroy(): void {
-    this.destroy$.next();
-    this.destroy$.complete();
-  }
+  loadPostSettings() {
+    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
+      const services = postSettings.services || [];
+      this.serviceKeys = services.map(s => s.name);
 
-  loadPostSettings(): void {
-    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
-      const services = ps.services || [];
-      this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
-      const current = ps.dimmerMask || {};
+      const currentMask = postSettings.dimmerMask || {};
       const group: any = {};
       this.serviceKeys.forEach(name => {
-        const mask = current[name] || 0;
+        const mask = currentMask[name] || 0;
         const controls: any = {};
-        for (let d = 1; d <= 4; d++) controls['dimmer' + d] = [!!(mask & (1 << (d - 1)))];
+        for (let d = 1; d <= 4; d++) {
+          controls['dimmer' + d] = [!!(mask & (1 << (d - 1)))];
+        }
         group[name] = this.fb.group(controls);
       });
       this.form = this.fb.group(group);
     });
   }
 
-  save(): void {
+  save() {
     const raw = this.form.value;
     const dimmerMask: any = {};
     this.serviceKeys.forEach(name => {
       const group = raw[name];
       let mask = 0;
-      for (let d = 1; d <= 4; d++) if (group['dimmer' + d]) mask |= (1 << (d - 1));
+      for (let d = 1; d <= 4; d++) {
+        if (group['dimmer' + d]) {
+          mask |= (1 << (d - 1));
+        }
+      }
       dimmerMask[name] = mask;
     });
-    this.admin.updatePostSettings(this.selectedPost, { dimmerMask })
-      .subscribe(() => alert('Настройки диммеров для поста ' + this.selectedPost + ' сохранены'));
+    this.admin.updatePostSettings(this.selectedPost, { dimmerMask }).subscribe(() => {
+      alert('Настройки диммеров для поста ' + this.selectedPost + ' сохранены');
+    });
   }
 }

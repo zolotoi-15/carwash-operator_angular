@@ -1,0 +1,70 @@
+.service-row {
+  padding: 10px 0;
+  border-bottom: 1px dashed #e2e8f0;
+
+  &:last-child { border-bottom: none; }
+
+  h4 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #0f172a;
+  }
+}
+
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+
+  .row-label {
+    font-size: 12px;
+    color: #64748b;
+    min-width: 130px;
+  }
+
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+
+    .check {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: #334155;
+      cursor: pointer;
+
+      input { margin: 0; }
+    }
+  }
+}
+
+.relay-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+
+  button {
+    padding: 8px 14px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    color: #fff;
+    transition: background 0.15s ease;
+
+    &:disabled { opacity: 0.5; cursor: not-allowed; }
+  }
+
+  .save-btn {
+    background: #3b82f6;
+    &:hover:not(:disabled) { background: #2563eb; }
+  }
+
+  .publish-btn {
+    background: #16a34a;
+    &:hover:not(:disabled) { background: #15803d; }
+  }
+}

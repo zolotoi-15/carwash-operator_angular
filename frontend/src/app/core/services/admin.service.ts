@@ -222,15 +222,11 @@ export class AdminService {
   }
 
   // ------- UI → server -------
-  /**
-   * ★ Пересчитывает числовые маски реле/диммеров из галочек вида "Имя_1", "Имя_2", …
-   */
   private rebuildMasks(post: PostSettings): void {
     const relayMask  = post.relayMask  || (post.relayMask  = {});
     const dimmerMask = post.dimmerMask || (post.dimmerMask = {});
 
     for (const svc of post.services) {
-      // Реле: 8 бит
       let relay = 0;
       let hasRelayBit = false;
       for (let r = 1; r <= 8; r++) {
@@ -239,11 +235,8 @@ export class AdminService {
         if (v === true)  { relay |= (1 << (r - 1)); hasRelayBit = true; }
         if (v === false) { hasRelayBit = true; }
       }
-      if (hasRelayBit) {
-        relayMask[svc.name] = relay;
-      }
+      if (hasRelayBit) relayMask[svc.name] = relay;
 
-      // Диммеры: 4 бита
       let dimmer = 0;
       let hasDimmerBit = false;
       for (let d = 1; d <= 4; d++) {
@@ -252,9 +245,7 @@ export class AdminService {
         if (v === true)  { dimmer |= (1 << (d - 1)); hasDimmerBit = true; }
         if (v === false) { hasDimmerBit = true; }
       }
-      if (hasDimmerBit) {
-        dimmerMask[svc.name] = dimmer;
-      }
+      if (hasDimmerBit) dimmerMask[svc.name] = dimmer;
     }
   }
 
@@ -315,8 +306,14 @@ export class AdminService {
     );
   }
 
+  // ★ Публикация ВСЕХ постов (вызывается из большой кнопки)
   publishConfig(): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/publish-config`, {});
+  }
+
+  // ★ Публикация ОДНОГО поста (вызывается из кнопки в блоке реле)
+  publishPostConfig(postId: number): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/publish-config`, { postId });
   }
 
   pumpDimmer(postId: number, dimmer: string, percent?: number): Observable<any> {

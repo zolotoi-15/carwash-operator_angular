@@ -1,15 +1,13 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
-import { FormsModule } from '@angular/forms';
+import { FormsModule } from '@angular/forms';  // <-- добавить
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../../../core/services/admin.service';
-import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
-import { Subject, takeUntil } from 'rxjs';
+import { AdminService } from '../../../core/services/admin.service';
 
 @Component({
   selector: 'app-prices',
   standalone: true,
-  imports: [CommonModule, ReactiveFormsModule, FormsModule],
+  imports: [CommonModule, ReactiveFormsModule, FormsModule],  // <-- добавить FormsModule
   template: `
     <div class="post-selector">
       <label>Пост: 
@@ -30,63 +28,46 @@ import { Subject, takeUntil } from 'rxjs';
     </form>
     <div *ngIf="!form" class="loading">Загрузка...</div>
   `,
-  styles: [`
-    .post-selector { margin-bottom: 1rem; }
-    .two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem; }
-    .price-field label { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-    input { width: 80px; padding: 6px; border-radius: 8px; border: 1px solid #ccc; }
-    .save-btn { background: #27ae60; color: white; border: none; padding: 8px 16px; border-radius: 30px; cursor: pointer; font-size: 1rem; }
-    .loading { text-align: center; color: #666; }
-  `]
+  styles: [/* ... */]
 })
-export class PricesComponent implements OnInit, OnDestroy {
+export class PricesComponent implements OnInit {
   form!: FormGroup;
   serviceKeys: string[] = [];
-  selectedPost = 1;
+  selectedPost: number = 1;
   postIds: number[] = [];
-  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder,
-    private settingsUpdate: SettingsUpdateService
-  ) {}
+    private fb: FormBuilder
+  ) { }
 
-  ngOnInit(): void {
-    this.admin.getSettings().subscribe(s => {
-      const count = s.numberOfPosts || 8;
+  ngOnInit() {
+    this.admin.getSettings().subscribe(settings => {
+      const count = settings.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
+      // Загружаем настройки для первого поста
       this.loadPostSettings();
     });
-
-    this.settingsUpdate.settingsUpdated$
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(() => this.loadPostSettings());
   }
 
-  ngOnDestroy(): void {
-    this.destroy$.next();
-    this.destroy$.complete();
-  }
+  loadPostSettings() {
+    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
+      const services = postSettings.services || [];
+      this.serviceKeys = services.map(s => s.name);
 
-  loadPostSettings(): void {
-    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
-      const services = ps.services || [];
-      this.serviceKeys = services.filter(s => s.enabled !== false).map(s => s.name);
+      const currentPrices = postSettings.prices || {};
       const group: any = {};
-      services.forEach(s => { if (s.enabled !== false) group[s.name] = [s.price ?? 30]; });
+      this.serviceKeys.forEach(name => {
+        group[name] = [currentPrices[name] || 30];
+      });
       this.form = this.fb.group(group);
     });
   }
 
-  save(): void {
+  save() {
     const prices = this.form.value;
-    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
-      const updated = ps.services.map(s =>
-        this.serviceKeys.includes(s.name) ? { ...s, price: prices[s.name] } : s
-      );
-      this.admin.updatePostSettings(this.selectedPost, { services: updated })
-        .subscribe(() => alert('Цены для поста ' + this.selectedPost + ' сохранены'));
+    this.admin.updatePostSettings(this.selectedPost, { prices }).subscribe(() => {
+      alert('Цены для поста ' + this.selectedPost + ' сохранены');
     });
   }
 }
