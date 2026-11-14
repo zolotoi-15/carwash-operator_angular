@@ -1,0 +1,479 @@
+MongoDB connected
+[loadSettings] posts[1].services: [{"n":"Вода","e":true},{"n":"Пена","e":true},{"n":"Воск","e":true},{"n":"Тефлон","e":true},{"n":"Антимошка","e":true},{"n":"Шампунь","e":true},{"n":"Турбо","e":true},{"n":"Пылесос","e":true},{"n":"Воздух","e":true},{"n":"Пауза","e":true},{"n":"Осмос","e":true}]
+✅ mqtt-config.json обновлён: mqtt://192.168.31.211:1883
+Настройки загружены из БД
+Подключение к локальному брокеру: mqtt://192.168.31.211:1883
+✅ mqtt-config.json обновлён: mqtt://192.168.31.211:1883
+❌ publishConfigToAllPosts: mqttClient есть, но не connected
+REST API listening on http://0.0.0.0:3000
+WebSocket listening on ws://0.0.0.0:3000/ws
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+[migrate] Найдено 2 legacy-финальных чеков…
+[migrate] Исправлено 0 legacy-чеков
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+🔌 WebSocket: клиент подключён (всего: 1)
+[migrate-shift] Найдено 99 чеков без shiftNumber…
+[migrate-shift] Обновлено 0 чеков
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+🔌 WebSocket: клиент подключён (всего: 2)
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+🔌 WebSocket: клиент отключился (всего: 1)
+🔌 WebSocket: клиент подключён (всего: 2)
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+🔌 WebSocket: клиент отключился (всего: 1)
+🔌 WebSocket: клиент подключён (всего: 2)
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+MQTT error: Error: connect ECONNREFUSED 192.168.31.211:1883
+    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1645:16) {
+  errno: -4078,
+  code: 'ECONNREFUSED',
+  syscall: 'connect',
+  address: '192.168.31.211',
+  port: 1883
+}
+MQTT connection closed
+🔌 WebSocket: клиент отключился (всего: 1)

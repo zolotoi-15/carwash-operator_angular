@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("KkmProxy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6e26e26835012365d12fbb72aac296782c5036b4")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b89dce5e6a029de4e89817de7bca8a4096ba9ba0")]
 [assembly: System.Reflection.AssemblyProductAttribute("KkmProxy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("KkmProxy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
