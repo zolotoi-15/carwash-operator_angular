@@ -38,4 +38,52 @@
 .receipts-count {
   font-size: 13px;
   color: #dbeafe;
+  margin-bottom: 4px;
+}
+
+.avg-check {
+  font-size: 13px;
+  color: #bfdbfe;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+/* ★ Стили для блока оплаты */
+.payment-methods {
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  padding-top: 12px;
+
+  .pm-title {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    color: #dbeafe;
+    font-weight: 600;
+  }
+
+  .pm-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    padding: 4px 0;
+    color: #fff;
+
+    .pm-name {
+      flex: 1;
+      white-space: nowrap;
+    }
+    
+    .pm-sum {
+      font-weight: 600;
+      margin-right: 8px;
+    }
+
+    .pm-percent {
+      color: #dbeafe;
+      font-size: 12px;
+      width: 35px;
+      text-align: right;
+    }
+  }
 }

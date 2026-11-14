@@ -1,4 +1,5 @@
 ﻿import { Component, OnInit, OnDestroy, inject } from '@angular/core';
+import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
   AdminService,
@@ -18,7 +19,7 @@ import { Subject, takeUntil } from 'rxjs';
 @Component({
   selector: 'app-general-settings',
   standalone: true,
-  imports: [FormsModule, RelaysComponent],
+  imports: [CommonModule, FormsModule, RelaysComponent],
   templateUrl: './general-settings.component.html',
   styleUrls: ['./general-settings.component.scss'],
 })
@@ -30,21 +31,15 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
   settings: GeneralSettings = structuredClone(emptyGeneralSettings);
   loading = false;
   saving = false;
-
   numberOfPostsOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
-
   relayNumbers = [1, 2, 3, 4, 5, 6, 7, 8];
   dimmers = [1, 2, 3, 4];
-
   selectedPostId = 1;
   private destroy$ = new Subject<void>();
 
   ngOnInit(): void {
     this.loadSettings();
-
-    this.settingsUpdate.settingsUpdated$
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(() => this.loadSettings());
+    this.settingsUpdate.settingsUpdated$.pipe(takeUntil(this.destroy$)).subscribe(() => this.loadSettings());
   }
 
   ngOnDestroy(): void {
@@ -64,9 +59,6 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     this.selectedPostId = Number(postId);
   }
 
-  // ============================================================
-  // Хелперы для «Задержек реле» — безопасный доступ
-  // ============================================================
   getDelay(post: PostSettings, name: string, key: 'onDelay' | 'offDelay'): number {
     const def = post.relayDelays?.[name];
     if (!def) return key === 'onDelay' ? 100 : 200;
@@ -79,20 +71,12 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     post.relayDelays[name][key] = Number(value) || 0;
   }
 
-  // ============================================================
-  // Количество постов
-  // ============================================================
   onNumberOfPostsChange(newCount: number | string): void {
     const count = Number(newCount);
     if (!count || count < 1) return;
-
     const currentPosts = this.settings.posts || [];
     const template = currentPosts.find(p => p.postId === 1) || currentPosts[0];
-
-    if (!template) {
-      this.notify.warning('Нет ни одного поста для клонирования');
-      return;
-    }
+    if (!template) { this.notify.warning('Нет ни одного поста для клонирования'); return; }
 
     const newPosts: PostSettings[] = [];
     for (let i = 1; i <= count; i++) {
@@ -100,35 +84,28 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
       if (existing) {
         newPosts.push(existing);
       } else {
+        const cloned = structuredClone(template);
+        // ★ Новые посты получают «чистые» маски реле/диммеров — их назначит пользователь
+        //   в разделе «🔌 Номера реле и диммеры».
         newPosts.push({
           postId: i,
-          services: structuredClone(template.services || []),
+          services: cloned.services || [],
           relayMask: {},
-          vfdFrequencies: {},
+          vfdFrequencies: cloned.vfdFrequencies || {},
           dimmerMask: {},
-          buttonInputs: {},
-          relayDelays: {},
-          cameras: {},
+          buttonInputs: cloned.buttonInputs || {},
+          relayDelays: cloned.relayDelays || {},
+          dimmerDosing: cloned.dimmerDosing || {},
+          cameras: cloned.cameras || {},
+          relay: null,
         });
       }
     }
-
-    this.settings = {
-      ...this.settings,
-      numberOfPosts: count,
-      posts: newPosts,
-    };
-
-    if (!newPosts.find(p => p.postId === this.selectedPostId)) {
-      this.selectedPostId = 1;
-    }
-
+    this.settings = { ...this.settings, numberOfPosts: count, posts: newPosts };
+    if (!newPosts.find(p => p.postId === this.selectedPostId)) this.selectedPostId = 1;
     this.persist(`Количество постов изменено на ${count}`);
   }
 
-  // ============================================================
-  // Загрузка / сохранение
-  // ============================================================
   loadSettings(): void {
     this.loading = true;
     this.admin.getSettings().subscribe({
@@ -139,10 +116,7 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
           this.selectedPostId = this.settings.posts[0]?.postId ?? 1;
         }
       },
-      error: () => {
-        this.notify.error('Не удалось загрузить настройки');
-        this.loading = false;
-      },
+      error: () => { this.notify.error('Не удалось загрузить настройки'); this.loading = false; },
     });
   }
 
@@ -157,15 +131,10 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
   private persist(successMessage: string): void {
     this.saving = true;
     this.admin.updateSettings(this.settings).subscribe({
-      next: (s) => {
-        this.settings = s;
-        this.saving = false;
-        this.notify.success(successMessage);
-      },
+      next: (s) => { this.settings = s; this.saving = false; this.notify.success(successMessage); },
       error: (err: any) => {
         const msg = err?.error?.error || err?.error?.message || err?.message || 'Ошибка сохранения';
-        this.notify.error(msg);
-        this.saving = false;
+        this.notify.error(msg); this.saving = false;
       },
     });
   }
@@ -175,11 +144,18 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     if (!post1) { this.notify.warning('Пост 1 не найден'); return; }
     const count = this.settings.numberOfPosts || 8;
     const newPosts: PostSettings[] = [];
+
     for (let i = 1; i <= count; i++) {
-      newPosts.push({ ...structuredClone(post1), postId: i });
+      const cloned = structuredClone(post1);
+      cloned.postId = i;
+      if (i !== 1) {
+        cloned.relay = null;
+      }
+      newPosts.push(cloned);
     }
+
     this.settings = { ...this.settings, posts: newPosts };
-    this.persist('Настройки скопированы на все посты');
+    this.persist('Настройки скопированы на все посты (реле — только у поста 1)');
   }
 
   publishConfig(): void {
@@ -192,45 +168,31 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
   get mqtt(): MqttSettings { return this.settings.mqtt ?? DEFAULT_MQTT; }
   get kkm(): KkmSettings { return this.settings.kkm ?? emptyGeneralSettings.kkm; }
 
-  // ============================================================
-  // ★ ДОБАВЛЕНИЕ / УДАЛЕНИЕ УСЛУГ
-  // ============================================================
-
-  /** Уникальное имя, не пересекающееся с существующими */
   private nextServiceName(post: PostSettings): string {
     const base = 'Новая услуга';
     if (!post.services.some(s => s.name === base)) return base;
     let i = 2;
-    while (post.services.some(s => s.name === `${base} ${i}`)) i++;
-    return `${base} ${i}`;
+    while (post.services.some(s => s.name === `${base}${i}`)) i++;
+    return `${base}${i}`;
   }
 
   addService(postId: number): void {
     const post = this.settings.posts.find(p => p.postId === postId);
     if (!post) return;
-
     const name = this.nextServiceName(post);
-
-    // Инициализируем карты, чтобы шаблон не падал
-    post.relayMask      = post.relayMask      || {};
+    post.relayMask = post.relayMask || {};
     post.vfdFrequencies = post.vfdFrequencies || {};
-    post.dimmerMask     = post.dimmerMask     || {};
-    post.buttonInputs   = post.buttonInputs   || {};
-    post.relayDelays    = post.relayDelays    || {};
-
-    post.relayMask[name]      = 0;
+    post.dimmerMask = post.dimmerMask || {};
+    post.buttonInputs = post.buttonInputs || {};
+    post.relayDelays = post.relayDelays || {};
+    post.dimmerDosing = post.dimmerDosing || {};
+    post.relayMask[name] = 0;
     post.vfdFrequencies[name] = 40;
-    post.dimmerMask[name]     = 0;
-    post.buttonInputs[name]   = 0;
-    post.relayDelays[name]    = { onDelay: 100, offDelay: 200 };
-
-    // ★ Пересобираем массив — Angular гарантированно увидит изменение
-    post.services = [
-      ...post.services,
-      { name, price: 0, free_time_sec: 0, enabled: true } as ServiceConfig,
-    ];
-
-    // Форсируем change detection через новую ссылку на массив постов
+    post.dimmerMask[name] = 0;
+    post.buttonInputs[name] = 0;
+    post.relayDelays[name] = { onDelay: 100, offDelay: 200 };
+    post.dimmerDosing[name] = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    post.services = [...post.services, { name, price: 0, free_time_sec: 0, enabled: true } as ServiceConfig];
     this.settings = { ...this.settings, posts: [...this.settings.posts] };
   }
 
@@ -239,18 +201,15 @@ export class GeneralSettingsComponent implements OnInit, OnDestroy {
     if (!post) return;
     const svc = post.services[index];
     if (!svc) return;
-
     const next = [...post.services];
     next.splice(index, 1);
     post.services = next;
-
-    // Чистим карты от удалённой услуги
-    if (post.relayMask)      delete post.relayMask[svc.name];
+    if (post.relayMask) delete post.relayMask[svc.name];
     if (post.vfdFrequencies) delete post.vfdFrequencies[svc.name];
-    if (post.dimmerMask)     delete post.dimmerMask[svc.name];
-    if (post.buttonInputs)   delete post.buttonInputs[svc.name];
-    if (post.relayDelays)    delete post.relayDelays[svc.name];
-
+    if (post.dimmerMask) delete post.dimmerMask[svc.name];
+    if (post.buttonInputs) delete post.buttonInputs[svc.name];
+    if (post.relayDelays) delete post.relayDelays[svc.name];
+    if (post.dimmerDosing) delete post.dimmerDosing[svc.name];
     this.settings = { ...this.settings, posts: [...this.settings.posts] };
   }
 }

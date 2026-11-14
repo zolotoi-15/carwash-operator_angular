@@ -1,0 +1,148 @@
+Используются параметры запуска из C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\Properties\launchSettings.json...
+C:\Program Files\dotnet\sdk\9.0.318\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NET.Sdk.FrameworkReferenceResolution.targets(82,5): warning NETSDK1086: объект FrameworkReference для "Microsoft.AspNetCore.App" был включен в проект. На него неявно ссылается пакет SDK для .NET, и ссылаться на него из проекта обычно не нужно. Дополнительные сведения: https://aka.ms/sdkimplicitrefs [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+C:\Program Files\dotnet\sdk\9.0.318\Sdks\Microsoft.NET.Sdk\targets\Microsoft.NET.Sdk.FrameworkReferenceResolution.targets(82,5): warning NETSDK1086: объект FrameworkReference для "Microsoft.AspNetCore.App" был включен в проект. На него неявно ссылается пакет SDK для .NET, и ссылаться на него из проекта обычно не нужно. Дополнительные сведения: https://aka.ms/sdkimplicitrefs [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\Program.cs(237,11): warning CA1416: Этот сайт вызова доступен на всех платформах. "Marshal.FinalReleaseComObject(object)" поддерживается только в 'windows'. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\Program.cs(175,11): warning CA1416: Этот сайт вызова доступен на всех платформах. "Marshal.FinalReleaseComObject(object)" поддерживается только в 'windows'. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\Program.cs(206,11): warning CA1416: Этот сайт вызова доступен на всех платформах. "Marshal.FinalReleaseComObject(object)" поддерживается только в 'windows'. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\Program.cs(145,11): warning CA1416: Этот сайт вызова доступен на всех платформах. "Marshal.FinalReleaseComObject(object)" поддерживается только в 'windows'. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\Program.cs(350,11): warning CA1416: Этот сайт вызова доступен на всех платформах. "Marshal.FinalReleaseComObject(object)" поддерживается только в 'windows'. (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1416) [C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy\KkmProxy.csproj]
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://0.0.0.0:5001
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Development
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: C:\Users\User\source\repos\zolotoi-15\carwash-operator_angular\KkmProxy
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).
+info: Microsoft.AspNetCore.Hosting.Diagnostics[1]
+      Request starting HTTP/1.1 GET http://127.0.0.1:5001/api/kkm/status - - -
+info: Microsoft.AspNetCore.Routing.EndpointMiddleware[0]
+      Executing endpoint 'KkmProxy.KkmController.GetStatus (KkmProxy)'
+info: Microsoft.AspNetCore.Mvc.Infrastructure.ControllerActionInvoker[102]
+      Route matched with {action = "GetStatus", controller = "Kkm"}. Executing controller action with signature Microsoft.AspNetCore.Mvc.IActionResult GetStatus() on controller KkmProxy.KkmController (KkmProxy).

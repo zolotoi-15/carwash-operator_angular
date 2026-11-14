@@ -53,7 +53,6 @@ export class DashboardComponent implements OnInit, OnDestroy {
       const count = settings.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
 
-      // Собираем активные услуги по каждому посту
       const map: Record<number, { name: string; price: number; free_time_sec: number }[]> = {};
       for (const post of settings.posts) {
         map[post.postId] = (post.services || [])

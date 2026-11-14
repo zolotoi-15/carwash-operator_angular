@@ -11,6 +11,9 @@
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
+  
+  /* ★ РАСТЯГИВАЕМ КАРТОЧКУ НА ВСЮ ВЫСОТУ */
+  height: 100%; 
 
   &:hover { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08); }
   &.offline { opacity: 0.65; }
@@ -29,6 +32,18 @@
   border-radius: 4px;
   animation: flashIn 0.3s ease;
   z-index: 10;
+}
+
+.active-card-number {
+  display: block;
+  margin: 4px 0;
+  font-size: 0.9em;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  position: relative;
+  z-index: 0;
 }
 
 @keyframes flashIn {
@@ -96,6 +111,12 @@
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 4px;
+  
+  /* Если кнопок будет много, они не сломают вёрстку, а добавят скролл */
+  max-height: 200px; 
+  overflow-y: auto;
+  align-content: start;
+  margin-bottom: 4px;
 
   .fn-btn {
     padding: 6px 0;
@@ -119,7 +140,6 @@
     }
   }
 
-  /* ★ Сообщение, если активных услуг нет */
   .no-services {
     grid-column: 1 / -1;
     text-align: center;
@@ -145,6 +165,9 @@
 
 /* ===== Строка «Сумма» ===== */
 .sum-row {
+  /* ★ МАГИЯ FLEXBOX: прижимаем этот блок и всё, что ниже, к низу карточки */
+  margin-top: auto; 
+  
   display: flex;
   justify-content: space-between;
   align-items: center;

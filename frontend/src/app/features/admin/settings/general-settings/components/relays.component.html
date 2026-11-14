@@ -1,0 +1,50 @@
+<label>Пост:
+  <select [(ngModel)]="selectedPost" (ngModelChange)="loadPostSettings()">
+    @for (id of postIds; track id) {
+      <option [ngValue]="id">Пост {{ id }}</option>
+    }
+  </select>
+</label>
+
+@for (svc of services; track svc.name) {
+  <div class="service-row">
+    <h4>{{ svc.name }}</h4>
+
+    <div class="check-row">
+      <span class="row-label">Реле (8 бит):</span>
+      <span class="checks">
+        @for (bit of relayNumbers; track bit) {
+          <label class="check">
+            <input type="checkbox"
+                   [checked]="hasRelayBit(svc.name, bit)"
+                   (change)="setRelayBit(svc.name, bit, $event)" />
+            {{ bit }}
+          </label>
+        }
+      </span>
+    </div>
+
+    <div class="check-row">
+      <span class="row-label">Диммеры (4 бита):</span>
+      <span class="checks">
+        @for (bit of dimmers; track bit) {
+          <label class="check">
+            <input type="checkbox"
+                   [checked]="hasDimmerBit(svc.name, bit)"
+                   (change)="setDimmerBit(svc.name, bit, $event)" />
+            {{ bit }}
+          </label>
+        }
+      </span>
+    </div>
+  </div>
+}
+
+<div class="relay-actions">
+  <button (click)="save()" [disabled]="saving" class="save-btn">
+    {{ saving ? '⏳ Сохранение…' : '💾 Сохранить' }}
+  </button>
+  <button (click)="publishPost()" [disabled]="saving" class="publish-btn">
+    📤 Отправить на пост {{ selectedPost }}
+  </button>
+</div>

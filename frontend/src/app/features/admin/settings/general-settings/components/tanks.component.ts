@@ -1,7 +1,8 @@
+// src/app/pages/admin/components/tanks.component.ts
 import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { AdminService } from '../../../../../core/services/admin.service';
+import { AdminService } from '../../../core/services/admin.service';
 
 @Component({
   selector: 'app-tanks',
@@ -40,9 +41,9 @@ import { AdminService } from '../../../../../core/services/admin.service';
 export class TanksComponent implements OnInit {
   form!: FormGroup;
 
-  constructor(private admin: AdminService, private fb: FormBuilder) {}
+  constructor(private admin: AdminService, private fb: FormBuilder) { }
 
-  ngOnInit(): void {
+  ngOnInit() {
     this.admin.getSettings().subscribe(settings => {
       this.form = this.fb.group({
         water_level: [settings.tankLevels?.['water'] || 80],
@@ -59,17 +60,23 @@ export class TanksComponent implements OnInit {
     });
   }
 
-  save(): void {
+  save() {
     const raw = this.form.value;
     const newLevels = {
-      water: raw.water_level, foam: raw.foam_level, wax: raw.wax_level,
-      teflon: raw.teflon_level, osmosis: raw.osmosis_level
+      water: raw.water_level,
+      foam: raw.foam_level,
+      wax: raw.wax_level,
+      teflon: raw.teflon_level,
+      osmosis: raw.osmosis_level
     };
     const newThresholds = {
-      water: raw.water_threshold, foam: raw.foam_threshold, wax: raw.wax_threshold,
-      teflon: raw.teflon_threshold, osmosis: raw.osmosis_threshold
+      water: raw.water_threshold,
+      foam: raw.foam_threshold,
+      wax: raw.wax_threshold,
+      teflon: raw.teflon_threshold,
+      osmosis: raw.osmosis_threshold
     };
-    this.admin.updateSettings({ tankLevels: newLevels, tankLowThreshold: newThresholds } as any)
+    this.admin.updateSettings({ tankLevels: newLevels, tankLowThreshold: newThresholds })
       .subscribe(() => alert('Уровни и пороги сохранены'));
   }
 }

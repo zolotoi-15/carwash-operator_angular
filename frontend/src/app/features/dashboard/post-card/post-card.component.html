@@ -1,17 +1,16 @@
 <div class="post-card" [class.busy]="busy" [class.offline]="!online">
-
-  <!-- Flash при сканировании карты -->
+  <!-- Кратковременная подсветка при сканировании карты (4 сек) -->
   @if (cardFlashVisible && lastCardScan) {
     <div class="card-flash">
       💳 {{ lastCardScan.card }}
     </div>
   }
 
-  <!-- Заголовок + статус ESP32 -->
+  <!-- Заголовок + статус пульта -->
   <div class="post-header">
     <span class="post-title">🚿 Пост {{ postId }}</span>
     <span class="post-status" [class.online]="online" [class.offline]="!online">
-      {{ online ? '🟢 ESP32 подключён' : '🔴 ESP32 оффлайн' }}
+      {{ online ? '🟢 Пульт подключён' : '🔴 Пульт отключен' }}
     </span>
   </div>
 
@@ -22,22 +21,36 @@
     </span>
   </div>
 
-  <!-- Баланс и активная функция -->
+  <!-- Баланс, активная функция и карта клиента -->
   <div class="post-info">
     <div class="info-row">
       <span>💰 Баланс:</span>
-      <span class="value">{{ balance | number:'1.2-2' }} ₽</span>
+      <!-- ★ Используем displayBalance: если карта привязана, показываем баланс карты -->
+      <span class="value">{{ displayBalance | number:'1.2-2' }} ₽</span>
     </div>
     <div class="info-row">
       <span>🧼 Активная функция:</span>
       <span class="value">{{ activeFunction || '-' }}</span>
     </div>
-    
-    <!-- Блок скроется автоматически, когда currentAdvanceReceiptNumber станет null -->
+
+    <!-- Скрывается автоматически, когда currentAdvanceReceiptNumber станет null -->
     @if (currentAdvanceReceiptNumber) {
       <div class="info-row">
         <span>🧾 Аванс №:</span>
         <span class="value mono">{{ currentAdvanceReceiptNumber }}</span>
+      </div>
+    }
+
+    <!-- ★ Активная карта клиента — отображается постоянно, пока карта активна -->
+    @if (clientCard) {
+      <div class="info-row">
+        <span>💳 Карта клиента:</span>
+        <span class="value mono">{{ clientCard }}</span>
+      </div>
+      <!-- Если основной баланс уже показывает карту, эту строку можно скрыть или оставить для наглядности -->
+      <div class="info-row">
+        <span>💰 Баланс карты:</span>
+        <span class="value">{{ clientCardBalance | number:'1.2-2' }} ₽</span>
       </div>
     }
   </div>
@@ -61,19 +74,19 @@
   <div class="sum-row">
     <span>Сумма</span>
     <input type="number"
-      class="sum-input"
-      [(ngModel)]="topUpAmount"
-      [name]="'topUpAmount_' + postId"
-      placeholder="0"
-      min="1"
-      step="1"
-      autocomplete="off"
-      (keydown.enter)="quickTopUp()">
+           class="sum-input"
+           [(ngModel)]="topUpAmount"
+           [name]="'topUpAmount_' + postId"
+           placeholder="0"
+           min="1"
+           step="1"
+           autocomplete="off"
+           (keydown.enter)="quickTopUp()">
     <button type="button"
-      class="quick-topup-btn"
-      [disabled]="!topUpAmount || topUpAmount <= 0"
-      (click)="quickTopUp()"
-      title="Пополнить на введённую сумму">
+            class="quick-topup-btn"
+            [disabled]="!topUpAmount || topUpAmount <= 0"
+            (click)="quickTopUp()"
+            title="Пополнить на введённую сумму">
       ₽
     </button>
   </div>
@@ -81,15 +94,13 @@
   <!-- Кнопки оператора -->
   <div class="actions">
     <button class="act-btn topup" (click)="openTopUpModal()">➕ Пополнить</button>
-    <button class="act-btn stop"  (click)="stop()">⏹️ Остановить</button>
+    <button class="act-btn stop" (click)="stop()">⏹️ Остановить</button>
     <button class="act-btn pause" (click)="pause()">⏸️ Пауза</button>
     <button class="act-btn reset" (click)="reset()">🔄 Сброс</button>
     <button class="act-btn print" (click)="printReceipt()">🧾 Печать чека</button>
   </div>
-
 </div>
 
-<!-- Модалка пополнения с чеками — вне .post-card, чтобы не обрезался overflow -->
 @if (showTopUpModal) {
   <app-receipt-modal
     [postId]="postId"
@@ -98,7 +109,6 @@
   </app-receipt-modal>
 }
 
-<!-- Диалог выбора способа оплаты -->
 @if (showPaymentDialog) {
   <app-payment-method-dialog
     [amount]="pendingTopUpAmount"

@@ -211,6 +211,10 @@ $radius: 14px;
   &.kpi-total .kpi-icon { background: #eff6ff; }
   &.kpi-cash .kpi-icon { background: #ecfdf5; }
   &.kpi-noncash .kpi-icon { background: #eef2ff; }
+
+  /* ★ Стили для новых карточек */
+  &.kpi-cards-clients .kpi-icon { background: #fdf4ff; color: #c026d3; }
+  &.kpi-cards-clients-cash .kpi-icon { background: #fff7ed; color: #ea580c; }
 }
 
 /* ===== Диаграммы ===== */

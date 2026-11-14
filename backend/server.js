@@ -17,15 +17,180 @@ const Receipt = require('./models/Receipt');
 const { initReceiptService, createReceipt } = require('./services/receipt.service');
 require('dotenv').config();
 
+// ── Защита от падения процесса на unhandled rejection ───────────────
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ UNHANDLED REJECTION:', reason);
+  if (reason && reason.stack) console.error(reason.stack);
+});
+process.on('uncaughtException', (err) => {
+  console.error('❌ UNCAUGHT EXCEPTION:', err);
+  if (err && err.stack) console.error(err.stack);
+});
+process.on('exit', (code) => console.error(`💀 backend завершился, code=${code}`));
+
 const KKM_DRIVER_URL = process.env.KKM_DRIVER_URL || 'http://127.0.0.1:5001/api/kkm';
 
-const REPORT_RECEIPT_FILTER = {
-  kind: { $ne: 'advance_post' },
-  isAdvance: { $ne: true },
-};
+// ── Accounting query ────────────────────────────────────────────────
+function accountingQuery(range = {}) {
+  return {
+    ...range,
+    kind:   { $ne: 'transfer_post_to_card' },
+    status: { $ne: 'void' },
+  };
+}
 
-function reportReceiptsQuery(range = {}) {
-  return { ...range, ...REPORT_RECEIPT_FILTER };
+// Универсальный билдер фильтра по смене или по диапазону дат.
+function buildTimeOrShiftFilter({ shiftNumber, from, to }) {
+  if (shiftNumber != null && shiftNumber !== '') {
+    const n = Number(shiftNumber);
+    if (!Number.isInteger(n)) return { error: 'Некорректный shiftNumber', code: 400 };
+    return { filter: { shiftNumber: n }, kind: 'shift', shiftNumber: n };
+  }
+  if (!from || !to) return { error: 'Укажите shiftNumber или from+to', code: 400 };
+  const start = new Date(from); const end = new Date(to);
+  if (isNaN(start) || isNaN(end)) return { error: 'Некорректные from/to', code: 400 };
+  return { filter: { timestamp: { $gte: start, $lte: end } }, kind: 'range', from, to };
+}
+
+function pairIdOf(r) {
+  if (!r) return null;
+  if (r.isAdvance && r.finalReceiptNumber) return r.receiptNumber;
+  if (!r.isAdvance && r.advanceReceiptNumber) return r.advanceReceiptNumber;
+  return null;
+}
+
+function annotateReceipt(r) {
+  const o = typeof r.toObject === 'function' ? r.toObject() : { ...r };
+  o.status         = o.status || 'done';
+  o.grossTotal     = o.grossTotal ?? null;
+  o.advanceApplied = o.advanceApplied ?? 0;
+  o.pairId         = pairIdOf(o);
+  o.shiftNumber    = o.shiftNumber ?? null;
+  return o;
+}
+
+// ★ Функция для расчёта среднего чека (только по финальным чекам)
+function computeAverageCheck(receipts) {
+  const finals = receipts.filter(r =>
+    r.status !== 'void' &&
+    r.isAdvance !== true &&
+    r.kind !== 'transfer_post_to_card' &&
+    r.kind !== 'refund'
+  );
+
+  if (!finals.length) {
+    return { avgCheck: 0, finalCount: 0, finalTotal: 0 };
+  }
+
+  const finalTotal = finals.reduce((s, r) => {
+    const amount = Number(r.grossTotal != null ? r.grossTotal : r.totalCost) || 0;
+    return s + amount;
+  }, 0);
+
+  return {
+    avgCheck:   Math.round((finalTotal / finals.length) * 100) / 100,
+    finalCount: finals.length,
+    finalTotal: Math.round(finalTotal * 100) / 100,
+  };
+}
+
+// ★ Функция для подсчета статистики по способам оплаты (для отчётов и смены)
+function calculatePaymentSummary(receipts) {
+  let total = 0, cash = 0, card_terminal = 0, client_card = 0;
+
+  for (const r of receipts) {
+    if (r.status === 'void' || r.kind === 'transfer_post_to_card') continue;
+    
+    // Для карт клиента реальная сумма — это grossTotal (totalCost = 0)
+    const amount = r.paymentMethod === 'client_card' 
+      ? (Number(r.grossTotal) || Number(r.totalCost) || 0) 
+      : (Number(r.totalCost) || 0);
+
+    total += amount;
+    if (r.paymentMethod === 'cash') cash += amount;
+    else if (r.paymentMethod === 'card_terminal') card_terminal += amount;
+    else if (r.paymentMethod === 'client_card') client_card += amount;
+  }
+
+  const pct = (val) => total > 0 ? Math.round((val / total) * 100) : 0;
+
+  return {
+    total: Math.round(total * 100) / 100,
+    cash: { total: Math.round(cash * 100) / 100, percent: pct(cash) },
+    card_terminal: { total: Math.round(card_terminal * 100) / 100, percent: pct(card_terminal) },
+    client_card: { total: Math.round(client_card * 100) / 100, percent: pct(client_card) }
+  };
+}
+
+// Миграция legacy-финальных чеков: приводим totalCost к нетто,
+// чтобы итоги смен не задваивались. Идемпотентно.
+async function migrateLegacyReceipts() {
+  try {
+    const legacy = await Receipt.find({
+      kind: 'final',
+      advanceReceiptNumber: { $ne: null },
+      grossTotal: null,
+    }).lean();
+    if (!legacy.length) return;
+    console.log(`[migrate] Найдено ${legacy.length} legacy-финальных чеков…`);
+    let fixed = 0;
+    for (const r of legacy) {
+      const consumed = await Receipt.find({
+        isAdvance: true,
+        finalReceiptNumber: r.receiptNumber,
+        kind: { $in: ['advance_post', 'topup_post'] },
+      }).lean();
+      if (!consumed.length) continue;
+      const totalAdvance = consumed.reduce((s, a) => s + (Number(a.totalCost) || 0), 0);
+      const gross = Number(r.totalCost) || 0;
+      const net   = Math.max(0, gross - totalAdvance);
+      await Receipt.updateOne(
+        { _id: r._id },
+        { $set: { grossTotal: gross, advanceApplied: totalAdvance, totalCost: net, status: r.status || 'done' } },
+      );
+      fixed++;
+    }
+    console.log(`[migrate] Исправлено ${fixed} legacy-чеков`);
+  } catch (e) {
+    console.warn('[migrate] Ошибка миграции:', e.message);
+  }
+}
+
+// Проставляет shiftNumber старым чекам по временным диапазонам смен.
+// Идемпотентна: трогает только чеки с shiftNumber == null.
+async function migrateReceiptShiftNumbers() {
+  try {
+    const missing = await Receipt.countDocuments({ shiftNumber: null });
+    if (!missing) return;
+    console.log(`[migrate-shift] Найдено ${missing} чеков без shiftNumber…`);
+
+    const shifts = await Shift.find({}).sort({ openedAt: 1 }).lean();
+    if (!shifts.length) {
+      console.log('[migrate-shift] Нет смен — пропускаем');
+      return;
+    }
+
+    let updated = 0;
+    for (let i = 0; i < shifts.length; i++) {
+      const s = shifts[i];
+      const next = shifts[i + 1];
+      const startTime = new Date(s.openedAt);
+      const endTime = s.closedAt
+        ? new Date(s.closedAt)
+        : next
+          ? new Date(next.openedAt)
+          : new Date('9999-12-31');
+
+      const result = await Receipt.updateMany(
+        { shiftNumber: null, timestamp: { $gte: startTime, $lt: endTime } },
+        { $set: { shiftNumber: s.shiftNumber } },
+      );
+      updated += result.modifiedCount || 0;
+    }
+    console.log(`[migrate-shift] Обновлено ${updated} чеков`);
+  } catch (e) {
+    console.warn('[migrate-shift] Ошибка:', e.message);
+  }
 }
 
 // ============================================================
@@ -47,46 +212,33 @@ function broadcast(payload) {
 
 wss.on('connection', async (ws) => {
   console.log(`🔌 WebSocket: клиент подключён (всего: ${wss.clients.size})`);
-
   try {
     ws.send(JSON.stringify({
       type: 'snapshot',
       posts: postsState,
-      settings: {
-        tankLevels: settings.tankLevels,
-        numberOfPosts: settings.numberOfPosts,
-      },
+      settings: { tankLevels: settings.tankLevels, numberOfPosts: settings.numberOfPosts },
       timestamp: Date.now(),
     }));
-  } catch (e) {
-    console.warn('WebSocket snapshot error:', e.message);
-  }
-
+  } catch (e) { console.warn('WebSocket snapshot error:', e.message); }
   try { await closeExpiredShiftIfNeeded(); } catch { /* ignore */ }
-
   try {
     const currentShift = await Shift.findOne({ shiftOpen: true });
     if (currentShift) {
-      const receipts = await Receipt.find(reportReceiptsQuery({
-        timestamp: { $gte: currentShift.openedAt }
-      }));
-      const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+      const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+      const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+      const { avgCheck } = computeAverageCheck(receipts);
+      const paymentMethods = calculatePaymentSummary(receipts);
       ws.send(JSON.stringify({
-        type: 'mqtt',
-        topic: 'shift/total',
-        payload: JSON.stringify({ total, count: receipts.length }),
+        type: 'mqtt', topic: 'shift/total',
+        payload: JSON.stringify({ shiftNumber: currentShift.shiftNumber, total, count: receipts.length, avgCheck, paymentMethods }),
         timestamp: Date.now(),
       }));
     }
-  } catch (e) {
-    console.warn('WebSocket shift/total snapshot error:', e.message);
-  }
-
+  } catch (e) { console.warn('WebSocket shift/total snapshot error:', e.message); }
   try {
     await publishKkmStatus();
     const shift = await Shift.findOne({ shiftOpen: true }).lean();
     const driverData = await fetchKkmStatusFromDriver();
-
     const kkmPayload = JSON.stringify({
       ready:              driverData ? !!driverData.ready       : true,
       connected:          driverData ? !!driverData.connected   : false,
@@ -101,19 +253,9 @@ wss.on('connection', async (ws) => {
       driverOnline:       !!driverData,
       errors:             driverData?.errors || [],
     });
-    ws.send(JSON.stringify({
-      type: 'mqtt',
-      topic: 'kkm/status',
-      payload: kkmPayload,
-      timestamp: Date.now(),
-    }));
-  } catch (e) {
-    console.warn('WebSocket kkm/status snapshot error:', e.message);
-  }
-
-  ws.on('close', () => {
-    console.log(`🔌 WebSocket: клиент отключился (всего: ${wss.clients.size})`);
-  });
+    ws.send(JSON.stringify({ type: 'mqtt', topic: 'kkm/status', payload: kkmPayload, timestamp: Date.now() }));
+  } catch (e) { console.warn('WebSocket kkm/status snapshot error:', e.message); }
+  ws.on('close', () => console.log(`🔌 WebSocket: клиент отключился (всего: ${wss.clients.size})`));
   ws.on('error', (err) => console.warn('WebSocket error:', err.message));
 });
 
@@ -123,8 +265,7 @@ wss.on('connection', async (ws) => {
 let mqttClient = null;
 let mqttSettings = {
   brokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
-  username: '',
-  password: ''
+  username: '', password: ''
 };
 
 function writeMqttConfigFile(cfg) {
@@ -132,24 +273,17 @@ function writeMqttConfigFile(cfg) {
     const configPath = path.join(__dirname, '..', 'mqtt-config.json');
     const mqttCfg = cfg.mqtt || {};
     const local = mqttCfg.local || {};
-
     let out;
     if (local.host) {
       const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
       const port = local.portTcp ?? 1883;
-      out = {
-        brokerUrl: `mqtt://${host}:${port}`,
-        username: local.username || '',
-        password: local.password || ''
-      };
+      out = { brokerUrl: `mqtt://${host}:${port}`, username: local.username || '', password: local.password || '' };
     } else {
       out = {
         brokerUrl: mqttCfg.brokerUrl || process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883',
-        username: mqttCfg.username || '',
-        password: mqttCfg.password || ''
+        username: mqttCfg.username || '', password: mqttCfg.password || ''
       };
     }
-
     fs.writeFileSync(configPath, JSON.stringify(out, null, 2));
     console.log('✅ mqtt-config.json обновлён:', out.brokerUrl);
   } catch (err) {
@@ -158,34 +292,24 @@ function writeMqttConfigFile(cfg) {
 }
 
 function connectMqtt(settings) {
-  if (mqttClient) {
-    mqttClient.end(true);
-    mqttClient = null;
-  }
-
+  if (mqttClient) { mqttClient.end(true); mqttClient = null; }
   const mqttCfg = settings || {};
   const local = mqttCfg.local || {};
-
   let brokerUrl, username, password;
   if (local.host) {
     const host = (local.host && local.host !== '0.0.0.0') ? local.host : 'localhost';
     brokerUrl = `mqtt://${host}:${local.portTcp ?? 1883}`;
-    username = local.username || '';
-    password = local.password || '';
+    username = local.username || ''; password = local.password || '';
   } else if (mqttCfg.brokerUrl) {
     brokerUrl = mqttCfg.brokerUrl;
-    username = mqttCfg.username || '';
-    password = mqttCfg.password || '';
+    username = mqttCfg.username || ''; password = mqttCfg.password || '';
   } else {
     brokerUrl = process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883';
-    username = '';
-    password = '';
+    username = ''; password = '';
   }
-
   const options = {};
   if (username) options.username = username;
   if (password) options.password = password;
-
   console.log('Подключение к локальному брокеру:', brokerUrl);
   mqttClient = mqtt.connect(brokerUrl, options);
 
@@ -194,6 +318,7 @@ function connectMqtt(settings) {
     mqttClient.subscribe('kkm/print');
     mqttClient.subscribe('posts/+/command');
     mqttClient.subscribe('posts/+/status');
+    mqttClient.subscribe('posts/+/status_relay'); 
     mqttClient.subscribe('tank/levels');
     mqttClient.subscribe('reports/request');
     mqttClient.subscribe('posts/+/config');
@@ -201,45 +326,28 @@ function connectMqtt(settings) {
     mqttClient.subscribe('posts/+/receipt');
     mqttClient.subscribe('posts/+/lwt');
     mqttClient.subscribe('posts/+/receipt_number');
+    mqttClient.subscribe('posts/+/clientcardbalance'); 
+    
     subscribeRelayTopics();
-    refreshRelayRetained(); // перечитать retained lwt/ip реле → статусы сразу после старта
+    refreshRelayRetained();
     if (settings.posts) publishConfigToAllPosts();
   });
 
-  // ---------- Топики реле (relay_<MAC>/...) ----------
-  // Подписка на все подтопики назначенных постам реле:
-  // relay_<MAC>, relay_<MAC>/postnum, relay_<MAC>/udp, relay_<MAC>/status_relay,
-  // relay_<MAC>/active, relay_<MAC>/ip, relay_<MAC>/lwt
   function subscribeRelayTopics() {
     if (!mqttClient || !mqttClient.connected) return;
-    const subs = new Set([
-      'relay_+',              // базовый топик (общий статус/команды ретранслятора)
-      'relay_+/postnum',
-      'relay_+/udp',
-      'relay_+/status_relay',
-      'relay_+/active',
-      'relay_+/ip',
-      'relay_+/lwt',
-    ]);
+    const subs = ['+/postnum', '+/udp', '+/status_relay', '+/active', '+/ip', '+/lwt'];
     for (const t of subs) {
       mqttClient.subscribe(t, { qos: 0 }, (err) => {
         if (err) console.warn(`⚠️ Не удалось подписаться на ${t}: ${err.message}`);
       });
     }
-    console.log(`📡 Подписка на топики реле активна (${subs.size} шаблонов)`);
+    console.log(`📡 Подписка на топики реле активна (${subs.length} шаблонов: +/postnum, +/lwt, …)`);
   }
 
-  /**
-   * Активное перечитывание retained-топиков реле сразу после подключения.
-   * Ключевой момент: ESP32 публикует relay_<MAC>/lwt с флагом retain — подписываясь
-   * на relay_+/lwt ДО перечисленных ниже повторных подписок и делая «переподписку»
-   * с задержкой, мы гарантированно получаем retained lwt каждого реле и проставляем
-   * онлайн/офлайн без ожидания следующих сообщений устройства.
-   */
   function refreshRelayRetained() {
     if (!mqttClient || !mqttClient.connected) return;
-    // Повторная подписка заставляет брокера заново доставить retained-сообщения.
-    for (const subT of ['relay_+/lwt', 'relay_+/ip', 'relay_+/active', 'relay_+/status_relay']) {
+    const filters = ['+/lwt', '+/ip', '+/active', '+/status_relay', '+/postnum', '+/udp'];
+    for (const subT of filters) {
       try {
         mqttClient.unsubscribe(subT, () => {
           mqttClient.subscribe(subT, { qos: 0 }, (err) => {
@@ -251,13 +359,11 @@ function connectMqtt(settings) {
     setTimeout(() => discoverRelayMacsFromBroker().catch(() => {}), 1200);
   }
 
-  /** MAC реле, назначенного посту (из настроек), или null */
   function getRelayMacForPost(postId) {
     const p = settings.posts?.[postId] || {};
     return (p.relay && p.relay.mac) ? String(p.relay.mac).toUpperCase() : null;
   }
 
-  /** Публикация команды в топик назначенного поста реле (relay_<MAC>/...) */
   function publishToPostRelay(postId, subTopic, payloadObj, opts = { qos: 1 }) {
     if (!mqttClient || !mqttClient.connected) return false;
     const mac = getRelayMacForPost(postId);
@@ -271,15 +377,8 @@ function connectMqtt(settings) {
 
   mqttClient.on('message', async (topic, message) => {
     const payload = message.toString();
+    broadcast({ type: 'mqtt', topic, payload, timestamp: Date.now() });
 
-    broadcast({
-      type: 'mqtt',
-      topic,
-      payload,
-      timestamp: Date.now(),
-    });
-
-    // ---------- Сообщения от реле (relay_<MAC>/...) ----------
     const relayMatch = topic.match(/^relay_([0-9A-Fa-f:]{12})\/?(.*)$/);
     if (relayMatch) {
       const mac = relayMatch[1].toUpperCase();
@@ -292,9 +391,6 @@ function connectMqtt(settings) {
         rs.lastSeen = Date.now();
         switch (sub) {
           case 'lwt':
-            // Единственный источник истины статуса — топик /lwt (last will):
-            // живое устройство публикует retained-состояние (часто пустое),
-            // при обрыве связи брокер публикует will → офлайн.
             rs.online = parseRelayLwt(payload);
             rs.lwtRaw = payload.length > 64 ? payload.slice(0, 64) + '…' : payload;
             rs.lwtAt = Date.now();
@@ -305,8 +401,17 @@ function connectMqtt(settings) {
             rs.active = typeof data === 'object' ? data : String(data); break;
           case 'status_relay':
             rs.statusRelay = typeof data === 'object' ? data : String(data); break;
-          case 'postnum':
-            rs.postnum = typeof data === 'object' ? (data?.postnum ?? data) : String(data); break;
+          case 'postnum': {
+            const pnRaw = typeof data === 'object' ? (data?.postnum ?? data) : String(data);
+            rs.postnum = pnRaw;
+            const pn = parseInt(String(pnRaw).trim(), 10);
+            if (Number.isInteger(pn) && autoAssignRelayByPostnum(mac, pn)) {
+              saveSettings(settings).catch(() => {});
+              publishConfigToAllPosts();
+              broadcast({ type: 'relay-assigned', postId: pn, mac, timestamp: Date.now() });
+            }
+            break;
+          }
           case 'udp':
             rs.udp = typeof data === 'object' ? data : String(data); break;
           default:
@@ -316,7 +421,6 @@ function connectMqtt(settings) {
       } catch (e) {
         console.warn(`⚠️ Ошибка обработки сообщения реле ${topic}: ${e.message}`);
       }
-      // сообщения реле не обрабатываем дальше как posts/*
     }
 
     if (topic === 'kkm/print') {
@@ -326,30 +430,25 @@ function connectMqtt(settings) {
           const m = topic.match(/^posts\/(\d+)\//);
           if (m) receiptData.postId = parseInt(m[1], 10);
         }
-
-        if (receiptData.skipDbCreation) {
-          console.log(`🖨️ kkm/print (печать без записи в БД): №${receiptData.receiptNumber} postId=${receiptData.postId}`);
-          return;
-        }
-
+        if (receiptData.skipDbCreation) return;
         const items = Array.isArray(receiptData.items) ? receiptData.items : [];
         const totalCost = items.reduce((s, it) => s + (Number(it.cost) || 0), 0);
-
         await createReceipt({
-          postId:        receiptData.postId || 0,
-          kind:          receiptData.kind || 'session',
-          operation:     receiptData.operation || 'sell',
-          isAdvance:     !!receiptData.isAdvance,
+          postId: receiptData.postId || 0,
+          kind: receiptData.kind || 'session',
+          operation: receiptData.operation || 'sell',
+          isAdvance: !!receiptData.isAdvance,
           advanceReceiptNumber: receiptData.advanceReceiptNumber ?? null,
+          cardNumber: receiptData.cardNumber || null,
           items,
-          totalCost:     Math.round(totalCost * 10) / 10,
-          balanceAfter:  receiptData.balance || 0,
+          totalCost: Math.round(totalCost * 10) / 10,
+          balanceAfter: receiptData.balance || 0,
           paymentMethod: receiptData.paymentMethod || null,
           discountTotal: receiptData.discountTotal || 0,
           correctionInfo: receiptData.correctionInfo || null,
-          timestamp:     receiptData.timestamp,
+          timestamp: receiptData.timestamp,
+          paymentAlreadyCounted: receiptData.paymentMethod === 'client_card',
         });
-        console.log(`✅ Чек сохранён (kkm/print fallback, postId=${receiptData.postId || 0}, kind=${receiptData.kind || 'session'}, adv=${receiptData.advanceReceiptNumber || '—'})`);
       } catch (err) {
         console.error(`Ошибка сохранения чека из kkm/print:`, err.message);
       }
@@ -360,23 +459,12 @@ function connectMqtt(settings) {
         const receiptData = JSON.parse(payload);
         const rPostId = String(receiptData.postId);
         const rState = getPostState(rPostId);
-
-        if (rState._espOfflineAtStart) {
-          console.log(`[Post ${rPostId}] ℹ️ ESP32 был offline при старте — игнорируем чек ESP32`);
-          return;
-        }
-        if (rState._finalReceiptSentByEsp) {
-          console.log(`[Post ${rPostId}] ℹ️ Чек ESP32 уже применён в этой сессии`);
-          return;
-        }
-
-        // ⭐ CAPTURE state SYNCHRONOUSLY до любых await — иначе clientcard: NULL затрёт данные
+        if (rState._espOfflineAtStart) return;
+        if (rState._finalReceiptSentByEsp) return;
         const capturedClientCard = rState.clientCard;
         const capturedInitialBalance = rState._clientCardInitialBalance || 0;
-
         rState._finalReceiptSentByEsp = true;
         rState._receiptWaitStarted = false;
-
         (async () => {
           const advances = await Receipt.find({ postId: Number(rPostId), isAdvance: true, finalReceiptNumber: null })
             .sort({ timestamp: -1 }).lean();
@@ -384,38 +472,30 @@ function connectMqtt(settings) {
           const advanceReceiptNumber = newestAdvance?.receiptNumber || null;
           const advanceAmount = newestAdvance?.totalCost || 0;
           const advancePaymentMethod = newestAdvance?.paymentMethod || null;
-
           let items = (receiptData.items || []).map(it => ({
             name: it.name || it.program || '?',
             seconds: Number(it.seconds) || 0,
             cost: Number(it.cost) || 0,
             pricePerSecond: Number(it.pricePerSecond) || 0,
           }));
-
           let totalCost = Math.round(items.reduce((s, i) => s + i.cost, 0) * 100) / 100;
-
           if (advanceAmount > 0.01 && items.length > 0) {
             const discrepancy = Math.round((advanceAmount - totalCost) * 100) / 100;
             if (discrepancy > 0.001) {
-              items[items.length - 1].cost = Math.round((items[items.length - 1].cost + discrepancy) * 100) / 100;
-              totalCost = advanceAmount;
-              console.log(`[Post ${rPostId}] ⚖️ Доводим до аванса: +${discrepancy} ₽`);
+              console.log(
+                `[Post ${rPostId}] ℹ️ Аванс ${advanceAmount.toFixed(2)} ₽, ` +
+                `израсходовано ${totalCost.toFixed(2)} ₽, ` +
+                `возврат клиенту ${discrepancy.toFixed(2)} ₽`
+              );
             }
           }
-
           if (items.length === 0 && advanceAmount > 0) {
             items = [{ name: 'Услуги мойки (аванс)', seconds: 0, cost: advanceAmount, pricePerSecond: 0 }];
             totalCost = advanceAmount;
           }
           if (items.length === 0) return;
-
-          // ⭐ ОПРЕДЕЛЯЕМ СПОСОБ ОПЛАТЫ
-          // Приоритет: clientCard > advance > ESP32-report
           let paymentMethod = advancePaymentMethod;
-          let cardNumber = null;
-          let initialBalance = 0;
-          let remainingBalance = 0;
-
+          let cardNumber = null, initialBalance = 0, remainingBalance = 0;
           if (capturedClientCard) {
             const card = await ClientCard.findOne({ card: capturedClientCard });
             if (card) {
@@ -427,87 +507,80 @@ function connectMqtt(settings) {
           } else if (receiptData.paymentMethod && receiptData.paymentMethod !== 'unknown') {
             paymentMethod = receiptData.paymentMethod;
           }
-
           const finalReceipt = await createReceipt({
-            postId: Number(rPostId),
-            kind: 'final',
-            operation: 'sell',
-            isAdvance: false,
-            advanceReceiptNumber,
-            items,
-            totalCost,
-            balanceAfter: 0,
-            paymentMethod: paymentMethod,
+            postId: Number(rPostId), kind: 'final', operation: 'sell', isAdvance: false,
+            advanceReceiptNumber, items, totalCost, balanceAfter: 0,
+            paymentMethod,
+            paymentAlreadyCounted: paymentMethod === 'client_card',
+            cardNumber: paymentMethod === 'client_card' ? cardNumber : null,
             timestamp: new Date(),
           });
-          const finalNumber = finalReceipt.receiptNumber;
-          console.log(`[Post ${rPostId}] 💾 Финальный чек (ESP32) создан в БД: №${finalNumber} (adv=${advanceReceiptNumber}, payment=${paymentMethod || '—'})`);
-
-          if (advances.length) {
-            await Receipt.updateMany(
-              { _id: { $in: advances.map(a => a._id) } },
-              { $set: { finalReceiptNumber: finalNumber } }
-            );
-          }
-
+          const finalNumber    = finalReceipt.receiptNumber;
+          const grossTotal     = finalReceipt.grossTotal     ?? finalReceipt.totalCost;
+          const advanceApplied = finalReceipt.advanceApplied || 0;
+          const netCash        = finalReceipt.totalCost;
           const qrPayload = JSON.stringify({
-            postId: Number(rPostId),
-            timestamp: new Date().toISOString(),
-            operation: 'Финальный чек по сессии (ESP32)',
-            kind: 'final',
-            isAdvance: false,
+            postId: Number(rPostId), timestamp: new Date().toISOString(),
+            operation: 'Финальный чек по сессии (ESP32)', kind: 'final', isAdvance: false,
             advanceReceiptNumber,
-            advanceAmount,
-            receiptNumber: finalNumber,
-            totalPaid: advanceAmount,
-            totalCash: totalCost,
-            items,
-            balance: 0,
-            source: 'esp32',
-            paymentMethod: paymentMethod,
-            cardNumber: cardNumber,
-            initialBalance: initialBalance,
-            remainingBalance: remainingBalance,
+            advanceAmount:   advanceApplied || advanceAmount,
+            receiptNumber:   finalNumber,
+            shiftNumber:     finalReceipt.shiftNumber,
+            grossTotal,
+            totalPaid:       advanceApplied || advanceAmount,
+            totalCash:       netCash,
+            items, balance: 0,
+            source: 'esp32', paymentMethod, cardNumber, initialBalance, remainingBalance,
           });
           mqttClient.publish(`posts/${rPostId}/receipt/qr`, qrPayload, { qos: 1 });
-          mqttClient.publish('kkm/print', JSON.stringify({
-            ...JSON.parse(qrPayload),
-            skipDbCreation: true,
-          }), { qos: 1 });
-
+          mqttClient.publish('kkm/print', JSON.stringify({ ...JSON.parse(qrPayload), skipDbCreation: true }), { qos: 1 });
           rState.servicesUsage = {};
           rState.receiptCount++;
           publishStatus(rPostId);
-          console.log(`[Post ${rPostId}] 📤 QR + печать отправлены с номером №${finalNumber}`);
-        })().catch(err => {
-          console.error(`[Post ${rPostId}] Ошибка обработки чека ESP32: ${err.message}`);
-        });
+        })().catch(err => { console.error(`[Post ${rPostId}] Ошибка обработки чека ESP32: ${err.message}`); });
       } catch (err) {
         console.warn(`⚠️ Ошибка парсинга чека от ESP32: ${err.message}`);
       }
+    }
+
+    if (topic.startsWith('posts/') && topic.endsWith('/status_relay')) {
+      const postId = topic.split('/')[1];
+      try {
+        const data = JSON.parse(payload);
+        const state = getPostState(postId);
+        
+        if (typeof data.busy === 'boolean') state.busy = data.busy;
+        if (typeof data.paused === 'boolean') state.paused = data.paused;
+        if (typeof data.currentProgram === 'string' && data.currentProgram !== '-') {
+          state.currentProgram = data.currentProgram;
+        }
+
+        if (state.busy && !state.timer && state.currentProgram) {
+          console.log(`[Post ${postId}] ⚡ ESP32 started ${state.currentProgram} locally. Starting backend timer.`);
+          startTimer(postId);
+        }
+        
+        if (!state.busy && state.timer) {
+          console.log(`[Post ${postId}] ⚡ ESP32 stopped locally. Stopping backend timer.`);
+          clearInterval(state.timer);
+          state.timer = null;
+        }
+      } catch { /* ignore */ }
     }
 
     if (topic.startsWith('posts/') && topic.endsWith('/command')) {
       const postId = topic.split('/')[1];
       try {
         const { command } = JSON.parse(payload);
-        console.log(`📨 Пост ${postId}: ${command}`);
-        if (command.startsWith('program ')) {
-          handleProgram(postId, command.substring(8).trim());
-        } else if (command === 'stop') {
-          stopPost(postId, true, true);
-        } else if (command === 'pause') {
-          togglePause(postId);
-        } else if (command.startsWith('add_balance ')) {
+        if (command.startsWith('program ')) handleProgram(postId, command.substring(8).trim());
+        else if (command === 'stop') stopPost(postId, true, true);
+        else if (command === 'pause') togglePause(postId);
+        else if (command.startsWith('add_balance ')) {
           const amount = parseFloat(command.substring(12).trim());
           if (!isNaN(amount) && amount > 0) addBalance(postId, amount);
-        } else if (command === 'get_status') {
-          publishStatus(postId);
-        } else if (command === 'reset') {
-          resetPost(postId);
-        } else if (command === 'print_receipt') {
-          printReceipt(postId);
-        }
+        } else if (command === 'get_status') publishStatus(postId);
+        else if (command === 'reset') resetPost(postId);
+        else if (command === 'print_receipt') printReceipt(postId);
       } catch (e) {
         console.error(`Ошибка обработки команды для поста ${postId}:`, e.message);
       }
@@ -517,26 +590,23 @@ function connectMqtt(settings) {
       const postId = topic.split('/')[1];
       try {
         const data = JSON.parse(payload);
-        if (!postsState[postId]) postsState[postId] = {};
-        const state = postsState[postId];
-        const cc = state.clientCard;
-        const ccb = state.clientCardBalance;
-        const cct = state.clientCardType;
-        const newEspBalance = typeof data.balance === 'number' ? data.balance : null;
-        const lastEspBalance = typeof state._lastEspBalance === 'number' ? state._lastEspBalance : null;
-        if (cc && newEspBalance !== null && lastEspBalance !== null && lastEspBalance > newEspBalance + 0.001) {
-          const delta = Math.round((lastEspBalance - newEspBalance) * 100) / 100;
-          const cardBal = typeof ccb === 'number' ? ccb : 0;
-          if (delta > 0.001 && delta <= cardBal + 0.01) {
-            debitCardForPost(postId, delta).catch((e) => console.warn(`[Post ${postId}] debit: ${e.message}`));
-          }
+        const state = getPostState(postId);
+        const cc = state.clientCard, ccb = state.clientCardBalance, cct = state.clientCardType;
+        
+        if (typeof data.busy === 'boolean')           state.busy = data.busy;
+        if (typeof data.paused === 'boolean')         state.paused = data.paused;
+        if (typeof data.currentProgram === 'string')  state.currentProgram = data.currentProgram;
+        if (typeof data.elapsedSec === 'number')      state.elapsedSec = data.elapsedSec;
+        if (typeof data.totalPaid === 'number')       state.totalPaid = data.totalPaid;
+        if (typeof data.receiptCount === 'number')    state.receiptCount = data.receiptCount;
+        
+        if (!cc && typeof data.balance === 'number') {
+          state.balance = data.balance;
         }
-        Object.assign(state, data, { lastSeen: Date.now() });
+        state.lastSeen = Date.now();
         state.clientCard = cc;
         state.clientCardBalance = ccb;
         state.clientCardType = cct;
-        state._lastEspBalance = newEspBalance;
-        if (cc) state.balance = typeof ccb === 'number' ? ccb : 0;
       } catch { /* ignore */ }
     }
 
@@ -544,20 +614,12 @@ function connectMqtt(settings) {
       const postId = topic.split('/')[1];
       const status = (payload || '').trim().toLowerCase();
       const isOnline = (status === 'online');
-
-      if (!postsState[postId]) postsState[postId] = {};
-      postsState[postId].online = isOnline;
-
+      const state = getPostState(postId);
+      state.online = isOnline;
       if (!isOnline) {
-        const state = postsState[postId];
-        if (state && state.clientCard) {
-          console.log(`📴 Пост ${postId} offline — освобождаем карту ${state.clientCard}`);
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
-          state.balance = 0;
-          state.busy = false;
+        if (state.clientCard) {
+          delete state.clientCard; delete state.clientCardBalance; delete state.clientCardType;
+          state.balance = 0; state.postCashBalance = 0; state.busy = false;
         }
       }
     }
@@ -567,97 +629,71 @@ function connectMqtt(settings) {
       try {
         const data = JSON.parse(payload);
         const cardNumber = (data.card || '').toString().trim().toUpperCase();
-        if (!postsState[postId]) postsState[postId] = {};
-        const state = postsState[postId];
-
+        const state = getPostState(postId);
         if (!cardNumber || cardNumber === 'NULL') {
           const hadCard = !!state.clientCard;
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
+          delete state.clientCard; delete state.clientCardBalance; delete state.clientCardType;
+          state.postCashBalance = 0;
           if (hadCard) {
-            state.balance = 0;
-            state.totalPaid = 0;
-            state.receiptCount = 0;
-            state.servicesUsage = {};
-            state.elapsedSec = 0;
-            state.busy = false;
-            state.paused = false;
-            state.currentProgram = null;
+            state.balance = 0; state.totalPaid = 0; state.receiptCount = 0;
+            state.servicesUsage = {}; state.elapsedSec = 0;
+            state.busy = false; state.paused = false; state.currentProgram = null;
             if (state.timer) { clearInterval(state.timer); state.timer = null; }
             mqttClient.publish(`posts/${postId}/command`, JSON.stringify({ command: 'reset' }), { qos: 1 });
-            publishStatus(postId);
-            publishRelayStatus(postId);
+            publishStatus(postId); publishRelayStatus(postId);
           }
           mqttClient.publish(`posts/${postId}/message`, JSON.stringify({ "": "" }), { qos: 0 });
           return;
         }
-
         const busyPostId = findPostWithCard(cardNumber, postId);
         if (busyPostId) {
-          delete state.clientCard;
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
+          delete state.clientCard; delete state.clientCardBalance; delete state.clientCardType;
           mqttClient.publish(`posts/${postId}/message`,
             JSON.stringify({ ERR: `КАРТА УЖЕ ИСПОЛЬЗУЕТСЯ НА ПОСТУ ${busyPostId}` }), { qos: 1 });
           broadcast({
-            type: 'card-scan',
-            postId, card: cardNumber, balance: 0, cardType: 'busy', known: false,
-            error: `Карта уже используется на посту ${busyPostId}`,
-            timestamp: Date.now(),
+            type: 'card-scan', postId, card: cardNumber, balance: 0, cardType: 'busy', known: false,
+            error: `Карта уже используется на посту ${busyPostId}`, timestamp: Date.now(),
           });
           return;
         }
-
         const prevCard = state.clientCard;
         state.clientCard = cardNumber;
         const clientCard = await ClientCard.findOne({ card: cardNumber });
         if (!clientCard) {
-          console.warn(`⚠️ Пост ${postId}: карта ${cardNumber} не найдена в БД`);
-          delete state.clientCardBalance;
-          delete state.clientCardType;
-          state._lastEspBalance = null;
+          delete state.clientCardBalance; delete state.clientCardType;
           broadcast({
-            type: 'card-scan',
-            postId, card: cardNumber, balance: 0, cardType: 'unknown', known: false,
+            type: 'card-scan', postId, card: cardNumber, balance: 0, cardType: 'unknown', known: false,
             timestamp: Date.now(),
           });
           return;
         }
 
-        state._lastEspBalance = null;
-        const hasForeignBalance = !prevCard && typeof state.balance === 'number' && state.balance > 0.01;
-        const switchingCard = prevCard && prevCard !== cardNumber;
-        if (hasForeignBalance || switchingCard) {
+        if (!prevCard && typeof state.balance === 'number' && state.balance > 0.01) {
+          state.postCashBalance = Math.round(state.balance * 100) / 100;
+        }
+
+        const switchingCard = !!prevCard && prevCard !== cardNumber;
+        if (switchingCard) {
           mqttClient.publish(`posts/${postId}/command`, JSON.stringify({ command: 'reset' }), { qos: 1 });
           await new Promise(r => setTimeout(r, 300));
+          state.postCashBalance = 0;
+          state.balance = 0;
         }
 
         state.clientCardBalance = clientCard.balance;
         state.clientCardType = clientCard.type;
-        state.balance = clientCard.balance;
         state._clientCardInitialBalance = clientCard.balance;
 
         mqttClient.publish(`posts/${postId}/clientcardbalance`,
-          JSON.stringify({ card: clientCard.card, balance: clientCard.balance, type: clientCard.type }),
-          { qos: 1 });
+          JSON.stringify({ card: clientCard.card, balance: clientCard.balance, type: clientCard.type }), { qos: 1 });
         mqttClient.publish(`posts/${postId}/message`, JSON.stringify({ "": "" }), { qos: 0 });
         publishStatus(postId);
-
         broadcast({
-          type: 'card-scan',
-          postId,
-          card: clientCard.card,
-          balance: clientCard.balance,
-          cardType: clientCard.type,
-          known: true,
-          timestamp: Date.now(),
+          type: 'card-scan', postId, card: clientCard.card, balance: clientCard.balance,
+          postCashBalance: state.postCashBalance || 0,
+          cardType: clientCard.type, known: true, timestamp: Date.now(),
         });
-      } catch (err) {
-        console.error(`Ошибка обработки posts/${postId}/clientcard:`, err.message);
-      }
+      } catch (err) { console.error(`Ошибка обработки posts/${postId}/clientcard:`, err.message); }
     }
 
     if (topic === 'tank/levels') {
@@ -672,27 +708,6 @@ function connectMqtt(settings) {
           }
         }
       } catch { /* ignore */ }
-    }
-
-    if (topic === 'reports/request') {
-      try {
-        const { from, to, responseTopic } = JSON.parse(payload);
-        if (!from || !to) return;
-        const start = new Date(from);
-        const end = new Date(to);
-        const receipts = await Receipt.find(
-          reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-        ).sort({ timestamp: -1 });
-        const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-        const translatedReceipts = receipts.map(r => ({
-          ...r.toObject(), items: translateReceiptItems(r.items)
-        }));
-        mqttClient.publish(responseTopic || 'reports/response',
-          JSON.stringify({ totalSum, count: translatedReceipts.length, receipts: translatedReceipts }),
-          { qos: 0 });
-      } catch (err) {
-        console.error('Ошибка MQTT-запроса отчёта:', err);
-      }
     }
   });
 
@@ -720,7 +735,6 @@ const userSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const counterSchema = new mongoose.Schema({ _id: String, seq: { type: Number, default: 0 } });
-
 const shiftSchema = new mongoose.Schema({
   shiftNumber: { type: Number, required: true },
   shiftOpen: { type: Boolean, default: true },
@@ -736,7 +750,6 @@ const shiftSchema = new mongoose.Schema({
     generatedAt: { type: Date, default: null }, cashier: String
   }
 });
-
 const fiscalRegistrationSchema = new mongoose.Schema({
   registrationNumber: { type: String, required: true },
   inn: { type: String, required: true },
@@ -744,7 +757,6 @@ const fiscalRegistrationSchema = new mongoose.Schema({
   registeredAt: { type: Date, default: Date.now },
   validUntil: { type: Date, required: true }
 });
-
 const settingSchema = new mongoose.Schema({
   key: { type: String, required: true, unique: true },
   value: { type: mongoose.Schema.Types.Mixed, required: true }
@@ -757,14 +769,12 @@ const FiscalRegistration = mongoose.model('FiscalRegistration', fiscalRegistrati
 const Setting = mongoose.model('Setting', settingSchema);
 
 initReceiptService({
-  Counter,
-  Shift,
+  Counter, Shift,
   broadcastShiftTotal: (...a) => broadcastShiftTotal(...a),
   publishKkmStatus:    (...a) => publishKkmStatus(...a),
   ensureOpenShift:     (...a) => ensureOpenShift(...a),
 });
 
-// ---------- Настройки по умолчанию ----------
 let settings = {
   numberOfPosts: 8,
   posts: {},
@@ -796,6 +806,25 @@ let settings = {
 // ============================================================
 // Хелперы
 // ============================================================
+function normalizeDimmerDosing(dimmerMaskMap, dimmerDosingMap, serviceNames) {
+  const result = {};
+  for (const name of serviceNames) {
+    const mask = Number(dimmerMaskMap?.[name]) || 0;
+    const saved = (dimmerDosingMap && dimmerDosingMap[name]) || {};
+    const dosing = {};
+    for (let d = 1; d <= 4; d++) {
+      const selected = (mask & (1 << (d - 1))) !== 0;
+      if (!selected) dosing[d] = 0;
+      else {
+        const v = saved[d];
+        dosing[d] = (v !== undefined && v !== null && !isNaN(Number(v))) ? Number(v) : 100;
+      }
+    }
+    result[name] = dosing;
+  }
+  return result;
+}
+
 function buildServicesPayloadForPost(postId) {
   const p = settings.posts?.[postId] || {};
   const prices = p.prices || {};
@@ -804,24 +833,17 @@ function buildServicesPayloadForPost(postId) {
   const dimmer = p.dimmerMask || {};
   const buttons = p.buttonInputs || {};
   const delays = p.relayDelays || {};
-
+  const rawDosing = p.dimmerDosing || {};
   let services = p.services || [];
-
   if (!services.length) {
     const names = new Set([
       ...Object.keys(prices),
       ...Object.keys(relayMask).filter(k => !k.includes('_')),
       ...Object.keys(buttons).filter(k => !k.includes('_')),
     ]);
-    services = [...names].map(name => ({
-      name,
-      price: prices[name] ?? 0,
-      free_time_sec: 0,
-      enabled: true,
-    }));
+    services = [...names].map(name => ({ name, price: prices[name] ?? 0, free_time_sec: 0, enabled: true }));
   }
-
-  return services.map(svc => ({
+  const servicesPayload = services.map(svc => ({
     name: svc.name,
     price: prices[svc.name] ?? svc.price ?? 0,
     free_time_sec: svc.free_time_sec ?? 0,
@@ -833,25 +855,20 @@ function buildServicesPayloadForPost(postId) {
     buttonInput: buttons[svc.name] ?? 0,
     enabled: svc.enabled !== false,
   }));
+  const serviceNames = servicesPayload.map(s => s.name);
+  const dimmerDosing = normalizeDimmerDosing(dimmer, rawDosing, serviceNames);
+  return { services: servicesPayload, dimmerDosing };
 }
 
 function publishConfigToAllPosts() {
-  if (!mqttClient) {
-    console.warn('❌ publishConfigToAllPosts: mqttClient НЕ подключён');
-    return;
-  }
-  if (!mqttClient.connected) {
-    console.warn('❌ publishConfigToAllPosts: mqttClient есть, но не connected');
-    return;
-  }
+  if (!mqttClient) { console.warn('❌ publishConfigToAllPosts: mqttClient НЕ подключён'); return; }
+  if (!mqttClient.connected) { console.warn('❌ publishConfigToAllPosts: mqttClient есть, но не connected'); return; }
   const n = settings.numberOfPosts || 8;
   console.log(`📤 publishConfigToAllPosts: публикуем в ${n} постов`);
   for (let i = 1; i <= n; i++) {
     const payload = buildServicesPayloadForPost(i);
-    const names = payload.map(s => s.name).join(', ');
-    console.log(`   posts/${i}/config → ${payload.length} услуг: ${names}`);
-    mqttClient.publish(`posts/${i}/config`,
-      JSON.stringify({ services: payload }), { qos: 1, retain: true });
+    console.log(`posts/${i}/config → ${payload.services.length} услуг, дозация:`, payload.dimmerDosing);
+    mqttClient.publish(`posts/${i}/config`, JSON.stringify(payload), { qos: 1, retain: true });
   }
   console.log(`📤 Конфиг опубликован в posts/*/config (${n} постов)`);
 }
@@ -860,67 +877,62 @@ async function fetchKkmStatusFromDriver() {
   try {
     const r = await axios.get(`${KKM_DRIVER_URL}/status`, { timeout: 2000 });
     return r.data || null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 
 async function publishKkmStatus() {
   if (!mqttClient) return;
-
-  const shift = await Shift.findOne({ shiftOpen: true }).lean();
-  const driverData = await fetchKkmStatusFromDriver();
-
-  if (driverData) {
-    let changed = false;
-    if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) {
-      settings.kkmManual.kkNumber = driverData.kkNumber;
-      changed = true;
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true }).lean();
+    const driverData = await fetchKkmStatusFromDriver();
+    if (driverData) {
+      let changed = false;
+      if (driverData.kkNumber && settings.kkmManual.kkNumber !== driverData.kkNumber) { settings.kkmManual.kkNumber = driverData.kkNumber; changed = true; }
+      if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) { settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber; changed = true; }
+      if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) { settings.kkmManual.cashierName = driverData.cashierName; changed = true; }
+      if (changed) saveSettings(settings).catch(() => {});
     }
-    if (driverData.shiftNumber != null && settings.kkmManual.fiscalShiftNumber !== driverData.shiftNumber) {
-      settings.kkmManual.fiscalShiftNumber = driverData.shiftNumber;
-      changed = true;
-    }
-    if (driverData.cashierName && settings.kkmManual.cashierName !== driverData.cashierName) {
-      settings.kkmManual.cashierName = driverData.cashierName;
-      changed = true;
-    }
-    if (changed) saveSettings(settings).catch(() => {});
+    const payload = JSON.stringify({
+      ready:              driverData ? !!driverData.ready       : true,
+      connected:          driverData ? !!driverData.connected   : false,
+      paper:              driverData ? !!driverData.paper       : true,
+      kkNumber:           driverData?.kkNumber || settings.kkmManual.kkNumber || '',
+      shiftNumber:        driverData?.shiftNumber ?? settings.kkmManual.fiscalShiftNumber ?? 0,
+      cashier:            driverData?.cashierName || settings.kkmManual.cashierName || 'Оператор',
+      shiftOpened:        !!shift,
+      shiftOpenedAt:      shift?.openedAt || null,
+      shiftAutoCloseAt:   shift?.autoCloseAt || null,
+      currentShiftNumber: shift?.shiftNumber || 0,
+      errors:             driverData?.errors || [],
+      driverOnline:       !!driverData,
+    });
+    mqttClient.publish('kkm/status', payload, { qos: 0, retain: true });
+    broadcast({ type: 'mqtt', topic: 'kkm/status', payload, timestamp: Date.now() });
+  } catch (err) {
+    console.warn('publishKkmStatus:', err.message);
   }
-
-  const payload = JSON.stringify({
-    ready:              driverData ? !!driverData.ready       : true,
-    connected:          driverData ? !!driverData.connected   : false,
-    paper:              driverData ? !!driverData.paper       : true,
-    kkNumber:           driverData?.kkNumber || settings.kkmManual.kkNumber || '',
-    shiftNumber:        driverData?.shiftNumber ?? settings.kkmManual.fiscalShiftNumber ?? 0,
-    cashier:            driverData?.cashierName || settings.kkmManual.cashierName || 'Оператор',
-    shiftOpened:        !!shift,
-    shiftOpenedAt:      shift?.openedAt || null,
-    shiftAutoCloseAt:   shift?.autoCloseAt || null,
-    currentShiftNumber: shift?.shiftNumber || 0,
-    errors:             driverData?.errors || [],
-    driverOnline:       !!driverData,
-  });
-
-  mqttClient.publish('kkm/status', payload, { qos: 0, retain: true });
-  broadcast({ type: 'mqtt', topic: 'kkm/status', payload, timestamp: Date.now() });
 }
 
 async function broadcastShiftTotal() {
-  const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) {
-    const payload = JSON.stringify({ total: 0, count: 0 });
+  try {
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (!currentShift) {
+      const payload = JSON.stringify({ shiftNumber: null, total: 0, count: 0, avgCheck: 0, paymentMethods: {} });
+      broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
+      return;
+    }
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    const { avgCheck } = computeAverageCheck(receipts);
+    const paymentMethods = calculatePaymentSummary(receipts);
+
+    const payload = JSON.stringify({ shiftNumber: currentShift.shiftNumber, total, count: receipts.length, avgCheck, paymentMethods });
+    
+    if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
     broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
-    return;
+  } catch (err) {
+    console.warn('broadcastShiftTotal:', err.message);
   }
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: currentShift.openedAt }
-  }));
-  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-  const payload = JSON.stringify({ total, count: receipts.length });
-  if (mqttClient) mqttClient.publish('shift/total', payload, { qos: 0 });
-  broadcast({ type: 'mqtt', topic: 'shift/total', payload, timestamp: Date.now() });
 }
 
 async function saveSettings(newSettings) {
@@ -955,7 +967,7 @@ async function loadSettings() {
       for (let i = 1; i <= n; i++) {
         posts[i] = {
           prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-          buttonInputs: {}, relayDelays: {},
+          buttonInputs: {}, relayDelays: {}, dimmerDosing: {},
           services: defaultServices.map(s => ({ ...s }))
         };
       }
@@ -979,6 +991,7 @@ async function loadSettings() {
             dimmerMask: settings.dimmerMask ? { ...settings.dimmerMask } : {},
             buttonInputs: settings.buttonInputs ? { ...settings.buttonInputs } : {},
             relayDelays: settings.relayDelays ? { ...settings.relayDelays } : {},
+            dimmerDosing: {},
             services: services.map(s => ({ ...s }))
           };
         }
@@ -994,25 +1007,21 @@ async function loadSettings() {
           if (!settings.posts[i]) {
             settings.posts[i] = {
               prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
-              buttonInputs: {}, relayDelays: {}, services: defaultServices2.map(s => ({ ...s }))
+              buttonInputs: {}, relayDelays: {}, dimmerDosing: {},
+              services: defaultServices2.map(s => ({ ...s }))
             };
           } else if (!settings.posts[i].services) {
             settings.posts[i].services = defaultServices2.map(s => ({ ...s }));
           }
-          settings.posts[i].services = settings.posts[i].services.map(s => ({
-            ...s, enabled: s.enabled !== false
-          }));
+          if (!settings.posts[i].dimmerDosing) { settings.posts[i].dimmerDosing = {}; }
+          settings.posts[i].services = settings.posts[i].services.map(s => ({ ...s, enabled: s.enabled !== false }));
         }
         await saveSettings(settings);
       }
       console.log('Настройки загружены из БД');
     }
-    if (settings.mqtt) {
-      mqttSettings = settings.mqtt;
-      connectMqtt(mqttSettings);
-    } else {
-      connectMqtt({ brokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883' });
-    }
+    if (settings.mqtt) { mqttSettings = settings.mqtt; connectMqtt(mqttSettings); }
+    else { connectMqtt({ brokerUrl: process.env.MQTT_BROKER_URL || 'mqtt://localhost:1883' }); }
     writeMqttConfigFile(settings);
     publishConfigToAllPosts();
     await publishKkmStatus();
@@ -1025,23 +1034,11 @@ async function loadSettings() {
 // Состояние постов
 // ============================================================
 let postsState = {};
-// Состояния реле (relay_<MAC>) — агрегируются из MQTT-топиков relay_+/*
 const relayStates = {};
 
-/**
- * Парсинг статуса реле из топика relay_<MAC>/lwt (last will).
- * Единственный источник истины онлайн/офлайн.
- *  - пустой payload / ""                → онлайн (retained-живой, will ещё не сработал)
- *  - "1"/"true"/"on"/"online"/"connect"/"up"/"alive"/"ok" → онлайн
- *  - JSON {"online":true} / {"state":"online"}            → по значению
- *  - unix-timestamp (>= 1700000000)                       → онлайн (heartbeat)
- *  - "0"/"false"/"off"/"offline"/"disconnect"/"down"/"lost" → офлайн
- *  - прочий непустой текст (will-сообщение)               → офлайн
- */
 function parseRelayLwt(raw) {
   const s = String(raw ?? '').trim();
-  if (s === '') return true; // retained-пустота = устройство живо
-  // JSON-варианты
+  if (s === '') return true;
   if (s.startsWith('{')) {
     try {
       const o = JSON.parse(s);
@@ -1050,25 +1047,35 @@ function parseRelayLwt(raw) {
       if (st) return ['online', 'on', '1', 'true', 'connected', 'up', 'alive'].includes(st);
       const n = Number(Object.values(o)[0]);
       if (Number.isFinite(n)) return n >= 1700000000 ? true : n > 0;
-    } catch { /* не JSON — дальше как строка */ }
+    } catch { /* не JSON */ }
   }
   const low = s.toLowerCase();
   if (['1', 'true', 'on', 'online', 'connect', 'connected', 'up', 'alive', 'ok'].includes(low)) return true;
   if (['0', 'false', 'off', 'offline', 'disconnect', 'disconnected', 'down', 'lost', 'dead'].includes(low)) return false;
   const num = Number(s);
-  if (Number.isFinite(num)) return num >= 1700000000 ? true : num > 0; // heartbeat-время или счётчик
-  return false; // непустой неизвестный текст считаем will-сообщением → офлайн
+  if (Number.isFinite(num)) return num >= 1700000000 ? true : num > 0;
+  return false;
 }
 
 function getPostState(postId) {
-  if (!postsState[postId]) {
-    postsState[postId] = {
-      busy: false, paused: false, balance: 0, currentProgram: null,
-      elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null,
-      online: false, _espOfflineAtStart: false, _finalReceiptSentByEsp: false, _receiptWaitStarted: false
-    };
-  }
-  return postsState[postId];
+  let s = postsState[postId];
+  if (!s) s = postsState[postId] = {};
+
+  if (typeof s.busy !== 'boolean')             s.busy = false;
+  if (typeof s.paused !== 'boolean')           s.paused = false;
+  if (typeof s.balance !== 'number')           s.balance = 0;
+  if (typeof s.postCashBalance !== 'number')   s.postCashBalance = 0;
+  if (s.currentProgram === undefined)          s.currentProgram = null;
+  if (typeof s.elapsedSec !== 'number')        s.elapsedSec = 0;
+  if (typeof s.totalPaid !== 'number')         s.totalPaid = 0;
+  if (typeof s.receiptCount !== 'number')      s.receiptCount = 0;
+  if (!s.servicesUsage || typeof s.servicesUsage !== 'object') s.servicesUsage = {};
+  if (s.timer === undefined)                   s.timer = null;
+  if (typeof s.online !== 'boolean')           s.online = false;
+  if (s._espOfflineAtStart === undefined)      s._espOfflineAtStart = false;
+  if (s._finalReceiptSentByEsp === undefined)  s._finalReceiptSentByEsp = false;
+  if (s._receiptWaitStarted === undefined)     s._receiptWaitStarted = false;
+  return s;
 }
 
 function findPostWithCard(cardNumber, excludePostId = null) {
@@ -1097,7 +1104,12 @@ function publishStatus(postId) {
   const state = getPostState(postId);
   mqttClient.publish(`posts/${postId}/status`, JSON.stringify({
     busy: state.busy, paused: state.paused,
-    balance: Math.round(state.balance * 100) / 100,
+    balance: Math.round((state.balance || 0) * 100) / 100,
+    postCashBalance: Math.round((state.postCashBalance || 0) * 100) / 100,
+    clientCard: state.clientCard || null, // ★ ДОБАВЛЕНО: передаем номер карты
+    clientCardBalance: typeof state.clientCardBalance === 'number'
+      ? Math.round(state.clientCardBalance * 100) / 100
+      : null,
     currentProgram: state.currentProgram,
     elapsedSec: Math.round(state.elapsedSec * 100) / 100,
     totalPaid: Math.round(state.totalPaid * 100) / 100,
@@ -1125,40 +1137,74 @@ async function debitCardForPost(postId, amountRub) {
   if (card.balance < 0) card.balance = 0;
   await card.save();
   state.clientCardBalance = card.balance;
-  state.balance = card.balance;
   console.log(`💳 [Post ${postId}] Списано ${actual.toFixed(2)} ₽ с ${card.card}`);
 }
 
 function startTimer(postId) {
   const state = getPostState(postId);
   if (state.timer) clearInterval(state.timer);
-  state.timer = setInterval(() => {
+  state.timer = setInterval(async () => {
     if (!state.busy || state.paused) return;
-    if (state.clientCard) return;
     const service = findService(postId, state.currentProgram);
     if (!service) { stopPost(postId, true, false); return; }
+
+    if (!state.servicesUsage || typeof state.servicesUsage !== 'object') {
+      state.servicesUsage = {};
+    }
+
     const pricePerSec = service.price / 60;
     const deltaSec = 1;
     const cost = pricePerSec * deltaSec;
-    if (state.balance >= cost) {
-      state.balance -= cost;
-      state.elapsedSec += deltaSec;
-      if (!state.servicesUsage[service.name]) state.servicesUsage[service.name] = { seconds: 0, cost: 0 };
-      state.servicesUsage[service.name].seconds += deltaSec;
-      state.servicesUsage[service.name].cost += cost;
-      state.balance = Math.round(state.balance * 100) / 100;
-      publishStatus(postId);
-    } else {
-      const remaining = state.balance;
-      if (remaining > 0.001) {
-        const fractionSec = remaining / pricePerSec;
-        state.balance = 0;
-        state.elapsedSec += fractionSec;
+
+    if (state.clientCard) {
+      try {
+        const card = await ClientCard.findOneAndUpdate(
+          { card: state.clientCard, balance: { $gte: cost } },
+          { $inc: { balance: -cost } },
+          { new: true }
+        );
+        if (!card) {
+          console.log(`[Post ${postId}] 💳 Карта закончилась. Останавливаем пост.`);
+          stopPost(postId, true, true);
+          return;
+        }
+        state.clientCardBalance = card.balance;
+
+        state.elapsedSec += deltaSec;
         if (!state.servicesUsage[service.name]) state.servicesUsage[service.name] = { seconds: 0, cost: 0 };
-        state.servicesUsage[service.name].seconds += fractionSec;
-        state.servicesUsage[service.name].cost += remaining;
+        state.servicesUsage[service.name].seconds += deltaSec;
+        state.servicesUsage[service.name].cost += cost;
+
+        if (mqttClient) {
+          mqttClient.publish(`posts/${postId}/clientcardbalance`, JSON.stringify({
+            card: card.card, balance: card.balance, type: card.type,
+          }), { qos: 1 });
+        }
+        publishStatus(postId);
+      } catch (e) {
+        console.error(`[Post ${postId}] Ошибка списания с карты:`, e.message);
       }
-      stopPost(postId, true, true);
+    } else {
+      if (state.balance >= cost) {
+        state.balance -= cost;
+        state.elapsedSec += deltaSec;
+        if (!state.servicesUsage[service.name]) state.servicesUsage[service.name] = { seconds: 0, cost: 0 };
+        state.servicesUsage[service.name].seconds += deltaSec;
+        state.servicesUsage[service.name].cost += cost;
+        state.balance = Math.round(state.balance * 100) / 100;
+        publishStatus(postId);
+      } else {
+        const remaining = state.balance;
+        if (remaining > 0.001) {
+          const fractionSec = remaining / pricePerSec;
+          state.balance = 0;
+          state.elapsedSec += fractionSec;
+          if (!state.servicesUsage[service.name]) state.servicesUsage[service.name] = { seconds: 0, cost: 0 };
+          state.servicesUsage[service.name].seconds += fractionSec;
+          state.servicesUsage[service.name].cost += remaining;
+        }
+        stopPost(postId, true, true);
+      }
     }
   }, 1000);
 }
@@ -1169,7 +1215,9 @@ function handleProgram(postId, programName) {
   if (!service) return;
   if (state.busy) stopPost(postId, false, false);
   const pricePerSec = service.price / 60;
-  if (state.balance < pricePerSec && state.balance < 0.01) return;
+  
+  if (!state.clientCard && state.balance < pricePerSec && state.balance < 0.01) return;
+  
   if (state.timer) clearInterval(state.timer);
   state.busy = true; state.paused = false; state.currentProgram = service.name;
   state.elapsedSec = 0;
@@ -1180,7 +1228,7 @@ function handleProgram(postId, programName) {
 function stopPost(postId, publish = true, printReceiptFlag = false) {
   const state = getPostState(postId);
   if (!state.busy && !printReceiptFlag) return;
-  if (printReceiptFlag && Object.keys(state.servicesUsage).length > 0) printReceipt(postId);
+  if (printReceiptFlag && Object.keys(state.servicesUsage || {}).length > 0) printReceipt(postId);
   if (state.timer) clearInterval(state.timer);
   state.timer = null; state.busy = false; state.paused = false;
   state.currentProgram = null; state.elapsedSec = 0;
@@ -1199,6 +1247,12 @@ function togglePause(postId) {
 
 function addBalance(postId, amount) {
   const state = getPostState(postId);
+  
+  if (state.clientCard) {
+    console.warn(`[Post ${postId}] Попытка добавить баланс на пост, но активна карта ${state.clientCard}. Игнорируем.`);
+    return;
+  }
+
   const wasZero = state.balance < 0.01;
   state.balance = Math.round((state.balance + amount) * 100) / 100;
   state.totalPaid = Math.round((state.totalPaid + amount) * 100) / 100;
@@ -1218,7 +1272,7 @@ function resetPost(postId) {
   const state = getPostState(postId);
   if (state.timer) clearInterval(state.timer);
   postsState[postId] = {
-    busy: false, paused: false, balance: 0, currentProgram: null,
+    busy: false, paused: false, balance: 0, postCashBalance: 0, currentProgram: null,
     elapsedSec: 0, totalPaid: 0, receiptCount: 0, servicesUsage: {}, timer: null,
     online: state.online || false,
     _espOfflineAtStart: false, _finalReceiptSentByEsp: false, _receiptWaitStarted: false
@@ -1228,7 +1282,6 @@ function resetPost(postId) {
 
 function printReceipt(postId) {
   const state = getPostState(postId);
-
   if (!state._espOfflineAtStart && !state._finalReceiptSentByEsp && !state._receiptWaitStarted) {
     state._receiptWaitStarted = true;
     console.log(`[Post ${postId}] ⏳ Ждём чек от ESP32 (2.5с)...`);
@@ -1242,12 +1295,10 @@ function printReceipt(postId) {
     }, 2500);
     return;
   }
-
   if (state._finalReceiptSentByEsp) {
     console.log(`[Post ${postId}] ℹ️ Чек ESP32 уже применён, пропускаем backend-печать`);
     return;
   }
-
   _doPrintReceiptFromBackend(postId).catch(err =>
     console.error(`[Post ${postId}] Ошибка backend-чека: ${err.message}`));
 }
@@ -1256,8 +1307,7 @@ async function _doPrintReceiptFromBackend(postId) {
   const state = getPostState(postId);
   const items = [];
   let totalCost = 0;
-
-  for (const [name, usage] of Object.entries(state.servicesUsage)) {
+  for (const [name, usage] of Object.entries(state.servicesUsage || {})) {
     if (usage.seconds > 0.001) {
       items.push({
         name, seconds: Math.round(usage.seconds * 1000) / 1000,
@@ -1267,22 +1317,15 @@ async function _doPrintReceiptFromBackend(postId) {
       totalCost += usage.cost;
     }
   }
-
   const balanceAfter = Math.round(state.balance * 100) / 100;
-
   const advances = await Receipt.find({ postId: Number(postId), isAdvance: true, finalReceiptNumber: null })
     .sort({ timestamp: -1 }).lean();
   const newestAdvance = advances[0];
   const advanceReceiptNumber = newestAdvance?.receiptNumber || null;
   const advanceAmount = newestAdvance?.totalCost || 0;
   const advancePaymentMethod = newestAdvance?.paymentMethod || null;
-
-  // ⭐ Сначала получаем аванс, потом определяем способ оплаты
   let paymentMethod = advancePaymentMethod;
-  let cardNumber = null;
-  let initialBalance = 0;
-  let remainingBalance = 0;
-
+  let cardNumber = null, initialBalance = 0, remainingBalance = 0;
   if (state.clientCard) {
     const card = await ClientCard.findOne({ card: state.clientCard });
     if (card) {
@@ -1292,73 +1335,56 @@ async function _doPrintReceiptFromBackend(postId) {
       remainingBalance = card.balance;
     }
   }
-
-  if (balanceAfter < 0.01 && advanceAmount > 0.01 && items.length > 0) {
-    const sumItems = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
-    const discrepancy = Math.round((advanceAmount - sumItems) * 100) / 100;
+  totalCost = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
+  if (advanceAmount > 0.01 && items.length > 0) {
+    const discrepancy = Math.round((advanceAmount - totalCost) * 100) / 100;
     if (discrepancy > 0.001) {
-      items[items.length - 1].cost = Math.round((items[items.length - 1].cost + discrepancy) * 100) / 100;
-      console.log(`[Post ${postId}] ⚖️ Доводим до аванса: +${discrepancy} ₽`);
+      console.log(
+        `[Post ${postId}] ℹ️ Аванс ${advanceAmount.toFixed(2)} ₽,` +
+        `израсходовано ${totalCost.toFixed(2)} ₽,` +
+        `возврат клиенту ${discrepancy.toFixed(2)} ₽`
+      );
     }
-    totalCost = advanceAmount;
-  } else {
-    totalCost = Math.round(items.reduce((s, i) => s + (i.cost || 0), 0) * 100) / 100;
   }
-
   let finalItems = items;
   if ((!items.length || totalCost < 0.01) && advanceReceiptNumber) {
     finalItems = [{ name: 'Услуги мойки (аванс)', seconds: 0, cost: advanceAmount, pricePerSecond: 0 }];
     totalCost = advanceAmount;
   }
   if (!finalItems.length) return;
-
   const finalReceipt = await createReceipt({
-    postId: Number(postId),
-    kind: 'final',
-    operation: 'sell',
-    isAdvance: false,
-    advanceReceiptNumber,
-    items: finalItems,
-    totalCost,
-    balanceAfter,
-    paymentMethod: paymentMethod,
+    postId: Number(postId), kind: 'final', operation: 'sell', isAdvance: false,
+    advanceReceiptNumber, items: finalItems, totalCost, balanceAfter,
+    paymentMethod,
+    paymentAlreadyCounted: paymentMethod === 'client_card',
+    cardNumber: paymentMethod === 'client_card' ? cardNumber : null,
     timestamp: new Date(),
   });
-  const finalNumber = finalReceipt.receiptNumber;
-  console.log(`[Post ${postId}] 💾 Финальный чек создан в БД: №${finalNumber} (adv=${advanceReceiptNumber}, payment=${paymentMethod || '—'})`);
+  const finalNumber    = finalReceipt.receiptNumber;
+  const grossTotal     = finalReceipt.grossTotal     ?? finalReceipt.totalCost;
+  const advanceApplied = finalReceipt.advanceApplied || 0;
+  const netCash        = finalReceipt.totalCost;
 
-  if (advances.length) {
-    await Receipt.updateMany(
-      { _id: { $in: advances.map(a => a._id) } },
-      { $set: { finalReceiptNumber: finalNumber } }
-    );
-  }
+  console.log(
+    `[Post ${postId}] 💾 Финальный чек №${finalNumber} (shift=${finalReceipt.shiftNumber}): ` +
+    `gross=${grossTotal.toFixed(2)}, advanceApplied=${advanceApplied.toFixed(2)}, net=${netCash.toFixed(2)}`
+  );
 
   const qrPayload = JSON.stringify({
-    postId: parseInt(postId),
-    timestamp: new Date().toISOString(),
-    operation: 'Финальный чек по сессии',
-    kind: 'final',
-    isAdvance: false,
+    postId: parseInt(postId), timestamp: new Date().toISOString(),
+    operation: 'Финальный чек по сессии', kind: 'final', isAdvance: false,
     advanceReceiptNumber,
-    advanceAmount,
+    advanceAmount: advanceApplied || advanceAmount,
     receiptNumber: finalNumber,
-    totalPaid: advanceAmount,
-    totalCash: totalCost,
-    items: finalItems,
-    balance: balanceAfter,
-    source: 'backend',
-    paymentMethod: paymentMethod,
-    cardNumber: cardNumber,
-    initialBalance: initialBalance,
-    remainingBalance: remainingBalance,
+    shiftNumber:   finalReceipt.shiftNumber,
+    grossTotal,
+    totalPaid:     advanceApplied || advanceAmount,
+    totalCash:     netCash,
+    items: finalItems, balance: balanceAfter,
+    source: 'backend', paymentMethod, cardNumber, initialBalance, remainingBalance,
   });
   mqttClient.publish(`posts/${postId}/receipt/qr`, qrPayload, { qos: 1 });
-  mqttClient.publish('kkm/print', JSON.stringify({
-    ...JSON.parse(qrPayload),
-    skipDbCreation: true,
-  }), { qos: 1 });
-
+  mqttClient.publish('kkm/print', JSON.stringify({ ...JSON.parse(qrPayload), skipDbCreation: true }), { qos: 1 });
   state.servicesUsage = {};
   state.receiptCount++;
   publishStatus(postId);
@@ -1401,63 +1427,66 @@ function getShiftAutoCloseAt(openedAt) {
 }
 
 async function closeExpiredShiftIfNeeded() {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  if (!shift) return null;
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    if (!shift) return null;
 
-  const autoCloseAt = shift.autoCloseAt || getShiftAutoCloseAt(shift.openedAt);
-  if (new Date() < autoCloseAt) return shift;
+    const openedTs = shift.openedAt ? new Date(shift.openedAt).getTime() : null;
+    if (!openedTs || isNaN(openedTs)) {
+      console.warn(`⚠️ Смена №${shift.shiftNumber} имеет битый openedAt — пропускаем авто-закрытие`);
+      return shift;
+    }
+    const autoCloseTs = shift.autoCloseAt
+      ? new Date(shift.autoCloseAt).getTime()
+      : getShiftAutoCloseAt(shift.openedAt).getTime();
+    if (Date.now() < autoCloseTs) return shift;
 
-  const closedAt = new Date();
-  shift.shiftOpen = false;
-  shift.closedAt = closedAt;
-  shift.autoClosed = true;
+    const closedAt = new Date();
+    shift.shiftOpen = false;
+    shift.closedAt = closedAt;
+    shift.autoClosed = true;
 
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: shift.openedAt, $lte: closedAt }
-  }));
-  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-  shift.zReport = {
-    total,
-    count: receipts.length,
-    generatedAt: closedAt,
-    cashier: 'system (auto)'
-  };
-  await shift.save();
-  console.log(`♻️ Смена №${shift.shiftNumber} автозакрыта (прошло 24 часа)`);
+    let total = 0, count = 0;
+    try {
+      const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
+      total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+      count = receipts.length;
+    } catch (e) {
+      console.warn(`⚠️ [shift ${shift.shiftNumber}] Не удалось посчитать итог: ${e.message}`);
+    }
+    shift.zReport = { total, count, generatedAt: closedAt, cashier: 'system (auto)' };
+    await shift.save();
+    console.log(`♻️ Смена №${shift.shiftNumber} автозакрыта (прошло 24 часа)`);
 
-  const nextNumber = await getNextShiftNumber();
-  const openedAt = new Date();
-  const newShift = await Shift.create({
-    shiftNumber: nextNumber,
-    shiftOpen: true,
-    openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt),
-    cashier: 'system (auto)',
-  });
-  console.log(`♻️ Открыта новая смена №${nextNumber}`);
+    const nextNumber = await getNextShiftNumber();
+    const openedAt = new Date();
+    const newShift = await Shift.create({
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: 'system (auto)',
+    });
+    console.log(`♻️ Открыта новая смена №${nextNumber}`);
 
-  await publishKkmStatus();
-  await broadcastShiftTotal();
-  return newShift;
+    try { await publishKkmStatus(); } catch (e) { console.warn('publishKkmStatus:', e.message); }
+    try { await broadcastShiftTotal(); } catch (e) { console.warn('broadcastShiftTotal:', e.message); }
+
+    return newShift;
+  } catch (err) {
+    console.error('❌ closeExpiredShiftIfNeeded:', err && err.stack ? err.stack : err);
+    return null;
+  }
 }
 
 async function ensureOpenShift() {
   await closeExpiredShiftIfNeeded();
-
   let shift = await Shift.findOne({ shiftOpen: true });
   if (shift) return shift;
-
   const nextNumber = await getNextShiftNumber();
   const openedAt = new Date();
   shift = await Shift.create({
-    shiftNumber: nextNumber,
-    shiftOpen: true,
-    openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt),
-    cashier: 'system (auto)',
+    shiftNumber: nextNumber, shiftOpen: true, openedAt,
+    autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: 'system (auto)',
   });
   console.log(`♻️ Смена №${nextNumber} автоматически открыта перед печатью чека`);
-
   await publishKkmStatus();
   return shift;
 }
@@ -1469,11 +1498,8 @@ async function initShift() {
     const nextNumber = await getNextShiftNumber();
     const openedAt = new Date();
     await new Shift({
-      shiftNumber: nextNumber,
-      shiftOpen: true,
-      openedAt,
-      autoCloseAt: getShiftAutoCloseAt(openedAt),
-      cashier: 'system',
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: 'system',
     }).save();
     console.log(`✅ Смена №${nextNumber} создана`);
   } else if (!currentShift.autoCloseAt) {
@@ -1499,7 +1525,6 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
       if (st && st.clientCard === clientCard.card) {
         st.clientCardBalance = clientCard.balance;
         st.clientCardType = clientCard.type;
-        st.balance = clientCard.balance;
         postsWithCard.push(id);
       }
     }
@@ -1509,22 +1534,15 @@ app.locals.publishCardBalanceToPosts = async function (cardNumber) {
       mqttClient.publish(`posts/${postId}/clientcardbalance`, payload, { qos: 1 });
       publishStatus(postId);
       broadcast({
-        type: 'card-balance',
-        postId,
-        card: clientCard.card,
-        balance: clientCard.balance,
-        cardType: clientCard.type,
-        timestamp: Date.now(),
+        type: 'card-balance', postId, card: clientCard.card,
+        balance: clientCard.balance, cardType: clientCard.type, timestamp: Date.now(),
       });
     }
-  } catch (err) {
-    console.error('publishCardBalanceToPosts error:', err.message);
-  }
+  } catch (err) { console.error('publishCardBalanceToPosts error:', err.message); }
 };
 
 app.locals.createReceipt = createReceipt;
 app.locals.addBalance = (postId, amount) => addBalance(String(postId), amount);
-
 app.use('/api/cards', cardsRouter);
 
 // ---------- Auth ----------
@@ -1533,22 +1551,15 @@ function auth(req, res, next) {
   const query  = typeof req.query.token === 'string' ? req.query.token : null;
   const token  = header || query;
   if (!token) return res.status(401).json({ error: 'No token' });
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET || 'secretkey');
-    next();
-  } catch {
-    res.status(401).json({ error: 'Invalid token' });
-  }
+  try { req.user = jwt.verify(token, process.env.JWT_SECRET || 'secretkey'); next(); }
+  catch { res.status(401).json({ error: 'Invalid token' }); }
 }
-
 function adminOnly(req, res, next) {
   if (req.user.role !== 'admin' && req.user.role !== 'developer') {
     return res.status(403).json({ error: 'Admin required' });
   }
   next();
 }
-
-// Просмотр отчётов разрешён администраторам, разработчикам и наблюдателям (viewer)
 function viewerOrAdmin(req, res, next) {
   const role = req.user && req.user.role;
   if (role === 'admin' || role === 'developer' || role === 'viewer') return next();
@@ -1584,9 +1595,7 @@ async function findUser(username) {
   try {
     if (mongoose.connection.readyState === 1) return await User.findOne({ username });
     return memoryUsers.find(u => u.username === username);
-  } catch {
-    return memoryUsers.find(u => u.username === username);
-  }
+  } catch { return memoryUsers.find(u => u.username === username); }
 }
 
 // ---------- Users API ----------
@@ -1594,15 +1603,10 @@ app.get('/api/users', auth, adminOnly, async (_req, res) => {
   try {
     const users = await User.find({}, { password: 0 }).lean();
     res.json(users.map(u => ({
-      _id: u._id, login: u.username,
-      fullName: u.fullName || u.username,
-      email: u.email || `${u.username}@carwash.local`,
-      role: u.role,
-      group: u.role === 'admin' ? 'Администратор'
-           : u.role === 'developer' ? 'Разработчик'
-           : u.role === 'operator' ? 'Оператор' : 'Пользователь',
-      isActive: u.isActive !== false,
-      createdAt: u.createdAt
+      _id: u._id, login: u.username, fullName: u.fullName || u.username,
+      email: u.email || `${u.username}@carwash.local`, role: u.role,
+      group: u.role === 'admin' ? 'Администратор' : u.role === 'developer' ? 'Разработчик' : u.role === 'operator' ? 'Оператор' : 'Пользователь',
+      isActive: u.isActive !== false, createdAt: u.createdAt
     })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1662,11 +1666,7 @@ app.post('/api/login', async (req, res) => {
     valid = bcrypt.compareSync(password, user.passwordHash || user.password);
   }
   if (!valid) return res.status(401).json({ error: 'Invalid credentials' });
-  const token = jwt.sign(
-    { username, role: user.role },
-    process.env.JWT_SECRET || 'secretkey',
-    { expiresIn: '30d' }
-  );
+  const token = jwt.sign({ username, role: user.role }, process.env.JWT_SECRET || 'secretkey', { expiresIn: '30d' });
   res.json({ token, role: user.role });
 });
 
@@ -1679,10 +1679,7 @@ app.get('/api/posts', auth, (_req, res) => {
       const id = String(i);
       const state = postsState[id];
       if (state) {
-        const { timer, _lastEspBalance, ...safeState } = state;
-        if (safeState.clientCard && typeof safeState.clientCardBalance === 'number') {
-          safeState.balance = safeState.clientCardBalance;
-        }
+        const { timer, ...safeState } = state;
         result[id] = safeState;
       } else result[id] = { busy: false };
     }
@@ -1694,29 +1691,55 @@ app.get('/api/posts', auth, (_req, res) => {
 });
 
 // ---------- Settings ----------
-app.get('/api/settings', (_req, res) => res.json(settings));
+app.get('/api/settings', (_req, res) => {
+  try { res.json(settings); }
+  catch (err) {
+    console.error('❌ /api/settings:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ============================================================
-// Реле: список доступных реле из MQTT-брокера + назначение постам
-// Топики реле: relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay,
-//              /active, /ip, /lwt  (пример: relay_30:76:F5:30:5B:A4)
+// Реле
 // ============================================================
-
-/** Нормализация MAC: "30:76:f5:30:5b:a4" → "30:76:F5:30:5B:A4" */
 function normalizeMac(mac) {
   const s = String(mac || '').trim().toUpperCase();
   return /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(s) ? s : null;
 }
 
-/**
- * Запрос retained-топиков реле у брокера ($CONTROL/LISTNREQ → LISTNRET).
- * Помимо MAC дополнительно извлекает retained-значения relay_<MAC>/lwt, /ip —
- * чтобы статус ●/○ был корректен сразу после обнаружения (источник — /lwt).
- */
+function autoAssignRelayByPostnum(mac, postnum) {
+  const normMac = normalizeMac(mac);
+  if (!normMac) return false;
+  const post = Number(postnum);
+  if (!Number.isInteger(post) || post < 1 || post > (settings.numberOfPosts || 8)) return false;
+  const postId = String(post);
+  if (!settings.posts) settings.posts = {};
+  if (!settings.posts[postId]) {
+    settings.posts[postId] = {
+      prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+      buttonInputs: {}, relayDelays: {}, dimmerDosing: {}, services: []
+    };
+  }
+  const currentMac = String(settings.posts[postId]?.relay?.mac || '').toUpperCase();
+  if (currentMac === normMac) return false;
+  for (const [pid, pdata] of Object.entries(settings.posts)) {
+    if (pid !== postId && String(pdata?.relay?.mac || '').toUpperCase() === normMac) {
+      delete pdata.relay;
+      console.log(`🔁 [AUTO-ASSIGN] Реле ${normMac} снято с поста ${pid} (перепривязка на пост ${postId})`);
+    }
+  }
+  if (currentMac) {
+    console.log(`🔁 [AUTO-ASSIGN] Реле ${currentMac} снято с поста ${postId} (заменяется на ${normMac})`);
+  }
+  settings.posts[postId].relay = { mac: normMac };
+  console.log(`✅ [AUTO-ASSIGN] Реле ${normMac} привязано к посту ${postId} (из топика /postnum)`);
+  return true;
+}
+
 async function discoverRelayMacsFromBroker() {
   if (!mqttClient || !mqttClient.connected) return [];
   const topics = await new Promise((resolve) => {
-    const acc = new Map(); // topic -> payload
+    const acc = new Map();
     let done = false;
     const finish = () => { if (!done) { done = true; try { mqttClient.removeListener('message', onData); } catch {} resolve(acc); } };
     const collect = (line) => {
@@ -1742,8 +1765,9 @@ async function discoverRelayMacsFromBroker() {
   }).catch(() => new Map());
 
   const macs = [];
+  const macToPostnum = new Map();
   for (const [t, val] of (topics instanceof Map ? topics : [])) {
-    const m = t.match(/^relay_([0-9A-Fa-f:]{12})(?:\/(lwt|ip))?$/i);
+    const m = t.match(/^relay_([0-9A-Fa-f:]{12})(?:\/(lwt|ip|postnum))?$/i);
     if (!m) continue;
     const mac = m[1].toUpperCase();
     macs.push(mac);
@@ -1756,29 +1780,29 @@ async function discoverRelayMacsFromBroker() {
       rs.lwtAt = Date.now();
     } else if (sub === 'ip' && !rs.ip) {
       rs.ip = val.trim() || null;
+    } else if (sub === 'postnum') {
+      const pn = parseInt(String(val).trim(), 10);
+      if (Number.isInteger(pn)) { rs.postnum = pn; macToPostnum.set(mac, pn); }
     }
+  }
+  let changed = false;
+  for (const [mac, pn] of macToPostnum) {
+    if (autoAssignRelayByPostnum(mac, pn)) changed = true;
+  }
+  if (changed) {
+    await saveSettings(settings);
+    publishConfigToAllPosts();
+    console.log('💾 [AUTO-ASSIGN] Настройки сохранены после автопривязки реле');
   }
   return [...new Set(macs)];
 }
 
-/** Все реле, известные broker'у, + агрегированные состояния.
- *  Источники MAC: 1) накопленные relayStates (подписка relay_+/* слушается всегда —
- *  любое сообщение от реле сразу делает его «известным»);
- *  2) retained-топики MQTT-брокера через штатный запрос LISTNRET (работает с mosquitto,
- *  EMQX и др.; не требует доступа к $SYS);
- *  3) сохранённые назначения в settings.posts[i].relay.mac. */
 async function listKnownRelays() {
   const macs = new Set(Object.keys(relayStates).map(m => m.toUpperCase()));
-
-  // Retained-топики реле, публикуемые самим устройством при подключении:
-  // relay_<MAC>, relay_<MAC>/postnum, /udp, /status_relay, /active, /ip, /lwt
   if (mqttClient && mqttClient.connected) {
-    try {
-      for (const mac of await discoverRelayMacsFromBroker()) macs.add(mac);
-    } catch { /* брокер не ответил — используем то, что уже известно */ }
+    try { for (const mac of await discoverRelayMacsFromBroker()) macs.add(mac); }
+    catch { /* ignore */ }
   }
-
-  // Реле, уже назначенные постами в настройках (видны даже при недоступном брокере)
   {
     const n = settings.numberOfPosts || 8;
     for (let i = 1; i <= n; i++) {
@@ -1797,42 +1821,25 @@ async function listKnownRelays() {
       return null;
     })();
     return {
-      mac,
-      topic: `relay_${mac}`,
-      online: rs.online ?? null,
-      lwtRaw: rs.lwtRaw ?? null,   // сырое значение /lwt (для диагностики статуса)
-      lwtAt: rs.lwtAt ?? null,     // когда получен последний /lwt
-      ip: rs.ip ?? null,
-      statusRelay: rs.statusRelay ?? null,
-      active: rs.active ?? null,
-      postnum: rs.postnum ?? null,
-      udp: rs.udp ?? null,
-      lastSeen: rs.lastSeen || null,
-      assignedPost,
+      mac, topic: `relay_${mac}`,
+      online: rs.online ?? null, lwtRaw: rs.lwtRaw ?? null, lwtAt: rs.lwtAt ?? null,
+      ip: rs.ip ?? null, statusRelay: rs.statusRelay ?? null,
+      active: rs.active ?? null, postnum: rs.postnum ?? null, udp: rs.udp ?? null,
+      lastSeen: rs.lastSeen || null, assignedPost,
     };
   });
 }
 
-// GET /api/relays — список доступных реле для назначения поста
 app.get('/api/relays', auth, async (_req, res) => {
-  try {
-    res.json({ relays: await listKnownRelays() });
-  } catch (err) {
-    console.error('❌ /api/relays:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+  try { res.json({ relays: await listKnownRelays() }); }
+  catch (err) { console.error('❌ /api/relays:', err.message); res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/relays/discover — принудительно перечитать топики с брокера
 app.post('/api/relays/discover', auth, adminOnly, async (_req, res) => {
-  try {
-    res.json({ relays: await listKnownRelays() });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  try { res.json({ relays: await listKnownRelays() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PUT /api/posts/:postId/relay — назначить посту реле ({ mac }) или снять ({ mac: null })
 app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
   const postId = String(req.params.postId);
   try {
@@ -1842,8 +1849,6 @@ app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
       mac = normalizeMac(String(rawMac).replace(/^relay_/, ''));
       if (!mac) return res.status(400).json({ error: `Некорректный MAC реле: ${rawMac}` });
     }
-
-    // Реле не может быть назначено двум постам
     if (mac) {
       const n = settings.numberOfPosts || 8;
       for (let i = 1; i <= n; i++) {
@@ -1852,18 +1857,18 @@ app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
         }
       }
     }
-
     if (!settings.posts) settings.posts = {};
-    if (!settings.posts[postId]) settings.posts[postId] = {};
+    if (!settings.posts[postId]) {
+      settings.posts[postId] = {
+        prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+        buttonInputs: {}, relayDelays: {}, dimmerDosing: {}, services: []
+      };
+    }
     if (mac) settings.posts[postId].relay = { mac };
     else delete settings.posts[postId].relay;
-
     await saveSettings(settings);
-
-    // Публикуем конфиг посту (ESP32 узнаёт своё реле) и сообщаем реле его номер поста
     publishConfigToAllPosts();
     if (mac) publishToPostRelay(postId, 'postnum', { postnum: Number(postId) });
-
     broadcast({ type: 'relay-assigned', postId: Number(postId), mac, timestamp: Date.now() });
     res.json({ ok: true, postId: Number(postId), relay: mac ? { mac, topic: `relay_${mac}` } : null });
   } catch (err) {
@@ -1872,8 +1877,6 @@ app.put('/api/posts/:postId/relay', auth, adminOnly, async (req, res) => {
   }
 });
 
-// POST /api/relays/:mac/command — прямая команда реле (публикация в relay_<MAC>[/<sub>])
-// body: { subTopic?, payload }
 app.post('/api/relays/:mac/command', auth, adminOnly, (req, res) => {
   const mac = normalizeMac(req.params.mac);
   if (!mac) return res.status(400).json({ error: 'Некорректный MAC' });
@@ -1888,9 +1891,7 @@ app.post('/api/relays/:mac/command', auth, adminOnly, (req, res) => {
     mqttClient.publish(topic, typeof payload === 'string' ? payload : JSON.stringify(payload), { qos: 1 });
     console.log(`🔌 [RELAY API] ${topic}`);
     res.json({ ok: true, topic });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/settings', auth, adminOnly, async (req, res) => {
@@ -1898,7 +1899,7 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
     const newSettings = req.body;
     if (newSettings.prices || newSettings.relayMask || newSettings.vfdFrequencies ||
         newSettings.dimmerMask || newSettings.buttonInputs || newSettings.relayDelays ||
-        newSettings.services) {
+        newSettings.services || newSettings.dimmerDosing) {
       const n = newSettings.numberOfPosts || settings.numberOfPosts || 8;
       const posts = {};
       const services = newSettings.services || settings.posts?.[1]?.services || [];
@@ -1910,25 +1911,53 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
           dimmerMask: newSettings.dimmerMask ? { ...newSettings.dimmerMask } : {},
           buttonInputs: newSettings.buttonInputs ? { ...newSettings.buttonInputs } : {},
           relayDelays: newSettings.relayDelays ? { ...newSettings.relayDelays } : {},
+          dimmerDosing: newSettings.dimmerDosing ? { ...newSettings.dimmerDosing } : {},
           services: services.map(s => ({ ...s, enabled: s.enabled !== false }))
         };
       }
       newSettings.posts = posts;
       delete newSettings.prices; delete newSettings.relayMask; delete newSettings.vfdFrequencies;
       delete newSettings.dimmerMask; delete newSettings.buttonInputs; delete newSettings.relayDelays;
-      delete newSettings.services;
+      delete newSettings.dimmerDosing; delete newSettings.services;
     }
+
     settings = { ...settings, ...newSettings };
+
     if (newSettings.posts) {
+      const seenMacs = new Map();
       for (const [postId, postData] of Object.entries(newSettings.posts)) {
-        if (!settings.posts[postId]) settings.posts[postId] = {};
+        const m = normalizeMac(postData?.relay?.mac);
+        if (m) {
+          if (seenMacs.has(m)) {
+            return res.status(409).json({
+              error: `Реле ${m} указано нескольким постам в запросе (${seenMacs.get(m)} и ${postId})`
+            });
+          }
+          seenMacs.set(m, postId);
+        }
+      }
+
+      for (const [postId, postData] of Object.entries(newSettings.posts)) {
+        if (!settings.posts[postId]) {
+          settings.posts[postId] = {
+            prices: {}, relayMask: {}, vfdFrequencies: {}, dimmerMask: {},
+            buttonInputs: {}, relayDelays: {}, dimmerDosing: {}, services: []
+          };
+        }
         settings.posts[postId] = { ...settings.posts[postId], ...postData };
         if (settings.posts[postId].services) {
-          settings.posts[postId].services = settings.posts[postId].services.map(s => ({
-            ...s, enabled: s.enabled !== false
-          }));
+          settings.posts[postId].services = settings.posts[postId].services.map(s => ({ ...s, enabled: s.enabled !== false }));
         }
-        // ★ Назначение реле посту из настроек: posts[i].relay = { mac } | null
+        if (!settings.posts[postId].dimmerDosing) { settings.posts[postId].dimmerDosing = {}; }
+
+        {
+          const post = settings.posts[postId];
+          const svcNames = (post.services || []).map(s => s.name);
+          if (svcNames.length) {
+            post.dimmerDosing = normalizeDimmerDosing(post.dimmerMask || {}, post.dimmerDosing || {}, svcNames);
+          }
+        }
+
         if ('relay' in postData) {
           const rawMac = postData.relay?.mac;
           if (rawMac) {
@@ -1936,8 +1965,10 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
             if (!norm) return res.status(400).json({ error: `Некорректный MAC реле для поста ${postId}: ${rawMac}` });
             let conflict = null;
             for (let i = 1; i <= (settings.numberOfPosts || 8); i++) {
-              if (String(i) !== String(postId) &&
-                  String(settings.posts[i]?.relay?.mac || '').toUpperCase() === norm) { conflict = i; break; }
+              if (String(i) !== String(postId) && !(String(i) in newSettings.posts) &&
+                  String(settings.posts[i]?.relay?.mac || '').toUpperCase() === norm) {
+                conflict = i; break;
+              }
             }
             if (conflict) return res.status(409).json({ error: `Реле ${norm} уже назначено посту ${conflict}` });
             settings.posts[postId].relay = { mac: norm };
@@ -1948,6 +1979,7 @@ app.put('/api/settings', auth, adminOnly, async (req, res) => {
         }
       }
     }
+
     await saveSettings(settings);
     publishConfigToAllPosts();
     if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
@@ -1978,11 +2010,7 @@ app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   const { command } = req.body || {};
   if (!command) return res.status(400).json({ error: 'command обязателен' });
   try {
-    mqttClient.publish(
-      `posts/${req.params.postId}/command`,
-      JSON.stringify({ command }),
-      { qos: 1 },
-    );
+    mqttClient.publish(`posts/${req.params.postId}/command`, JSON.stringify({ command }), { qos: 1 });
     console.log(`📤 [API] posts/${req.params.postId}/command → ${command}`);
     res.json({ ok: true });
   } catch (err) {
@@ -1991,74 +2019,156 @@ app.post('/api/posts/:postId/command', auth, adminOnly, (req, res) => {
   }
 });
 
+app.post('/api/posts/:postId/pump-dimmer', auth, adminOnly, (req, res) => {
+  const postId = String(req.params.postId);
+  const dimmer = req.body?.dimmer;
+  const percent = req.body?.percent;
+  if (!dimmer) return res.status(400).json({ error: 'Параметр dimmer обязателен' });
+  if (!mqttClient || !mqttClient.connected) return res.status(503).json({ error: 'MQTT не подключён' });
+  try {
+    const command = {
+      command: 'pump_dimmer',
+      dimmer: dimmer,
+      percent: percent !== undefined ? Number(percent) : undefined
+    };
+    mqttClient.publish(`posts/${postId}/command`, JSON.stringify(command), { qos: 1 });
+    console.log(`📤 [API] posts/${postId}/command → pump_dimmer ${dimmer} (${percent}%)`);
+    res.json({ ok: true, message: `Команда прокачки отправлена на диммер ${dimmer}` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ---------- Пополнение поста (АВАНС) ----------
 app.post('/api/posts/:postId/topup', auth, async (req, res) => {
   const postId = String(req.params.postId);
   const amount = Number(req.body?.amount);
   const paymentMethod = req.body?.paymentMethod || null;
-
-  if (!amount || amount <= 0) {
-    return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
-  }
+  if (!amount || amount <= 0) return res.status(400).json({ error: 'Сумма должна быть положительным числом' });
   if (!['cash', 'card_terminal', 'client_card'].includes(paymentMethod)) {
     return res.status(400).json({ error: 'Недопустимый способ оплаты' });
   }
-
   try {
     const n = settings.numberOfPosts || 8;
-    if (Number(postId) < 1 || Number(postId) > n) {
-      return res.status(404).json({ error: `Пост ${postId} не найден` });
-    }
-
+    if (Number(postId) < 1 || Number(postId) > n) return res.status(404).json({ error: `Пост ${postId} не найден` });
     const state = getPostState(postId);
 
-    const expectedNewBalance = Math.round((state.balance + amount) * 100) / 100;
+    if (state.clientCard) {
+      const card = await ClientCard.findOne({ card: state.clientCard });
+      if (!card) return res.status(404).json({ error: `Карта ${state.clientCard} не найдена` });
 
-    const receipt = await createReceipt({
-      postId:        Number(postId),
-      kind:          'advance_post',
-      operation:     'topup',
-      isAdvance:     true,
-      items:         [{ name: 'Аванс: пополнение поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
-      totalCost:     amount,
-      balanceAfter:  expectedNewBalance,
-      paymentMethod,
-    });
+      card.balance = Math.round((card.balance + amount) * 100) / 100;
+      await card.save();
 
-    if (mqttClient) {
-      mqttClient.publish(
-        `posts/${postId}/receipt_number`,
-        JSON.stringify({
-          receiptNumber: receipt.receiptNumber,
-          kind: 'advance_post',
-          isAdvance: true,
-          amount,
-          paymentMethod,
-          balanceAfter: expectedNewBalance,
-          timestamp: new Date().toISOString(),
-        }),
-        { qos: 1, retain: true },
-      );
+      const receipt = await createReceipt({
+        postId: Number(postId), kind: 'advance_card', operation: 'topup', isAdvance: true,
+        cardNumber: card.card,
+        items: [{ name: `Пополнение карты ${card.card}`, seconds: 0, cost: amount, pricePerSecond: 0 }],
+        totalCost: amount, balanceAfter: card.balance, paymentMethod,
+      });
 
-      mqttClient.publish(
-        `posts/${postId}/command`,
-        JSON.stringify({ command: `add_balance ${amount}` }),
-        { qos: 1 },
-      );
+      state.clientCardBalance = card.balance;
+      if (mqttClient) {
+        mqttClient.publish(`posts/${postId}/clientcardbalance`, JSON.stringify({
+          card: card.card, balance: card.balance, type: card.type,
+        }), { qos: 1 });
+        publishStatus(postId);
+      }
+      return res.json({
+        ok: true, postId: Number(postId), amount, balance: card.balance,
+        paymentMethod, receiptNumber: receipt.receiptNumber, shiftNumber: receipt.shiftNumber,
+        kind: 'advance_card', isAdvance: true,
+      });
     }
 
+    const expectedNewBalance = Math.round((state.balance + amount) * 100) / 100;
+    const receipt = await createReceipt({
+      postId: Number(postId), kind: 'advance_post', operation: 'topup', isAdvance: true,
+      items: [{ name: 'Аванс: пополнение поста', seconds: 0, cost: amount, pricePerSecond: 0 }],
+      totalCost: amount, balanceAfter: expectedNewBalance, paymentMethod,
+    });
+    if (mqttClient) {
+      mqttClient.publish(`posts/${postId}/receipt_number`, JSON.stringify({
+        receiptNumber: receipt.receiptNumber, kind: 'advance_post', isAdvance: true,
+        amount, paymentMethod, balanceAfter: expectedNewBalance,
+        shiftNumber: receipt.shiftNumber,
+        timestamp: new Date().toISOString(),
+      }), { qos: 1, retain: true });
+      mqttClient.publish(`posts/${postId}/command`, JSON.stringify({ command: `add_balance ${amount}` }), { qos: 1 });
+    }
     res.json({
-      ok: true,
-      postId: Number(postId),
-      amount,
-      balance: expectedNewBalance,
-      paymentMethod,
-      receiptNumber: receipt.receiptNumber,
-      kind: 'advance_post',
-      isAdvance: true,
+      ok: true, postId: Number(postId), amount, balance: expectedNewBalance,
+      paymentMethod, receiptNumber: receipt.receiptNumber, shiftNumber: receipt.shiftNumber,
+      kind: 'advance_post', isAdvance: true,
     });
   } catch (err) {
     console.error('Ошибка пополнения поста:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------- Перевод с баланса поста на карту клиента ----------
+app.post('/api/posts/:postId/transfer-to-card', auth, async (req, res) => {
+  const postId = String(req.params.postId);
+  const cardNumber = String(req.body?.card || '').trim().toUpperCase();
+  const amountInput = Number(req.body?.amount);
+  if (!cardNumber) return res.status(400).json({ error: 'card обязателен' });
+  if (!amountInput || amountInput <= 0) return res.status(400).json({ error: 'amount должен быть положительным' });
+  try {
+    const n = settings.numberOfPosts || 8;
+    if (Number(postId) < 1 || Number(postId) > n) return res.status(404).json({ error: `Пост ${postId} не найден` });
+    const state = getPostState(postId);
+    const cashOnPost = Math.round(
+      ((typeof state.postCashBalance === 'number' ? state.postCashBalance : state.balance) || 0) * 100
+    ) / 100;
+    if (cashOnPost <= 0.01) {
+      return res.status(409).json({ error: 'На посте нет средств для перевода' });
+    }
+    const amount = cashOnPost;
+    const card = await ClientCard.findOne({ card: cardNumber });
+    if (!card) return res.status(404).json({ error: `Карта ${cardNumber} не найдена` });
+
+    state.postCashBalance = 0;
+    state.balance = Math.round((state.balance - amount) * 100) / 100;
+    if (state.balance < 0) state.balance = 0;
+    card.balance = Math.round((card.balance + amount) * 100) / 100;
+    await card.save();
+
+    const receipt = await createReceipt({
+      postId: Number(postId), kind: 'transfer_post_to_card', operation: 'transfer', isAdvance: false,
+      items: [{ name: 'Перевод с баланса поста на карту клиента', seconds: 0, cost: amount, pricePerSecond: 0 }],
+      totalCost: amount, balanceAfter: state.balance, paymentMethod: 'post_balance',
+      cardNumber: card.card,
+    });
+    state.clientCard = card.card;
+    state.clientCardBalance = card.balance;
+    state.clientCardType = card.type;
+    state._clientCardInitialBalance = card.balance;
+    if (mqttClient) {
+      mqttClient.publish(`posts/${postId}/receipt_number`, JSON.stringify({
+        receiptNumber: receipt.receiptNumber, kind: 'transfer_post_to_card',
+        amount, paymentMethod: 'post_balance', balanceAfter: state.balance,
+        shiftNumber: receipt.shiftNumber,
+        timestamp: new Date().toISOString(),
+      }), { qos: 1, retain: true });
+      mqttClient.publish(`posts/${postId}/clientcardbalance`, JSON.stringify({
+        card: card.card, balance: card.balance, type: card.type,
+      }), { qos: 1 });
+    }
+    publishStatus(postId);
+    broadcast({
+      type: 'card-balance', postId, card: card.card,
+      balance: card.balance, cardType: card.type, timestamp: Date.now(),
+    });
+    console.log(
+      `🔁 [Post ${postId}] Перевод ${amount.toFixed(2)} ₽ с баланса поста на карту ${card.card}` +
+      ` → баланс поста: ${state.balance.toFixed(2)} ₽, баланс карты: ${card.balance.toFixed(2)} ₽`
+    );
+    res.json({
+      ok: true, postId: Number(postId), card: card.card, amount,
+      balance: state.balance, postBalance: state.balance, cardBalance: card.balance,
+      receiptNumber: receipt.receiptNumber, shiftNumber: receipt.shiftNumber,
+    });
+  } catch (err) {
+    console.error('Ошибка transfer-to-card:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2075,19 +2185,22 @@ app.post('/api/tank-levels', auth, adminOnly, async (req, res) => {
 
 // ---------- MQTT settings ----------
 app.get('/api/mqtt/settings', auth, adminOnly, (_req, res) => res.json(settings.mqtt || {}));
-
 app.post('/api/mqtt/settings', auth, adminOnly, async (req, res) => {
   try {
     const { local, remote, brokerUrl, username, password } = req.body || {};
     let newMqtt;
     if (local || remote) {
       newMqtt = {
-        local: { host: local?.host ?? '192.168.31.211', portTcp: local?.portTcp ?? 1883,
-                 portWs: local?.portWs ?? 8083, path: local?.path ?? '/mqtt',
-                 username: local?.username ?? 'admin', password: local?.password ?? 'Zavulon56' },
-        remote: { host: remote?.host ?? 'm2.wqtt.ru', portTcp: remote?.portTcp ?? 13257,
-                  portTls: remote?.portTls ?? 13258, portWss: remote?.portWss ?? 13260,
-                  username: remote?.username ?? 'u_GGENLB', password: remote?.password ?? 'LTHNW22D' }
+        local: {
+          host: local?.host ?? '192.168.31.211', portTcp: local?.portTcp ?? 1883,
+          portWs: local?.portWs ?? 8083, path: local?.path ?? '/mqtt',
+          username: local?.username ?? 'admin', password: local?.password ?? 'Zavulon56'
+        },
+        remote: {
+          host: remote?.host ?? 'm2.wqtt.ru', portTcp: remote?.portTcp ?? 13257,
+          portTls: remote?.portTls ?? 13258, portWss: remote?.portWss ?? 13260,
+          username: remote?.username ?? 'u_GGENLB', password: remote?.password ?? 'LTHNW22D'
+        }
       };
     } else if (brokerUrl) {
       newMqtt = { brokerUrl, username: username || '', password: password || '' };
@@ -2122,153 +2235,177 @@ app.get('/api/kkm/status', auth, adminOnly, async (_req, res) => {
 });
 
 app.put('/api/kkm/manual', auth, adminOnly, async (req, res) => {
-  const { kkNumber, fiscalShiftNumber, cashierName } = req.body;
-  if (kkNumber !== undefined) settings.kkmManual.kkNumber = kkNumber;
-  if (fiscalShiftNumber !== undefined) settings.kkmManual.fiscalShiftNumber = fiscalShiftNumber;
-  if (cashierName !== undefined) settings.kkmManual.cashierName = cashierName;
-  await saveSettings(settings);
-  if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
-  await publishKkmStatus();
-  res.json(settings.kkmManual);
+  try {
+    const { kkNumber, fiscalShiftNumber, cashierName } = req.body;
+    if (kkNumber !== undefined) settings.kkmManual.kkNumber = kkNumber;
+    if (fiscalShiftNumber !== undefined) settings.kkmManual.fiscalShiftNumber = fiscalShiftNumber;
+    if (cashierName !== undefined) settings.kkmManual.cashierName = cashierName;
+    await saveSettings(settings);
+    if (mqttClient) mqttClient.publish('system/config', JSON.stringify(settings), { qos: 0 });
+    await publishKkmStatus();
+    res.json(settings.kkmManual);
+  } catch (err) {
+    console.error('❌ PUT /api/kkm/manual:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/current-shift', auth, async (_req, res) => {
-  await closeExpiredShiftIfNeeded();
-  const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 });
-  if (!shift) return res.json({ exists: false });
-  res.json({
-    shiftNumber:       shift.shiftNumber,
-    cashier:           shift.cashier,
-    openedAt:          shift.openedAt,
-    autoCloseAt:       shift.autoCloseAt,
-    fiscalShiftNumber: shift.fiscalShiftNumber,
-    exists: true,
-  });
+  try {
+    await closeExpiredShiftIfNeeded();
+    const shift = await Shift.findOne({ shiftOpen: true }).sort({ shiftNumber: -1 }).lean();
+    if (!shift) return res.json({ exists: false });
+    res.json({
+      shiftNumber: shift.shiftNumber, cashier: shift.cashier,
+      openedAt: shift.openedAt, autoCloseAt: shift.autoCloseAt,
+      fiscalShiftNumber: shift.fiscalShiftNumber, exists: true,
+    });
+  } catch (err) {
+    console.error('❌ /api/kkm/current-shift:', err);
+    res.status(500).json({ error: err.message, exists: false });
+  }
 });
 
 app.get('/api/kkm/shift-status', auth, async (_req, res) => {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  res.json({ shiftOpen: !!shift });
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    res.json({ shiftOpen: !!shift });
+  } catch (err) {
+    console.error('❌ /api/kkm/shift-status:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/kkm/open-shift', auth, adminOnly, async (req, res) => {
-  await closeExpiredShiftIfNeeded();
-  if (await Shift.findOne({ shiftOpen: true })) {
-    return res.status(400).json({ error: 'Уже есть открытая смена' });
+  try {
+    await closeExpiredShiftIfNeeded();
+    if (await Shift.findOne({ shiftOpen: true })) return res.status(400).json({ error: 'Уже есть открытая смена' });
+    const nextNumber = await getNextShiftNumber();
+    const openedAt = new Date();
+    const newShift = await Shift.create({
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: req.user.username,
+    });
+    await publishKkmStatus(); await broadcastShiftTotal();
+    res.json({
+      shiftNumber: newShift.shiftNumber, cashier: newShift.cashier,
+      openedAt: newShift.openedAt, autoCloseAt: newShift.autoCloseAt,
+    });
+  } catch (err) {
+    console.error('❌ /api/kkm/open-shift:', err);
+    res.status(500).json({ error: err.message });
   }
-  const nextNumber = await getNextShiftNumber();
-  const openedAt = new Date();
-  const newShift = await Shift.create({
-    shiftNumber: nextNumber,
-    shiftOpen: true,
-    openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt),
-    cashier: req.user.username,
-  });
-  await publishKkmStatus();
-  await broadcastShiftTotal();
-  res.json({
-    shiftNumber: newShift.shiftNumber,
-    cashier:     newShift.cashier,
-    openedAt:    newShift.openedAt,
-    autoCloseAt: newShift.autoCloseAt,
-  });
 });
 
-app.post('/api/kkm/close-shift', auth, adminOnly, async (_req, res) => {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  if (!shift) return res.status(400).json({ error: 'Нет открытой смены' });
-
-  const closedAt = new Date();
-  shift.shiftOpen = false;
-  shift.closedAt = closedAt;
-  shift.autoClosed = false;
-
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: shift.openedAt, $lte: closedAt }
-  }));
-  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-  shift.zReport = {
-    total,
-    count: receipts.length,
-    generatedAt: closedAt,
-    cashier: req.user.username,
-  };
-  await shift.save();
-
-  await publishKkmStatus();
-  await broadcastShiftTotal();
-  res.json({ message: 'Смена закрыта', total, count: receipts.length });
+app.post('/api/kkm/close-shift', auth, adminOnly, async (req, res) => {
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    if (!shift) return res.status(400).json({ error: 'Нет открытой смены' });
+    const closedAt = new Date();
+    shift.shiftOpen = false; shift.closedAt = closedAt; shift.autoClosed = false;
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    shift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: req.user.username };
+    await shift.save();
+    await publishKkmStatus(); await broadcastShiftTotal();
+    res.json({ message: 'Смена закрыта', shiftNumber: shift.shiftNumber, total, count: receipts.length });
+  } catch (err) {
+    console.error('❌ /api/kkm/close-shift:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/x-report', auth, adminOnly, async (req, res) => {
-  const shift = await Shift.findOne({ shiftOpen: true });
-  if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
-
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: shift.openedAt }
-  }));
-  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-
-  shift.xReports.push({
-    timestamp: new Date(),
-    total,
-    count: receipts.length,
-    cashier: req.user.username,
-  });
-  await shift.save();
-  res.json({ message: 'X-отчёт', total, count: receipts.length });
+  try {
+    const shift = await Shift.findOne({ shiftOpen: true });
+    if (!shift) return res.status(404).json({ error: 'Нет открытой смены' });
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: shift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    shift.xReports.push({ timestamp: new Date(), total, count: receipts.length, cashier: req.user.username });
+    await shift.save();
+    res.json({ message: 'X-отчёт', shiftNumber: shift.shiftNumber, total, count: receipts.length });
+  } catch (err) {
+    console.error('❌ /api/kkm/x-report:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/kkm/z-report', auth, adminOnly, async (req, res) => {
-  const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
-
-  const closedAt = new Date();
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: currentShift.openedAt, $lte: closedAt }
-  }));
-  const total = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
-
-  currentShift.zReport = {
-    total,
-    count: receipts.length,
-    generatedAt: closedAt,
-    cashier: req.user.username,
-  };
-  currentShift.shiftOpen = false;
-  currentShift.closedAt = closedAt;
-  await currentShift.save();
-
-  const nextNumber = await getNextShiftNumber();
-  const openedAt = new Date();
-  const newShift = await Shift.create({
-    shiftNumber: nextNumber,
-    shiftOpen: true,
-    openedAt,
-    autoCloseAt: getShiftAutoCloseAt(openedAt),
-    cashier: req.user.username,
-  });
-
-  await publishKkmStatus();
-  await broadcastShiftTotal();
-
-  res.json({
-    message: 'Z-отчёт сформирован, смена закрыта',
-    closed: { total, count: receipts.length },
-    newShift: { shiftNumber: newShift.shiftNumber, openedAt: newShift.openedAt },
-  });
+  try {
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (!currentShift) return res.status(400).json({ error: 'Нет открытой смены' });
+    const closedAt = new Date();
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+    const total = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    currentShift.zReport = { total, count: receipts.length, generatedAt: closedAt, cashier: req.user.username };
+    currentShift.shiftOpen = false; currentShift.closedAt = closedAt;
+    await currentShift.save();
+    const nextNumber = await getNextShiftNumber();
+    const openedAt = new Date();
+    const newShift = await Shift.create({
+      shiftNumber: nextNumber, shiftOpen: true, openedAt,
+      autoCloseAt: getShiftAutoCloseAt(openedAt), cashier: req.user.username,
+    });
+    await publishKkmStatus(); await broadcastShiftTotal();
+    res.json({
+      message: 'Z-отчёт сформирован, смена закрыта',
+      closed: { shiftNumber: currentShift.shiftNumber, total, count: receipts.length },
+      newShift: { shiftNumber: newShift.shiftNumber, openedAt: newShift.openedAt },
+    });
+  } catch (err) {
+    console.error('❌ /api/kkm/z-report:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/settings', auth, adminOnly, (_req, res) => res.json(settings.kkm));
 
-app.get('/api/shift-total', auth, adminOnly, async (_req, res) => {
-  const currentShift = await Shift.findOne({ shiftOpen: true });
-  if (!currentShift) return res.json({ total: 0, count: 0 });
-  const receipts = await Receipt.find(reportReceiptsQuery({
-    timestamp: { $gte: currentShift.openedAt }
-  }));
-  res.json({ total: receipts.reduce((s, r) => s + (r.totalCost || 0), 0), count: receipts.length });
+app.get('/api/shift-total', auth, adminOnly, async (req, res) => {
+  try {
+    const { shiftNumber } = req.query;
+
+    if (shiftNumber != null && shiftNumber !== '') {
+      const n = Number(shiftNumber);
+      if (!Number.isInteger(n)) return res.status(400).json({ error: 'Некорректный shiftNumber' });
+      const shift = await Shift.findOne({ shiftNumber: n }).lean();
+      if (!shift) return res.status(404).json({ error: `Смена №${n} не найдена` });
+      const receipts = await Receipt.find(accountingQuery({ shiftNumber: n }));
+      
+      const { avgCheck, finalCount, finalTotal } = computeAverageCheck(receipts);
+      const paymentMethods = calculatePaymentSummary(receipts);
+
+      return res.json({
+        shiftNumber: n,
+        isOpen: !!shift.shiftOpen,
+        openedAt: shift.openedAt,
+        closedAt: shift.closedAt,
+        total: receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
+        count: receipts.length,
+        avgCheck, finalCount, finalTotal, 
+        paymentMethods
+      });
+    }
+
+    const currentShift = await Shift.findOne({ shiftOpen: true });
+    if (!currentShift) return res.json({ shiftNumber: null, total: 0, count: 0, avgCheck: 0, finalCount: 0, finalTotal: 0, paymentMethods: {} });
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber }));
+    
+    const { avgCheck, finalCount, finalTotal } = computeAverageCheck(receipts);
+    const paymentMethods = calculatePaymentSummary(receipts);
+    
+    res.json({
+      shiftNumber: currentShift.shiftNumber,
+      isOpen: true,
+      openedAt: currentShift.openedAt,
+      total: receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
+      count: receipts.length,
+      avgCheck, finalCount, finalTotal, 
+      paymentMethods
+    });
+  } catch (err) {
+    console.error('❌ /api/shift-total:', err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/kkm/fiscal-registration', auth, adminOnly, async (_req, res) => {
@@ -2289,34 +2426,79 @@ app.get('/api/kkm/fiscal/x-report', auth, adminOnly, (_req, res) => res.json({ t
 app.post('/api/kkm/fiscal/z-report', auth, adminOnly, (_req, res) => res.json({ ok: true }));
 
 // ============================================================
+// Смены — список
+// ============================================================
+app.get('/api/shifts', auth, adminOnly, async (req, res) => {
+  try {
+    const { limit = 50, page = 1, includeTotals } = req.query;
+    const l = Math.min(500, Math.max(1, Number(limit) || 50));
+    const p = Math.max(1, Number(page) || 1);
+
+    const [shifts, total] = await Promise.all([
+      Shift.find({}).sort({ shiftNumber: -1 }).skip((p - 1) * l).limit(l).lean(),
+      Shift.countDocuments({}),
+    ]);
+
+    const withTotals = includeTotals !== '0' && includeTotals !== 'false';
+
+    const items = withTotals
+      ? await Promise.all(shifts.map(async (s) => {
+          const agg = await Receipt.aggregate([
+            { $match: accountingQuery({ shiftNumber: s.shiftNumber }) },
+            { $group: { _id: null, total: { $sum: '$totalCost' }, count: { $sum: 1 } } },
+          ]);
+          return {
+            shiftNumber: s.shiftNumber,
+            openedAt: s.openedAt,
+            closedAt: s.closedAt,
+            cashier: s.cashier,
+            isOpen: !!s.shiftOpen,
+            autoClosed: !!s.autoClosed,
+            total: Math.round((agg[0]?.total || 0) * 100) / 100,
+            count: agg[0]?.count || 0,
+          };
+        }))
+      : shifts.map(s => ({
+          shiftNumber: s.shiftNumber,
+          openedAt: s.openedAt,
+          closedAt: s.closedAt,
+          cashier: s.cashier,
+          isOpen: !!s.shiftOpen,
+          autoClosed: !!s.autoClosed,
+        }));
+
+    res.json({ shifts: items, total, page: p, limit: l });
+  } catch (err) {
+    console.error('❌ GET /api/shifts:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // Reports
 // ============================================================
-async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
+async function generatePDFReport(receipts, totalSum, header) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 30, size: 'A4' });
     const buffers = [];
     doc.on('data', b => buffers.push(b));
     doc.on('end', () => resolve(Buffer.concat(buffers)));
     doc.on('error', reject);
-
     const fontPathArial = path.join(__dirname, 'fonts', 'Arial.ttf');
     if (fs.existsSync(fontPathArial)) { doc.registerFont('MainFont', fontPathArial); doc.font('MainFont'); }
     else doc.font('Helvetica');
-
     doc.fontSize(18).text('Отчёт по кассовым чекам', { align: 'center' });
     doc.moveDown();
-    doc.fontSize(12).text(`Период: ${fromDate} – ${toDate}`, { align: 'center' });
+    doc.fontSize(12).text(`Период: ${header}`, { align: 'center' });
     doc.moveDown();
     doc.text(`Всего чеков: ${receipts.length}`);
     doc.text(`Общая сумма: ${(Number(totalSum) || 0).toFixed(2)} руб.`);
     doc.moveDown();
-
     const startX = 40;
     let y = doc.y + 10;
     const colWidths = [30, 35, 120, 50, 70, 205];
     const headers = ['№', 'Пост', 'Дата', 'Сумма', 'Оплата', 'Услуги'];
     const headerHeight = 25;
-
     function drawHeaders(yPos) {
       let x = startX;
       doc.fontSize(10);
@@ -2327,7 +2509,6 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
       }
       return yPos + headerHeight;
     }
-
     y = drawHeaders(y);
     for (const receipt of receipts) {
       const itemsStr = (receipt.items || []).map(i =>
@@ -2341,9 +2522,7 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
         day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
       });
       const cells = [
-        String(receipts.indexOf(receipt) + 1),
-        String(receipt.postId || ''),
-        dateStr,
+        String(receipts.indexOf(receipt) + 1), String(receipt.postId || ''), dateStr,
         (Number(receipt.totalCost) || 0).toFixed(2) + ' ₽',
         receipt.paymentMethod === 'cash' ? 'Наличные'
           : receipt.paymentMethod === 'card_terminal' ? 'Безнал'
@@ -2362,88 +2541,150 @@ async function generatePDFReport(receipts, totalSum, fromDate, toDate) {
 }
 
 app.get('/api/reports/pdf', auth, adminOnly, async (req, res) => {
-  const { from, to } = req.query;
-  if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
+  const built = buildTimeOrShiftFilter(req.query);
+  if (built.error) return res.status(built.code).json({ error: built.error });
 
-  const start = new Date(from);
-  const end   = new Date(to);
-  if (isNaN(start) || isNaN(end)) {
-    return res.status(400).json({ error: 'Некорректные from/to' });
-  }
-
-  let receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: -1 });
+  let receipts = await Receipt.find(accountingQuery(built.filter)).sort({ timestamp: -1 });
   receipts = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  const totalSum = receipts.reduce((s, r) => s + (r.totalCost || 0), 0);
+  const totalSum = receipts.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
 
-  const pdfData = await generatePDFReport(receipts, totalSum, from, to);
+  const header = built.kind === 'shift'
+    ? `Смена №${built.shiftNumber}`
+    : `${built.from} – ${built.to}`;
+  const pdfData = await generatePDFReport(receipts, totalSum, header);
+  const filename = built.kind === 'shift'
+    ? `report_shift_${built.shiftNumber}.pdf`
+    : `report_${String(built.from).slice(0,10)}_${String(built.to).slice(0,10)}.pdf`;
   res.setHeader('Content-Type', 'application/pdf');
-  res.setHeader('Content-Disposition',
-    `attachment; filename=report_${String(from).slice(0,10)}_${String(to).slice(0,10)}.pdf`);
+  res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
   res.send(pdfData);
+});
+
+app.get('/api/reports/shift/:shiftNumber', auth, adminOnly, async (req, res) => {
+  try {
+    const n = Number(req.params.shiftNumber);
+    if (!Number.isInteger(n)) return res.status(400).json({ error: 'Некорректный shiftNumber' });
+
+    const shift = await Shift.findOne({ shiftNumber: n }).lean();
+    if (!shift) return res.status(404).json({ error: `Смена №${n} не найдена` });
+
+    const receipts = await Receipt.find(accountingQuery({ shiftNumber: n }))
+      .sort({ timestamp: 1 }).lean();
+
+    const translated = receipts.map(r => {
+      const a = annotateReceipt(r);
+      a.items = translateReceiptItems(a.items);
+      return a;
+    });
+
+    const totalSum = translated.reduce((s, r) => s + (Number(r.totalCost) || 0), 0);
+    const { avgCheck, finalCount, finalTotal } = computeAverageCheck(translated);
+    const paymentSummary = calculatePaymentSummary(translated);
+
+    const byPayment = {};
+    for (const r of translated) {
+      const pm = r.paymentMethod || 'other';
+      if (!byPayment[pm]) byPayment[pm] = { paymentMethod: pm, total: 0, count: 0 };
+      byPayment[pm].total += Number(r.totalCost) || 0;
+      byPayment[pm].count += 1;
+    }
+    const byPost = {};
+    for (const r of translated) {
+      const pid = r.postId;
+      if (!byPost[pid]) byPost[pid] = { postId: pid, total: 0, count: 0 };
+      byPost[pid].total += Number(r.totalCost) || 0;
+      byPost[pid].count += 1;
+    }
+
+    res.json({
+      shiftNumber: n,
+      shift: {
+        number: shift.shiftNumber,
+        openedAt: shift.openedAt,
+        closedAt: shift.closedAt,
+        cashier: shift.cashier,
+        isOpen: !!shift.shiftOpen,
+        autoClosed: !!shift.autoClosed,
+      },
+      summary: {
+        totalSum:   Math.round(totalSum * 100) / 100,
+        totalCount: translated.length,
+        avgCheck, finalCount, finalTotal, 
+        paymentSummary, // ★ ДОБАВЛЕНО
+        byPaymentMethod: Object.values(byPayment).map(v => ({
+          paymentMethod: v.paymentMethod,
+          total: Math.round(v.total * 100) / 100,
+          count: v.count,
+        })),
+        byPost: Object.values(byPost).map(v => ({
+          postId: v.postId,
+          total: Math.round(v.total * 100) / 100,
+          count: v.count,
+        })),
+      },
+      receipts: translated,
+    });
+  } catch (err) {
+    console.error(`❌ GET /api/reports/shift/${req.params.shiftNumber}:`, err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/reports/day/:date', auth, adminOnly, async (req, res) => {
   const date = new Date(req.params.date);
   const start = new Date(date); start.setHours(0, 0, 0, 0);
   const end   = new Date(date); end.setHours(23, 59, 59, 999);
-  const receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: -1 });
+  const receipts = await Receipt.find(accountingQuery({ timestamp: { $gte: start, $lte: end } })).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
+  const paymentSummary = calculatePaymentSummary(translated);
+  res.json({ totalSum: translated.reduce((s, r) => s + (Number(r.totalCost) || 0), 0), count: translated.length, paymentSummary, receipts: translated });
 });
 
 app.get('/api/reports/week', auth, adminOnly, async (_req, res) => {
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - 7); start.setHours(0, 0, 0, 0);
-  const receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: -1 });
+  const receipts = await Receipt.find(accountingQuery({ timestamp: { $gte: start, $lte: end } })).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
+  const paymentSummary = calculatePaymentSummary(translated);
+  res.json({ totalSum: translated.reduce((s, r) => s + (Number(r.totalCost) || 0), 0), count: translated.length, paymentSummary, receipts: translated });
 });
 
 app.get('/api/reports/month', auth, adminOnly, async (_req, res) => {
   const end = new Date();
   const start = new Date(); start.setDate(end.getDate() - 30); start.setHours(0, 0, 0, 0);
-  const receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: -1 });
+  const receipts = await Receipt.find(accountingQuery({ timestamp: { $gte: start, $lte: end } })).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
+  const paymentSummary = calculatePaymentSummary(translated);
+  res.json({ totalSum: translated.reduce((s, r) => s + (Number(r.totalCost) || 0), 0), count: translated.length, paymentSummary, receipts: translated });
 });
 
 app.get('/api/reports/shift', auth, adminOnly, async (_req, res) => {
   const currentShift = await Shift.findOne({ shiftOpen: true });
   if (!currentShift) return res.json({ totalSum: 0, count: 0, receipts: [] });
-  const start = new Date(currentShift.openedAt);
-  const end = new Date();
-  const receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: -1 });
+  const receipts = await Receipt.find(accountingQuery({ shiftNumber: currentShift.shiftNumber })).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
-  res.json({ totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0), count: translated.length, receipts: translated });
+  const paymentSummary = calculatePaymentSummary(translated);
+  res.json({
+    shiftNumber: currentShift.shiftNumber,
+    totalSum: translated.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
+    count: translated.length,
+    paymentSummary,
+    receipts: translated,
+  });
 });
 
 app.get('/api/reports/range', auth, viewerOrAdmin, async (req, res) => {
-  const { from, to } = req.query;
-  if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
+  const built = buildTimeOrShiftFilter(req.query);
+  if (built.error) return res.status(built.code).json({ error: built.error });
 
-  const start = new Date(from);
-  const end   = new Date(to);
-  if (isNaN(start) || isNaN(end)) {
-    return res.status(400).json({ error: 'Некорректные from/to' });
-  }
-
-  const receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: -1 });
+  const receipts = await Receipt.find(accountingQuery(built.filter)).sort({ timestamp: -1 });
   const translated = receipts.map(r => ({ ...r.toObject(), items: translateReceiptItems(r.items) }));
+  const paymentSummary = calculatePaymentSummary(translated);
   const summary = {
-    totalSum: translated.reduce((s, r) => s + (r.totalCost || 0), 0),
+    filter: built.kind === 'shift' ? { shiftNumber: built.shiftNumber } : { from: built.from, to: built.to },
+    totalSum: translated.reduce((s, r) => s + (Number(r.totalCost) || 0), 0),
     count: translated.length,
+    paymentSummary,
     receipts: translated,
   };
   if (mqttClient) mqttClient.publish('reports/output', JSON.stringify(summary), { qos: 0 });
@@ -2451,118 +2692,160 @@ app.get('/api/reports/range', auth, viewerOrAdmin, async (req, res) => {
 });
 
 app.get('/api/reports/grouped', auth, viewerOrAdmin, async (req, res) => {
-  const { from, to } = req.query;
-  if (!from || !to) return res.status(400).json({ error: 'from и to обязательны' });
+  const built = buildTimeOrShiftFilter(req.query);
+  if (built.error) return res.status(built.code).json({ error: built.error });
 
-  const start = new Date(from);
-  const end   = new Date(to);
-  if (isNaN(start) || isNaN(end)) {
-    return res.status(400).json({ error: 'Некорректные from/to' });
-  }
-
-  const receipts = await Receipt.find(
-    reportReceiptsQuery({ timestamp: { $gte: start, $lte: end } })
-  ).sort({ timestamp: 1 }).lean();
-
-  const PAY_LABELS = {
-    cash:          'Наличные',
-    card_terminal: 'Карта',
-    client_card:   'Карта клиента',
-  };
-
+  const receipts = await Receipt.find(accountingQuery(built.filter))
+    .sort({ timestamp: 1 }).lean();
   const days = {};
-  let grandTotal = 0;
-  let grandCount = 0;
-
+  let grandTotal = 0, grandCount = 0, clientCardsReceiptsSum = 0;
+  
   for (const r of receipts) {
     const dt = new Date(r.timestamp);
-    const dayKey =
-      `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
-
-    const pm = PAY_LABELS[r.paymentMethod] || 'Прочее';
+    const dayKey = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+    const pmRaw = r.paymentMethod || 'other';
     const postId = r.postId;
-    const totalCost = Number(r.totalCost) || 0;
+    
+    // Для карт клиента реальная сумма — это grossTotal
+    const totalCost = pmRaw === 'client_card' 
+      ? (Number(r.grossTotal) || Number(r.totalCost) || 0) 
+      : (Number(r.totalCost) || 0);
 
-    if (!days[dayKey]) {
-      days[dayKey] = { date: dayKey, posts: {}, total: 0, count: 0 };
-    }
+    if (pmRaw === 'client_card') clientCardsReceiptsSum += totalCost;
+    
+    if (!days[dayKey]) days[dayKey] = { date: dayKey, posts: {}, total: 0, count: 0 };
     const d = days[dayKey];
-
-    if (!d.posts[postId]) {
-      d.posts[postId] = { postId, paymentMethods: {}, total: 0, count: 0 };
-    }
+    if (!d.posts[postId]) d.posts[postId] = { postId, paymentMethods: {}, total: 0, count: 0 };
     const p = d.posts[postId];
-
-    if (!p.paymentMethods[pm]) {
-      p.paymentMethods[pm] = { paymentMethod: pm, receipts: [], total: 0, count: 0 };
-    }
-    const pmGroup = p.paymentMethods[pm];
-
+    if (!p.paymentMethods[pmRaw]) p.paymentMethods[pmRaw] = { paymentMethod: pmRaw, receipts: [], total: 0, count: 0 };
+    const pmGroup = p.paymentMethods[pmRaw];
     const items = (r.items || []).map(it => {
       const cost  = Number(it.cost)    || 0;
       const secs  = Number(it.seconds) || 0;
-      const price = Number(it.pricePerSecond)
-                    || (secs > 0 ? Math.round((cost / secs) * 10000) / 10000 : 0);
-
+      const price = secs > 0 ? cost / secs : 0;
       return {
-        name:           programNamesRu[it.name] || it.name || '—',
-        pricePerSecond: price,
-        quantity:       Math.round(secs * 10) / 10,
-        unit:           'секунда',
-        timeWorkedSec:  Math.round(secs * 10) / 10,
-        sum:            Math.round(cost * 100) / 100,
+        name: programNamesRu[it.name] || it.name || '—',
+        pricePerSecond: Math.round(price * 10000) / 10000,
+        quantity: Math.round(secs * 10) / 10,
+        unit: 'секунда',
+        timeWorkedSec: Math.round(secs * 10) / 10,
+        sum: Math.round(cost * 100) / 100,
       };
     });
-
     const receipt = {
-      receiptNumber: r.receiptNumber,
-      date:          r.timestamp,
-      postId,
-      paymentMethod: pm,
-      kind:          r.kind || 'session',
-      isAdvance:     !!r.isAdvance,
+      receiptNumber: r.receiptNumber, date: r.timestamp, postId,
+      shiftNumber:   r.shiftNumber ?? null,
+      paymentMethod: pmRaw, kind: r.kind || 'session', isAdvance: !!r.isAdvance,
+      status:          r.status || 'done',
       advanceReceiptNumber: r.advanceReceiptNumber ?? null,
-      total:         Math.round(totalCost * 100) / 100,
-      items,
+      finalReceiptNumber:   r.finalReceiptNumber   ?? null,
+      grossTotal:      r.grossTotal      ?? null,
+      advanceApplied:  r.advanceApplied  ?? 0,
+      pairId:          pairIdOf(r),
+      total: Math.round(totalCost * 100) / 100, items,
     };
-
     pmGroup.receipts.push(receipt);
-    pmGroup.total += totalCost;
-    pmGroup.count += 1;
-
-    p.total += totalCost;
-    p.count += 1;
-
-    d.total += totalCost;
-    d.count += 1;
-
-    grandTotal += totalCost;
-    grandCount += 1;
+    pmGroup.total += totalCost; pmGroup.count += 1;
+    p.total += totalCost; p.count += 1;
+    d.total += totalCost; d.count += 1;
+    grandTotal += totalCost; grandCount += 1;
   }
-
+  
   const resultDays = Object.values(days).map(d => ({
-    date:  d.date,
-    total: Math.round(d.total * 100) / 100,
-    count: d.count,
+    date: d.date, total: Math.round(d.total * 100) / 100, count: d.count,
     posts: Object.values(d.posts).map(p => ({
-      postId: p.postId,
-      total:  Math.round(p.total * 100) / 100,
-      count:  p.count,
+      postId: p.postId, total: Math.round(p.total * 100) / 100, count: p.count,
       paymentMethods: Object.values(p.paymentMethods).map(pm => ({
-        paymentMethod: pm.paymentMethod,
-        total: Math.round(pm.total * 100) / 100,
-        count: pm.count,
-        receipts: pm.receipts,
+        paymentMethod: pm.paymentMethod, total: Math.round(pm.total * 100) / 100,
+        count: pm.count, receipts: pm.receipts,
       })),
     })),
   }));
+  
+  let totalCardsBalance = 0;
+  try {
+    const agg = await ClientCard.aggregate([{ $group: { _id: null, total: { $sum: "$balance" } } }]);
+    totalCardsBalance = agg[0]?.total || 0;
+  } catch (e) { console.error('Ошибка подсчёта баланса карт:', e); }
+  
+  const paymentSummary = calculatePaymentSummary(receipts);
 
   res.json({
-    from, to,
-    grandTotal: Math.round(grandTotal * 100) / 100,
-    grandCount,
+    filter: built.kind === 'shift' ? { shiftNumber: built.shiftNumber } : { from: built.from, to: built.to },
+    grandTotal: Math.round(grandTotal * 100) / 100, grandCount,
+    totalCardsBalance: Math.round(totalCardsBalance * 100) / 100,
+    clientCardsReceiptsSum: Math.round(clientCardsReceiptsSum * 100) / 100,
+    paymentSummary, // ★ ДОБАВЛЕНО
     days: resultDays,
   });
+});
+
+app.get('/api/receipts', auth, async (req, res) => {
+  try {
+    const { shiftNumber, from, to, type = 'all', status = 'all', postId } = req.query;
+
+    const built = buildTimeOrShiftFilter({ shiftNumber, from, to });
+    if (built.error) return res.status(built.code).json({ error: built.error });
+
+    const TYPE_QUERY = {
+      all:     {},
+      advance: { isAdvance: true },
+      final:   { kind: 'final' },
+      session: { kind: 'session', isAdvance: { $ne: true } },
+      topup:   { operation: 'topup' },
+      transfer:{ kind: 'transfer_post_to_card' },
+    };
+    if (!(type in TYPE_QUERY)) return res.status(400).json({ error: `Недопустимый type: ${type}` });
+    if (!['all', 'done', 'void'].includes(status)) return res.status(400).json({ error: `Недопустимый status: ${status}` });
+
+    const filterParts = [built.filter, TYPE_QUERY[type]];
+    if (postId) filterParts.push({ postId: Number(postId) });
+    if (status === 'void')      filterParts.push({ status: 'void' });
+    else if (status === 'done') filterParts.push({ status: { $ne: 'void' } });
+
+    const query = filterParts.length > 1 ? { $and: filterParts } : filterParts[0];
+
+    const [rawReceipts, accountingAgg] = await Promise.all([
+      Receipt.find(query).sort({ timestamp: -1 }).lean(),
+      Receipt.aggregate([
+        { $match: accountingQuery(built.filter) },
+        { $group: { _id: null, total: { $sum: '$totalCost' }, count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const receipts = rawReceipts.map(r => {
+      const a = annotateReceipt(r);
+      a.items = translateReceiptItems(a.items);
+      return a;
+    });
+
+    const filteredTotal = receipts.reduce((s, r) => {
+      if (r.status === 'void' || r.kind === 'transfer_post_to_card') return s;
+      return s + (Number(r.totalCost) || 0);
+    }, 0);
+    const filteredCount = receipts.filter(r =>
+      r.status !== 'void' && r.kind !== 'transfer_post_to_card').length;
+
+    const accountingTotal = accountingAgg[0]?.total || 0;
+    const accountingCount = accountingAgg[0]?.count || 0;
+
+    res.json({
+      filter: built.kind === 'shift' ? { shiftNumber: built.shiftNumber } : { from: built.from, to: built.to },
+      applyFilter: { type, status, postId: postId || null },
+      receipts,
+      summary: {
+        filteredCount,
+        filteredTotal:   Math.round(filteredTotal   * 100) / 100,
+        accountingCount,
+        accountingTotal: Math.round(accountingTotal * 100) / 100,
+        matchesAccounting:
+          Math.abs(filteredTotal - accountingTotal) < 0.005,
+      },
+    });
+  } catch (err) {
+    console.error('❌ GET /api/receipts:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/receipts', async (req, res) => {
@@ -2572,20 +2855,18 @@ app.post('/api/receipts', async (req, res) => {
       return res.status(400).json({ error: 'postId и items обязательны' });
     }
     const receipt = await createReceipt({
-      postId:        d.postId,
-      kind:          d.kind || 'session',
-      operation:     d.operation || 'sell',
-      isAdvance:     !!d.isAdvance,
-      advanceReceiptNumber: d.advanceReceiptNumber ?? null,
-      items:         d.items,
-      totalCost:     d.totalCost,
-      balanceAfter:  d.balance,
-      paymentMethod: d.paymentMethod || null,
-      discountTotal: d.discountTotal || 0,
-      correctionInfo: d.correctionInfo || null,
-      timestamp:     d.timestamp,
+      postId: d.postId, kind: d.kind || 'session', operation: d.operation || 'sell',
+      isAdvance: !!d.isAdvance, advanceReceiptNumber: d.advanceReceiptNumber ?? null,
+      cardNumber: d.cardNumber || null,
+      items: d.items, totalCost: d.totalCost, balanceAfter: d.balance,
+      paymentMethod: d.paymentMethod || null, discountTotal: d.discountTotal || 0,
+      correctionInfo: d.correctionInfo || null, timestamp: d.timestamp,
+      paymentAlreadyCounted: d.paymentAlreadyCounted === true || d.paymentMethod === 'client_card',
     });
-    res.status(201).json({ message: 'Чек сохранён', id: receipt._id, receiptNumber: receipt.receiptNumber });
+    res.status(201).json({
+      message: 'Чек сохранён', id: receipt._id,
+      receiptNumber: receipt.receiptNumber, shiftNumber: receipt.shiftNumber,
+    });
   } catch (err) {
     console.error('Ошибка сохранения чека:', err.message);
     res.status(500).json({ error: 'Ошибка сервера' });
@@ -2598,7 +2879,7 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
   for (const [id, st] of Object.entries(postsState)) {
     if (st && st.clientCard === cardNumber) {
       delete st.clientCard; delete st.clientCardBalance; delete st.clientCardType;
-      st._lastEspBalance = null;
+      st.postCashBalance = 0;
       released = true;
       console.log(`🔓 [${id}] Карта ${cardNumber} освобождена`);
     }
@@ -2607,18 +2888,41 @@ app.post('/api/cards/:card/release', auth, adminOnly, (req, res) => {
 });
 
 // ============================================================
+// Health check + глобальный error middleware
+// ============================================================
+app.get('/api/health', (_req, res) => {
+  try {
+    res.json({
+      ok: true,
+      uptime: Math.round(process.uptime()),
+      ts: Date.now(),
+      mongo: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      mqtt: mqttClient && mqttClient.connected ? 'connected' : 'disconnected',
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error(`❌ ${req.method} ${req.originalUrl}:`, err && err.stack ? err.stack : err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ error: err?.message || 'Internal error', path: req.originalUrl });
+});
+
+// ============================================================
 // Start
 // ============================================================
 mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log('MongoDB connected');
-    await loadSettings();
-    await initShift();
+    try { await loadSettings(); } catch (e) { console.error('loadSettings:', e.message); }
+    try { await initShift(); }    catch (e) { console.error('initShift:', e.message); }
 
     setInterval(async () => {
-      try { await closeExpiredShiftIfNeeded(); } catch (e) { /* ignore */ }
+      try { await closeExpiredShiftIfNeeded(); } catch (e) { console.error('auto-close-shift:', e.message); }
     }, 60_000);
-
     setInterval(async () => {
       try { await publishKkmStatus(); } catch (e) { /* ignore */ }
     }, 10_000);
@@ -2626,6 +2930,13 @@ mongoose.connect(MONGO_URI)
     server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
       console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);
+
+      setTimeout(() => {
+        migrateLegacyReceipts().catch((e) => console.warn('[migrate] fail:', e.message));
+      }, 15_000);
+      setTimeout(() => {
+        migrateReceiptShiftNumbers().catch((e) => console.warn('[migrate-shift] fail:', e.message));
+      }, 45_000);
     });
   })
   .catch(err => {
@@ -2633,5 +2944,7 @@ mongoose.connect(MONGO_URI)
     server.listen(process.env.PORT || 3000, process.env.HOST || '0.0.0.0', () => {
       console.log(`REST API listening on http://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}`);
       console.log(`WebSocket listening on ws://${process.env.HOST || '0.0.0.0'}:${process.env.PORT || 3000}/ws`);
+      setTimeout(() => migrateLegacyReceipts().catch(() => {}), 15_000);
+      setTimeout(() => migrateReceiptShiftNumbers().catch(() => {}), 45_000);
     });
   });

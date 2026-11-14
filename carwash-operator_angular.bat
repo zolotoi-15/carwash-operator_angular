@@ -129,9 +129,7 @@ echo.
 :: 7. Angular Frontend
 :: ============================================================
 echo [7/8] Starting Angular Frontend...
-
-:: ⭐ ИСПРАВЛЕНИЕ: Добавлен лимит памяти (NODE_OPTIONS), чтобы ng serve не зависал
-start "CarWash Frontend" cmd /k "cd /d %FRONTEND% && set NODE_OPTIONS=--max_old_space_size=8192 && ng serve --host 0.0.0.0"
+start "CarWash Frontend" cmd /k "cd /d %FRONTEND% && ng serve --host 0.0.0.0"
 
 call :WaitForPort 4200 "Angular Dev Server" 30
 echo.
@@ -165,35 +163,3 @@ pause
 exit /b 0
 
 
-:: ============================================================
-:: Вспомогательные подпрограммы
-:: ============================================================
-
-:CheckPort
-:: %1 = порт, %2 = описание
-netstat -ano | findstr /R /C:":%~1 .*LISTENING" >nul
-if not errorlevel 1 (
-    echo    WARNING: port %~1 (%~2^) is already in use.
-    for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%~1 .*LISTENING"') do (
-        echo             PID %%P — возможно, старый процесс. Закройте его или перезагрузите ПК.
-    )
-) else (
-    echo    port %~1 (%~2^) — free.
-)
-exit /b 0
-
-
-:WaitForPort
-:: %1 = порт, %2 = описание, %3 = таймаут в секундах
-set /a "_tries=%~3"
-:WaitLoop
-netstat -ano | findstr /R /C:":%~1 .*LISTENING" >nul
-if not errorlevel 1 (
-    echo    %~2 — ready on port %~1.
-    exit /b 0
-)
-timeout /t 1 /nobreak >nul
-set /a "_tries-=1"
-if !_tries! gtr 0 goto WaitLoop
-echo    WARNING: %~2 did not start on port %~1 within %~3s.
-exit /b 1

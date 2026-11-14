@@ -1,10 +1,9 @@
-import { Component, OnInit, OnDestroy } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { FormBuilder, FormGroup, FormArray, ReactiveFormsModule, Validators } from '@angular/forms';
-import { AdminService, ServiceConfig } from '../../../../../core/services/admin.service';
-import { SettingsUpdateService } from '../../../../../core/services/settings-update.service';
-import { Subject, takeUntil } from 'rxjs';
+import { AdminService } from '../../../core/services/admin.service';
+import { ServiceConfig } from '../../../core/services/mqtt.service';
 
 @Component({
   selector: 'app-services',
@@ -25,7 +24,7 @@ import { Subject, takeUntil } from 'rxjs';
           <input formControlName="price" type="number" step="1" placeholder="Цена, руб/мин" class="service-price" />
           <input formControlName="free_time_sec" type="number" step="1" placeholder="Беспл. время, сек (опц.)" class="service-free" />
           <label class="enable-label">
-            <input type="checkbox" formControlName="enabled" /> Вкл.
+            <input type="checkbox" formControlName="enable" /> Вкл.
           </label>
           <button type="button" (click)="removeService(i)" class="remove-btn">✕</button>
         </div>
@@ -46,72 +45,62 @@ import { Subject, takeUntil } from 'rxjs';
     .save-btn { background: #27ae60; color: white; border: none; padding: 8px 16px; border-radius: 30px; cursor: pointer; }
   `]
 })
-export class ServicesComponent implements OnInit, OnDestroy {
+export class ServicesComponent implements OnInit {
   form!: FormGroup;
-  selectedPost = 1;
+  selectedPost: number = 1;
   postIds: number[] = [];
-  private destroy$ = new Subject<void>();
 
   constructor(
     private admin: AdminService,
-    private fb: FormBuilder,
-    private settingsUpdate: SettingsUpdateService
-  ) {}
+    private fb: FormBuilder
+  ) { }
 
-  ngOnInit(): void {
-    this.admin.getSettings().subscribe(s => {
-      const count = s.numberOfPosts || 8;
+  ngOnInit() {
+    this.admin.getSettings().subscribe(settings => {
+      const count = settings.numberOfPosts || 8;
       this.postIds = Array.from({ length: count }, (_, i) => i + 1);
       this.loadPostSettings();
     });
-
-    this.settingsUpdate.settingsUpdated$
-      .pipe(takeUntil(this.destroy$))
-      .subscribe(() => this.loadPostSettings());
-  }
-
-  ngOnDestroy(): void {
-    this.destroy$.next();
-    this.destroy$.complete();
   }
 
   get services(): FormArray {
     return this.form.get('services') as FormArray;
   }
 
-  private createServiceGroup(service?: ServiceConfig): FormGroup {
+  createServiceGroup(service?: ServiceConfig & { enable?: boolean }): FormGroup {
     return this.fb.group({
       name: [service?.name || '', Validators.required],
       price: [service?.price || 0, [Validators.required, Validators.min(0)]],
-      free_time_sec: [service?.free_time_sec ?? null],
-      enabled: [service?.enabled !== false]
+      free_time_sec: [service?.free_time_sec || null],
+      enable: [service?.enable !== undefined ? service.enable : true]
     });
   }
 
-  loadPostSettings(): void {
-    this.admin.getPostSettings(this.selectedPost).subscribe(ps => {
-      const services = ps.services || [];
+  loadPostSettings() {
+    this.admin.getPostSettings(this.selectedPost).subscribe(postSettings => {
+      const services = postSettings.services || [];
       this.form = this.fb.group({
         services: this.fb.array(services.map(s => this.createServiceGroup(s)))
       });
     });
   }
 
-  addService(): void {
+  addService() {
     this.services.push(this.createServiceGroup());
   }
 
-  removeService(index: number): void {
+  removeService(index: number) {
     this.services.removeAt(index);
   }
 
-  save(): void {
-    const services = (this.services.value as ServiceConfig[])
-      .filter(s => s.name?.trim() !== '');
-    this.admin.updatePostSettings(this.selectedPost, { services })
-      .subscribe({
-        next: () => alert('Услуги для поста ' + this.selectedPost + ' сохранены'),
-        error: () => alert('Ошибка сохранения')
-      });
+  save() {
+    const services = this.services.value as (ServiceConfig & { enable: boolean })[];
+    const filtered = services.filter(s => s.name.trim() !== '');
+    this.admin.updatePostSettings(this.selectedPost, { services: filtered }).subscribe({
+      next: () => {
+        alert('Услуги для поста ' + this.selectedPost + ' сохранены');
+      },
+      error: () => alert('Ошибка сохранения')
+    });
   }
 }
